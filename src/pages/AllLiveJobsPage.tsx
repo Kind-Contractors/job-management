@@ -124,6 +124,7 @@ export default function AllLiveJobsPage() {
 
       {selectedJob && (
         <JobInspectorDrawer
+          key={selectedJob.id}
           job={selectedJob}
           siblings={siblings}
           onClose={() => setSelectedJobId(null)}

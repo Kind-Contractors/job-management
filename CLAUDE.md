@@ -382,7 +382,53 @@ Still open, tracked here rather than decided silently:
 - Whether/when to wire the mock repository layer to the real Supabase
   `clients`/`buildings`/`jobs` tables (visits/reports have no schema yet).
 
-## 14. Explicit non-goals for now
+## 14. Prototype vs Production Domain Constraints
+
+The mock repository built for the All Live Jobs pass (`src/mock/jobsData.ts`,
+`src/domain/types.ts`) introduced several fields that are presentation-only
+stand-ins, not the production data model. **This section is documentation
+only — it does not require, and must not trigger, any database/schema
+changes now.** It exists so a future pass doesn't mistake a mock shortcut
+for an approved design.
+
+1. **`JobStatus` is prototype-only.** A single status field
+   (`booked`/`needs_booking`/`review`/`onsite`/`missed`/etc.) currently
+   stands in for real operational state. The production model must
+   separate **Job**, **Visit**, and **Report** state, because one Job can
+   have many Visits over time, and each Visit can have its own
+   report/review state independent of the others. A job itself is never
+   simply "missed" or "awaiting review" in production — a specific visit
+   is.
+2. **`yearlyValue` is currently mock presentation data only.** In
+   production, yearly value must be *derived* from the job's price and
+   frequency model (per section 4/5's "yearly total is derived from price ×
+   frequency, never typed twice"), with explicit support for:
+   - **variable-price jobs**, where price isn't fixed per visit, and
+   - **ad-hoc/ask jobs**, where there is no fixed recurrence to annualise at
+     all.
+   A simple `price × visits-per-year` calculation is not adequate for
+   either case — it must not be assumed as the general rule.
+3. **`schedulePattern` is currently only a mock display string** (e.g.
+   `"Monthly · last Thu"`) and must **not** be used as, or evolve into, the
+   production scheduling engine. The production scheduling model must be
+   structured data supporting (see section 6):
+   - fixed weekday
+   - fixed date
+   - due month / date unknown
+   - ad-hoc / ask
+4. **`internalAccessNote` is currently only mock presentation data** — a
+   single free-text string. Do **not** carry this single-string shape into
+   the production schema. The production model must distinguish internal
+   access concepts such as:
+   - key safe
+   - keyholder
+   - parking
+   - access/fob rules
+   - other internal-only access information
+   (consistent with section 8's data/privacy boundary, which already
+   enumerates these as separate concepts).
+
+## 15. Explicit non-goals for now
 
 Do not build yet:
 
@@ -396,7 +442,7 @@ Do not build yet:
   legacy/staging records.
 - Unnecessary database abstractions beyond what's specified above.
 
-## 15. Development / testing expectations
+## 16. Development / testing expectations
 
 - Follow `agents.md` for component structure and `useEffect` discipline.
 - Run lint/type-check/build (`tsc -b && vite build`) after meaningful
