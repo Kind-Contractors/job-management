@@ -1,0 +1,92 @@
+@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+/*
+ * Kind Contractors brand palette + the approved design canvas's structural
+ * tokens (neutral scale, functional status colors, drawer/rail widths).
+ * "Steel" (the design canvas's generic blue-grey accent) is replaced here by
+ * brand Dark Teal; the restrained "only a few colors carry meaning" rule
+ * from the design is kept as-is. See CLAUDE.md section 4/10.
+ */
+@theme {
+  --font-heading: "Barlow Condensed", system-ui, sans-serif;
+  --font-body: "Barlow", system-ui, sans-serif;
+
+  /* Brand palette */
+  --color-teal: #1e544b;
+  --color-teal-700: #164039;
+  --color-teal-100: #e6edec;
+  --color-near-black: #1c281c;
+  --color-green: #73c17f;
+  --color-green-600: #58a865;
+  --color-green-light: #e4f0c3;
+  --color-grey: #e7e8e4;
+
+  /* Neutral scale (ink derived from Near-Black Green, not pure grey) */
+  --color-ink: #1c281c;
+  --color-ink-70: color-mix(in srgb, var(--color-ink) 70%, transparent);
+  --color-ink-60: color-mix(in srgb, var(--color-ink) 60%, transparent);
+  --color-ink-50: color-mix(in srgb, var(--color-ink) 50%, transparent);
+  --color-ink-40: color-mix(in srgb, var(--color-ink) 40%, transparent);
+  --color-neutral-100: #f5f6f3;
+  --color-neutral-200: #e7e8e4;
+  --color-neutral-300: #d6d8d0;
+  --color-neutral-400: #b9bcb0;
+  --color-neutral-500: #9a9d90;
+  --color-neutral-600: #797d70;
+  --color-neutral-700: #5c5f54;
+  --color-neutral-800: #40423a;
+  --color-neutral-900: #272921;
+
+  /* Functional status tones — deliberately the only saturated colors beyond
+     brand teal/green; kept close to the approved design's tuned values. */
+  --color-due: #a07a2b;
+  --color-due-fg: #8a6624;
+  --color-missed: #a04437;
+  --color-missed-fg: #8b3a2e;
+  --color-done: #4a7a5c;
+  --color-done-fg: #3d6b4d;
+
+  --color-divider: color-mix(in srgb, var(--color-ink) 14%, transparent);
+
+  --animate-shimmer: shimmer 1.1s infinite;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--color-neutral-200);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Blueprint visual language: square corners everywhere, hairline borders. */
+button,
+input,
+select,
+textarea {
+  border-radius: 0;
+  font-family: inherit;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes shimmer {
+  0% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0.4;
+  }
+}
