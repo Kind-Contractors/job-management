@@ -24,6 +24,8 @@ const PRESENTATIONS: Record<JobStatus, StatusPresentation> = {
   onsite: { label: 'On site now', fg: 'text-teal-700', dot: 'bg-teal-700', border: 'border-teal-700' },
   missed: { label: 'Missed', fg: 'text-missed-fg', dot: 'bg-missed', border: 'border-missed' },
   ask: { label: 'No schedule', fg: 'text-neutral-600', dot: 'bg-transparent', border: 'border-neutral-400' },
+  unscheduled: { label: 'Not yet scheduled', fg: 'text-neutral-600', dot: 'bg-transparent', border: 'border-neutral-400' },
+  overdue: { label: 'Overdue', fg: 'text-missed-fg', dot: 'bg-missed', border: 'border-missed' },
 };
 
 export function getStatusPresentation(status: JobStatus): StatusPresentation {
@@ -31,7 +33,7 @@ export function getStatusPresentation(status: JobStatus): StatusPresentation {
 }
 
 export function dueColorClass(status: JobStatus, softDate: boolean): string {
-  if (status === 'missed') return 'text-missed-fg';
+  if (status === 'missed' || status === 'overdue') return 'text-missed-fg';
   if (softDate) return 'text-due-fg';
   return 'text-ink';
 }

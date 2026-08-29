@@ -28,13 +28,13 @@ const COLUMN_DEFS: ColDef<GridBlock>[] = [
       return (
         <span>
           <span className="font-semibold">{job.buildingName}</span>
-          <span className="text-neutral-600"> · {job.postcode}</span>
+          {job.postcode && <span className="text-neutral-600"> · {job.postcode}</span>}
         </span>
       );
     },
   },
   { headerName: 'Job', flex: 2, minWidth: 180, valueGetter: (p) => jobOf(p)?.jobSummary },
-  { headerName: 'Frequency', flex: 1, minWidth: 100, valueGetter: (p) => jobOf(p)?.frequency },
+  { headerName: 'Frequency', flex: 1, minWidth: 100, valueGetter: (p) => jobOf(p)?.frequencyRaw },
   {
     headerName: 'Price',
     flex: 0.8,

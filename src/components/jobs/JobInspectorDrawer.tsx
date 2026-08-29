@@ -1,5 +1,10 @@
 import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { JobRow } from '../../domain/types';
+import { listTeams, createVisit } from '../../repository/teamsRepository';
+import { assignJobTeam } from '../../repository/jobsRepository';
+import { useAuth } from '../../auth/AuthProvider';
+import VisitRow from './VisitRow';
 
 interface JobInspectorDrawerProps {
   job: JobRow;
@@ -10,15 +15,41 @@ interface JobInspectorDrawerProps {
 
 const NOT_BUILT_TITLE = 'Not built yet — this pass only covers the All live jobs view';
 
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSibling }: JobInspectorDrawerProps) {
+  const { session } = useAuth();
+  const actor = session?.user.email ?? 'unknown';
   const [revealed, setRevealed] = useState(false);
+  const [visitDate, setVisitDate] = useState(todayISO());
+  const [visitTeamId, setVisitTeamId] = useState<string>(job.defaultTeamId ?? '');
+  const [bookingMessage, setBookingMessage] = useState<string | null>(null);
+
+  const queryClient = useQueryClient();
+  const { data: teams = [] } = useQuery({ queryKey: ['teams'], queryFn: listTeams });
+  const activeTeams = teams.filter((t) => t.isActive);
+
+  const assignTeamMutation = useMutation({
+    mutationFn: (teamId: string | null) => assignJobTeam(job.id, teamId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobRows'] }),
+  });
+
+  const bookVisitMutation = useMutation({
+    mutationFn: () => createVisit(job.id, visitTeamId || null, visitDate),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['weekVisits'] });
+      setBookingMessage(`Visit booked for ${new Date(visitDate).toLocaleDateString('en-GB')}.`);
+    },
+    onError: (err) => setBookingMessage(err instanceof Error ? err.message : 'Failed to book visit.'),
+  });
 
   const facts: [string, string][] = [
     ['Client', job.clientName],
-    ['Invoice address', job.clientInvoiceAddress.split(',')[0]],
-    ['Price per visit', `£${job.pricePerVisit.toLocaleString('en-GB')}.00`],
+    ['Invoice address', job.clientInvoiceAddress ? job.clientInvoiceAddress.split(',')[0] : '—'],
+    ['Price per visit', job.pricePerVisit == null ? 'Variable' : `£${job.pricePerVisit.toLocaleString('en-GB')}.00`],
     ['Contract per year', job.yearlyValue ? `£${job.yearlyValue.toLocaleString('en-GB')}.00` : 'On request'],
-    ['Assigned', job.team],
     ['Next visit', job.nextDueLabel],
   ];
 
@@ -33,7 +64,9 @@ export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSib
         </div>
         <h2 className="mt-1.5 font-heading text-xl leading-tight font-semibold">{job.jobSummary}</h2>
         <div className="text-[13px]">
-          <span className="text-neutral-600">{job.buildingName} · {job.street}, {job.postcode}</span>
+          <span className="text-neutral-600">
+            {[job.buildingName, [job.street, job.postcode].filter(Boolean).join(', ')].filter(Boolean).join(' · ')}
+          </span>
         </div>
         <div className="mt-2.5 flex flex-wrap gap-1.5">
           <span
@@ -67,32 +100,79 @@ export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSib
           </div>
         </div>
       )}
-      {job.status === 'needs_booking' && (
-        <div className="m-3.5 border border-due bg-due/10 p-3">
-          <div className="font-heading text-[11px] font-semibold tracking-[0.11em] text-due-fg uppercase">
-            Due, no date set
+      {(job.status === 'unscheduled' || job.status === 'needs_booking' || job.status === 'overdue') && (
+        <div className="m-3.5 border border-neutral-300 p-3">
+          <div className="font-heading text-[11px] font-semibold tracking-[0.11em] text-neutral-700 uppercase">
+            Book a visit
           </div>
-          <div className="mt-1 mb-2.5 text-[12.5px] leading-snug text-ink">
-            Pattern is {job.schedulePattern}.
-          </div>
-          <div className="flex gap-1.5">
-            <div
-              title={NOT_BUILT_TITLE}
-              className="cursor-not-allowed bg-neutral-300 px-3 py-1.5 text-xs font-semibold text-neutral-500"
-            >
-              Book this job
+          {job.status === 'overdue' && (
+            <div className="mt-1 mb-2 text-[12.5px] leading-snug text-missed-fg">
+              This job has an overdue visit ({job.nextDueLabel}). Booking below adds a new visit —
+              the overdue one isn't editable yet.
             </div>
-            <div
-              title={NOT_BUILT_TITLE}
-              className="cursor-not-allowed border border-neutral-300 px-3 py-1.5 text-xs text-neutral-500"
-            >
-              Open the week
+          )}
+          {job.status === 'needs_booking' && (
+            <div className="mt-1 mb-2 text-[12.5px] leading-snug text-due-fg">
+              This job is due with no date set yet.
             </div>
+          )}
+          <div className="mt-2 flex flex-col gap-2">
+            <label className="flex flex-col gap-1 text-[11.5px] text-neutral-600">
+              Date
+              <input
+                type="date"
+                value={visitDate}
+                onChange={(e) => setVisitDate(e.target.value)}
+                className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-[11.5px] text-neutral-600">
+              Team
+              <select
+                value={visitTeamId}
+                onChange={(e) => setVisitTeamId(e.target.value)}
+                className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+              >
+                <option value="">Unassigned</option>
+                {activeTeams.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              onClick={() => {
+                setBookingMessage(null);
+                bookVisitMutation.mutate();
+              }}
+              disabled={!visitDate || bookVisitMutation.isPending}
+              className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {bookVisitMutation.isPending ? 'Booking…' : 'Book this visit'}
+            </button>
+            {bookingMessage && <div className="text-[11.5px] text-neutral-700">{bookingMessage}</div>}
           </div>
         </div>
       )}
 
       <div className="px-4 pt-3.5">
+        <div className="flex justify-between gap-3 border-b border-divider py-1.5 text-[12.5px]">
+          <span className="text-neutral-600">Assigned</span>
+          <select
+            value={job.defaultTeamId ?? ''}
+            onChange={(e) => assignTeamMutation.mutate(e.target.value || null)}
+            disabled={assignTeamMutation.isPending}
+            className="cursor-pointer border-0 bg-transparent text-right text-[12.5px] text-ink outline-none"
+          >
+            <option value="">Unassigned</option>
+            {activeTeams.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </div>
         {facts.map(([k, v]) => (
           <div key={k} className="flex justify-between gap-3 border-b border-divider py-1.5 text-[12.5px]">
             <span className="text-neutral-600">{k}</span>
@@ -100,6 +180,17 @@ export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSib
           </div>
         ))}
       </div>
+
+      {job.visits.length > 0 && (
+        <div className="px-4 pb-1">
+          <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
+            Visits ({job.visits.length})
+          </div>
+          {job.visits.map((v) => (
+            <VisitRow key={v.id} job={job} visit={v} actor={actor} />
+          ))}
+        </div>
+      )}
 
       <div className="m-3.5 border border-dashed border-neutral-400 bg-neutral-100 p-3">
         <div className="flex items-center gap-2">
@@ -129,8 +220,10 @@ export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSib
               onClick={() => onSelectSibling(s.id)}
               className="flex cursor-pointer justify-between border-b border-divider py-1.5 text-[12.5px] hover:text-teal-700"
             >
-              {s.jobSummary} · {s.frequency}
-              <span className="text-neutral-600 tabular-nums">£{s.pricePerVisit.toLocaleString('en-GB')}</span>
+              {s.jobSummary} · {s.frequencyRaw}
+              <span className="text-neutral-600 tabular-nums">
+                {s.pricePerVisit == null ? 'Variable' : `£${s.pricePerVisit.toLocaleString('en-GB')}`}
+              </span>
             </div>
           ))}
         </div>

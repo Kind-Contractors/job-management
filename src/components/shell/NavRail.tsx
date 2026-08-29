@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useSearchParams, useNavigate } from 'react-router-dom';
 import { listJobRows } from '../../repository/jobsRepository';
+import { listBuildingRows } from '../../repository/buildingsRepository';
+import { listTeams } from '../../repository/teamsRepository';
 
 type AttentionKey = 'review' | 'needs_booking' | 'missed';
 
@@ -13,7 +15,7 @@ const ATTENTION_ITEMS: { key: AttentionKey; label: string; dotClass: string }[] 
 /** Not modeled yet — no visits/reports schema exists (CLAUDE.md section 13). */
 const NOT_YET_BUILT_ATTENTION = [{ label: 'Ready for accounts' }, { label: 'Photos uploading' }];
 
-const NOT_YET_BUILT_VIEWS = ['Month matrix', 'This week', 'Buildings', 'Report review'];
+const NOT_YET_BUILT_VIEWS = ['Month matrix', 'Report review'];
 
 const DIVISIONS = ['General', 'Specialist', 'Both'] as const;
 
@@ -30,11 +32,15 @@ export default function NavRail() {
   const navigate = useNavigate();
 
   const { data: jobRows = [] } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
+  const { data: buildingRows = [] } = useQuery({ queryKey: ['buildingRows'], queryFn: listBuildingRows });
+  const { data: teams = [] } = useQuery({ queryKey: ['teams'], queryFn: listTeams });
 
   const status = searchParams.get('status');
   const group = searchParams.get('group') ?? 'client';
   const division = searchParams.get('division') ?? 'Both';
   const onJobs = pathname === '/jobs';
+  const onBuildings = pathname.startsWith('/buildings');
+  const onThisWeek = pathname === '/this-week';
 
   const divisionFiltered = jobRows.filter((j) => division === 'Both' || j.division === division);
 
@@ -112,6 +118,14 @@ export default function NavRail() {
       >
         By frequency
         <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{jobRows.length}</span>
+      </div>
+      <div onClick={() => navigate('/buildings')} className={navLinkClasses(onBuildings)}>
+        Buildings
+        <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{buildingRows.length}</span>
+      </div>
+      <div onClick={() => navigate('/this-week')} className={navLinkClasses(onThisWeek)}>
+        This week
+        <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{teams.length}</span>
       </div>
       {NOT_YET_BUILT_VIEWS.map((label) => (
         <div

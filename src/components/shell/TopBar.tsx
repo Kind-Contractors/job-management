@@ -1,4 +1,12 @@
 import { useSearchParams } from 'react-router-dom';
+import { useAuth } from '../../auth/AuthProvider';
+
+function initialsFor(email: string): string {
+  const local = email.split('@')[0] ?? '';
+  const parts = local.split(/[._-]+/).filter(Boolean);
+  const initials = parts.length >= 2 ? parts[0][0] + parts[1][0] : local.slice(0, 2);
+  return initials.toUpperCase();
+}
 
 const dateFormatter = new Intl.DateTimeFormat('en-GB', {
   weekday: 'short',
@@ -9,7 +17,9 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
 
 export default function TopBar() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { session, signOut } = useAuth();
   const q = searchParams.get('q') ?? '';
+  const email = session?.user.email ?? '';
 
   const onSearch = (value: string) => {
     const next = new URLSearchParams(searchParams);
@@ -51,10 +61,16 @@ export default function TopBar() {
         </span>
         <span className="flex items-center gap-1.5 text-ink">
           <i className="flex h-5 w-5 items-center justify-center border border-teal-100 bg-teal-100 font-heading text-[9.5px] font-semibold text-teal-700 not-italic">
-            AR
+            {email ? initialsFor(email) : ''}
           </i>
-          A. Reyes
+          {email}
         </span>
+        <button
+          onClick={() => void signOut()}
+          className="cursor-pointer border border-neutral-300 px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-200"
+        >
+          Sign out
+        </button>
       </div>
     </header>
   );

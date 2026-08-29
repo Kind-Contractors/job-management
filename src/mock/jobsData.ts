@@ -9,6 +9,7 @@
 // schema exists) without changing the components that consume JobRow[].
 
 import type { Building, Client, Division, Frequency, Job, JobRow, JobStatus } from '../domain/types';
+import { DEFAULT_ACCESS_NOTE } from '../lib/constants';
 
 export const clients: Client[] = [
   { id: 'AE', companyName: 'Archery Estates', invoiceAddress: '3rd Floor, 40 Bermondsey St, London SE1 3UD' },
@@ -105,7 +106,6 @@ const BUILDING_ACCESS_NOTES: Record<string, string> = {
   'Ashdown House':
     'Trade entrance to the rear, code on the keypad — 7 7 1 4. No key safe. Keyholder: caretaker on site weekdays until 14:00. Single bay at the rear, first come.',
 };
-const DEFAULT_ACCESS_NOTE = 'Access details not yet recorded for this building.';
 
 export const buildings: Building[] = Array.from(
   new Map(RAW.map((r) => [r.building, r])).values(),
@@ -124,11 +124,14 @@ export const jobs: Job[] = RAW.map((r) => ({
   jobSummary: r.jobSummary,
   division: r.division,
   frequency: r.frequency,
+  frequencyRaw: r.frequency,
   pricePerVisit: r.pricePerVisit,
   yearlyValue: r.yearlyValue,
   nextDueLabel: r.nextDueLabel,
   status: r.status,
   team: r.team,
+  defaultTeamId: null,
+  visits: [],
   schedulePattern: SCHEDULE_PATTERNS[r.jobId] ?? r.frequency,
 }));
 

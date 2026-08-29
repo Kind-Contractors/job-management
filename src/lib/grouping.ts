@@ -14,6 +14,8 @@ const FREQUENCY_ORDER: Frequency[] = [
   'Biannual',
   'Annual',
   'Ask / ad-hoc',
+  'One-off',
+  'Unknown',
 ];
 
 const VISITS_PER_YEAR: Record<Frequency, number> = {
@@ -24,10 +26,24 @@ const VISITS_PER_YEAR: Record<Frequency, number> = {
   Biannual: 2,
   Annual: 1,
   'Ask / ad-hoc': 0,
+  'One-off': 0,
+  Unknown: 0,
 };
 
 function money(n: number): string {
   return `£${n.toLocaleString('en-GB')}`;
+}
+
+/**
+ * Jobs with variable pricing or unknown frequency have yearlyValue === null
+ * (see mapJobRow.ts) and must never be silently counted as £0 — the total is
+ * summed over only the computable jobs, and the excluded count is surfaced
+ * alongside it so the number is never read as complete when it isn't.
+ */
+function summarizeYearlyValue(rows: JobRow[]): string {
+  const total = rows.reduce((a, b) => a + (b.yearlyValue ?? 0), 0);
+  const excluded = rows.filter((r) => r.yearlyValue === null).length;
+  return excluded > 0 ? `${money(total)}/yr (${excluded} variable, excluded)` : `${money(total)}/yr`;
 }
 
 /**
@@ -51,7 +67,7 @@ export function buildGridBlocks(rows: JobRow[], groupBy: GroupBy): GridBlock[] {
         id: `band-client-${clientId}`,
         title: set[0].clientName,
         subtitle: `Invoice · ${set[0].clientInvoiceAddress}`,
-        rightLabel: `${buildingCount} building${buildingCount === 1 ? '' : 's'} · ${set.length} job${set.length === 1 ? '' : 's'} · ${money(set.reduce((a, b) => a + b.yearlyValue, 0))}/yr`,
+        rightLabel: `${buildingCount} building${buildingCount === 1 ? '' : 's'} · ${set.length} job${set.length === 1 ? '' : 's'} · ${summarizeYearlyValue(set)}`,
       });
       set.forEach((job) => blocks.push({ kind: 'row', id: job.id, job }));
     }
@@ -64,7 +80,7 @@ export function buildGridBlocks(rows: JobRow[], groupBy: GroupBy): GridBlock[] {
         id: `band-freq-${freq}`,
         title: freq,
         subtitle: `${VISITS_PER_YEAR[freq]} visit${VISITS_PER_YEAR[freq] === 1 ? '' : 's'} a year per job`,
-        rightLabel: `${set.length} job${set.length === 1 ? '' : 's'} · ${money(set.reduce((a, b) => a + b.yearlyValue, 0))}/yr`,
+        rightLabel: `${set.length} job${set.length === 1 ? '' : 's'} · ${summarizeYearlyValue(set)}`,
       });
       set.forEach((job) => blocks.push({ kind: 'row', id: job.id, job }));
     }

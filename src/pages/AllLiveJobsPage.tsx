@@ -7,12 +7,14 @@ import type { GroupBy } from '../lib/grouping';
 import JobsGrid from '../components/jobs/JobsGrid';
 import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
 
+// 'review'/'ask' are mock-only JobStatus values that the real mapping path
+// never produces (no report/ad-hoc-tracking data exists) — omitted here so
+// this list only offers filters that can ever actually match a real job.
 const STATUS_CHIPS: { key: JobStatus | null; label: string }[] = [
   { key: null, label: 'All statuses' },
   { key: 'needs_booking', label: 'Needs booking' },
+  { key: 'overdue', label: 'Overdue' },
   { key: 'missed', label: 'Missed' },
-  { key: 'review', label: 'To review' },
-  { key: 'ask', label: 'Ask / ad-hoc' },
 ];
 
 function money(n: number): string {
@@ -23,7 +25,12 @@ export default function AllLiveJobsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
 
-  const { data: allRows = [], isLoading } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
+  const {
+    data: allRows = [],
+    isLoading,
+    isError,
+    error,
+  } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
 
   const status = (searchParams.get('status') as JobStatus | null) ?? null;
   const group: GroupBy = searchParams.get('group') === 'frequency' ? 'frequency' : 'client';
@@ -60,7 +67,9 @@ export default function AllLiveJobsPage() {
   const title = status ? STATUS_CHIPS.find((c) => c.key === status)?.label : group === 'frequency' ? 'Jobs by frequency' : 'All live jobs';
   const clientCount = new Set(allRows.map((j) => j.clientId)).size;
   const buildingCount = new Set(allRows.map((j) => j.buildingId)).size;
-  const totalValue = rows.reduce((a, b) => a + b.yearlyValue, 0);
+  const totalValue = rows.reduce((a, b) => a + (b.yearlyValue ?? 0), 0);
+  const excludedCount = rows.filter((r) => r.yearlyValue === null).length;
+  const excludedNote = excludedCount > 0 ? ` (${excludedCount} variable, excluded)` : '';
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -71,6 +80,7 @@ export default function AllLiveJobsPage() {
             <div className="mt-1 text-xs text-neutral-600 tabular-nums">
               {clientCount} client{clientCount === 1 ? '' : 's'} · {buildingCount} building{buildingCount === 1 ? '' : 's'} ·{' '}
               {rows.length} job{rows.length === 1 ? '' : 's'} shown · {money(totalValue)} contracted per year
+              {excludedNote}
             </div>
           </div>
           <div className="ml-auto flex gap-1.5">
@@ -107,13 +117,15 @@ export default function AllLiveJobsPage() {
 
         {isLoading ? (
           <LoadingSkeleton />
+        ) : isError ? (
+          <ErrorState message={error instanceof Error ? error.message : 'Something went wrong loading jobs.'} />
         ) : (
           <>
             <JobsGrid rows={rows} groupBy={group} selectedJobId={selectedJobId} onSelectJob={setSelectedJobId} />
             <div className="flex h-[34px] flex-none items-center gap-4 border-t border-neutral-400 bg-neutral-200 px-5 text-xs text-neutral-700 tabular-nums">
               <span>Showing {rows.length} of {allRows.length} rows</span>
               <span>·</span>
-              <span>Visible total {money(totalValue)}/yr</span>
+              <span>Visible total {money(totalValue)}/yr{excludedNote}</span>
               <span className="ml-auto font-heading text-[10px] font-semibold tracking-[0.13em] uppercase">
                 Yearly total is derived from price × frequency
               </span>
@@ -131,6 +143,19 @@ export default function AllLiveJobsPage() {
           onSelectSibling={setSelectedJobId}
         />
       )}
+    </div>
+  );
+}
+
+function ErrorState({ message }: { message: string }) {
+  return (
+    <div className="p-5">
+      <div className="border border-missed bg-missed/10 p-4">
+        <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-missed-fg uppercase">
+          Couldn't load jobs
+        </div>
+        <div className="mt-1.5 text-[13px] text-ink">{message}</div>
+      </div>
     </div>
   );
 }
