@@ -18,9 +18,13 @@ export type Frequency =
 /**
  * A job's current operational status, derived from its real `visits` rows
  * (see `mapJobRow.ts`'s `deriveVisitState` cascade) now that Teams+Visits
- * exist. 'not_due'/'review'/'onsite'/'ask' are mock-only — kept only because
+ * exist. 'not_due'/'onsite'/'ask' are mock-only — kept only because
  * `src/mock/jobsData.ts` still uses them for its own fictional data; the real
- * mapping path never produces them (no report/live-presence data exists).
+ * mapping path never produces them (no live-presence/ad-hoc-tracking data
+ * exists). 'review' IS produced by the real mapping path: any visit whose
+ * linked report is `awaiting_review`/`returned_for_correction` puts the whole
+ * job into 'review', taking priority over every other state — a report
+ * sitting unreviewed is actionable today regardless of what's scheduled next.
  * 'unscheduled' means no visit rows exist at all for the job. 'overdue' is a
  * purely calendar-derived observation (a booked/due visit's date has passed
  * without being resolved) — never a claim that the visit was missed; only
@@ -88,10 +92,37 @@ export interface Job {
   team: string;
   /** `jobs.default_team_id` — drives the team-assignment editor and pre-fills the visit-booking form. */
   defaultTeamId: string | null;
-  /** Human-readable recurrence, e.g. "Monthly · last Thu" — see CLAUDE.md section 6. */
+  /** Human-readable recurrence — a real, structured description when `schedule` exists, otherwise `frequencyRaw` (see CLAUDE.md section 6). */
   schedulePattern: string;
+  /** The job's real, manager-entered recurrence definition — null for most jobs today. Never inferred from frequency_raw/frequency_type/staging data. */
+  schedule: Schedule | null;
   /** Every real visit for this job, sorted soonest-first — for the drawer's "Visits" history list. Never fabricated; `[]` when none exist. */
   visits: JobVisitSummary[];
+}
+
+export type ScheduleType = 'fixed_weekday' | 'fixed_date' | 'due_month' | 'ad_hoc';
+export type ScheduleIntervalUnit = 'week' | 'month' | 'quarter' | 'year';
+export type ScheduleWeekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+export type ScheduleWeekOrdinal = '1st' | '2nd' | '3rd' | '4th' | 'last';
+
+/**
+ * A real `schedules` row — the job's genuine, manager-entered recurrence
+ * definition (CLAUDE.md section 6). Never inferred from
+ * frequency_raw/frequency_type/staging data — only ever written by a
+ * manager through the schedule editor. At most one per job (`job_id` is the
+ * table's primary key).
+ */
+export interface Schedule {
+  jobId: string;
+  scheduleType: ScheduleType;
+  intervalUnit: ScheduleIntervalUnit | null;
+  intervalCount: number | null;
+  weekday: ScheduleWeekday | null;
+  weekOrdinal: ScheduleWeekOrdinal | null;
+  dayOfMonth: number | null;
+  rollForwardOnWeekend: boolean;
+  dueMonth: number | null;
+  notes: string | null;
 }
 
 export type VisitStatus = 'due' | 'booked' | 'completed' | 'missed' | 'cancelled';
@@ -109,6 +140,9 @@ export interface JobVisitSummary {
   /** Non-null only once a report has been created for this visit (reports.visit_id is UNIQUE). */
   reportId: string | null;
   reportReviewStatus: ReportReviewStatus | null;
+  /** Mirrors the linked report's send timestamps — null until that report is actually sent. */
+  sentToClientAt: string | null;
+  sentToAccountsAt: string | null;
 }
 
 /**
@@ -183,6 +217,24 @@ export interface BuildingRow {
   /** From `buildings.extra_requirements` — '' when null (0% populated today). */
   siteInstructions: string;
   access: BuildingAccessInfo | null;
+}
+
+/**
+ * A real `contacts` row — a named person at a client. Never fabricate a
+ * primary/accounts flag; render exactly what is_primary/is_accounts_contact
+ * say, including when both are false for every contact (the common case
+ * today — no contact has ever been marked primary or accounts in the data).
+ */
+export interface Contact {
+  id: string;
+  clientId: string;
+  name: string;
+  role: string | null;
+  email: string | null;
+  phoneNumber: string | null;
+  isPrimary: boolean;
+  isAccountsContact: boolean;
+  notes: string | null;
 }
 
 /** A real `activity_events` row for a building's History tab — never fabricated (CLAUDE.md section 15). */

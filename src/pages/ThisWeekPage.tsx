@@ -50,11 +50,21 @@ export default function ThisWeekPage() {
     isError: teamsError,
     error: teamsErrorObj,
   } = useQuery({ queryKey: ['teams'], queryFn: listTeams });
-  const { data: visits = [], isLoading: visitsLoading } = useQuery({
+  const {
+    data: visits = [],
+    isLoading: visitsLoading,
+    isError: visitsError,
+    error: visitsErrorObj,
+  } = useQuery({
     queryKey: ['weekVisits', startDate, endDate],
     queryFn: () => listVisitsForWeek(startDate, endDate),
   });
-  const { data: jobRows = [] } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
+  const {
+    data: jobRows = [],
+    isLoading: jobRowsLoading,
+    isError: jobRowsError,
+    error: jobRowsErrorObj,
+  } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
 
   const createTeamMutation = useMutation({
     mutationFn: (name: string) => createTeam(name),
@@ -71,7 +81,9 @@ export default function ThisWeekPage() {
 
   const jobById = useMemo(() => new Map(jobRows.map((j) => [j.id, j])), [jobRows]);
 
-  const isLoading = teamsLoading || visitsLoading;
+  const isLoading = teamsLoading || visitsLoading || jobRowsLoading;
+  const isError = teamsError || visitsError || jobRowsError;
+  const errorObj = teamsError ? teamsErrorObj : visitsError ? visitsErrorObj : jobRowsErrorObj;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -124,14 +136,14 @@ export default function ThisWeekPage() {
             Loading this week…
           </div>
         </div>
-      ) : teamsError ? (
+      ) : isError ? (
         <div className="p-5">
           <div className="border border-missed bg-missed/10 p-4">
             <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-missed-fg uppercase">
-              Couldn't load teams
+              Couldn't load this week
             </div>
             <div className="mt-1.5 text-[13px] text-ink">
-              {teamsErrorObj instanceof Error ? teamsErrorObj.message : 'Something went wrong.'}
+              {errorObj instanceof Error ? errorObj.message : 'Something went wrong.'}
             </div>
           </div>
         </div>

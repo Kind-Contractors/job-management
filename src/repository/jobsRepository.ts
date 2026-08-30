@@ -33,15 +33,23 @@ const JOB_SELECT = `
     building_access ( access_notes )
   ),
   teams ( id, name, is_active ),
+  schedules ( schedule_type, interval_unit, interval_count, weekday, week_ordinal, day_of_month, roll_forward_on_weekend, due_month, notes ),
   visits (
     id, team_id, scheduled_date, status, price_charged, completed_at,
     teams ( id, name, is_active ),
-    reports ( id, review_status )
+    reports ( id, review_status, sent_to_client_at, sent_to_accounts_at )
   )
 `;
 
+/**
+ * Every view in the app shares this one query — filtering `lifecycle_status`
+ * here (rather than per-view) is what "one master dataset, several views"
+ * means in practice. Only 'active' counts as live for this pass; a future
+ * historical/lost-jobs view is a natural, separate, parameterized query —
+ * not this one.
+ */
 export async function listJobRows(): Promise<JobRow[]> {
-  const { data, error } = await supabase.from('jobs').select(JOB_SELECT);
+  const { data, error } = await supabase.from('jobs').select(JOB_SELECT).eq('lifecycle_status', 'active');
 
   if (error) {
     throw new Error(`Failed to load jobs: ${error.message}`);

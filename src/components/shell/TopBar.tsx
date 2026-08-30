@@ -1,5 +1,8 @@
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthProvider';
+
+/** The only two routes whose page actually reads the `q` search param — see AllLiveJobsPage.tsx/BuildingsPage.tsx. Exact match, not startsWith, so /buildings/:id (Building File) is correctly excluded. */
+const SEARCHABLE_ROUTES = ['/jobs', '/buildings'];
 
 function initialsFor(email: string): string {
   const local = email.split('@')[0] ?? '';
@@ -17,9 +20,11 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
 
 export default function TopBar() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { pathname } = useLocation();
   const { session, signOut } = useAuth();
   const q = searchParams.get('q') ?? '';
   const email = session?.user.email ?? '';
+  const searchable = SEARCHABLE_ROUTES.includes(pathname);
 
   const onSearch = (value: string) => {
     const next = new URLSearchParams(searchParams);
@@ -46,8 +51,10 @@ export default function TopBar() {
           <input
             value={q}
             onChange={(e) => onSearch(e.target.value)}
-            placeholder="Search clients, buildings, jobs, reports"
-            className="flex-1 border-0 bg-transparent text-ink outline-none placeholder:text-neutral-500"
+            placeholder="Search jobs & buildings"
+            disabled={!searchable}
+            title={searchable ? undefined : 'Search is only available on the Jobs and Buildings views'}
+            className="flex-1 border-0 bg-transparent text-ink outline-none placeholder:text-neutral-500 disabled:cursor-not-allowed disabled:opacity-50"
           />
           <span className="border border-neutral-300 px-1 font-heading text-[10px] font-semibold text-neutral-600">
             ⌘K

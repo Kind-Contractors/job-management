@@ -133,6 +133,7 @@ export const jobs: Job[] = RAW.map((r) => ({
   defaultTeamId: null,
   visits: [],
   schedulePattern: SCHEDULE_PATTERNS[r.jobId] ?? r.frequency,
+  schedule: null,
 }));
 
 export function denormalizeJobRows(): JobRow[] {

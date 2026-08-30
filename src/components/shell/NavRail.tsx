@@ -4,16 +4,17 @@ import { listJobRows } from '../../repository/jobsRepository';
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import { listTeams } from '../../repository/teamsRepository';
 
-type AttentionKey = 'review' | 'needs_booking' | 'missed';
+type AttentionKey = 'review' | 'needs_booking' | 'overdue' | 'missed';
 
 const ATTENTION_ITEMS: { key: AttentionKey; label: string; dotClass: string }[] = [
   { key: 'review', label: 'Reports to review', dotClass: 'bg-teal-700' },
   { key: 'needs_booking', label: 'Due, not scheduled', dotClass: 'bg-due' },
+  { key: 'overdue', label: 'Overdue', dotClass: 'bg-missed' },
   { key: 'missed', label: 'Missed visits', dotClass: 'bg-missed' },
 ];
 
-/** Not modeled yet — no visits/reports schema exists (CLAUDE.md section 13). */
-const NOT_YET_BUILT_ATTENTION = [{ label: 'Ready for accounts' }, { label: 'Photos uploading' }];
+/** Not modeled yet — no photo-upload mechanism exists in this pass. */
+const NOT_YET_BUILT_ATTENTION = [{ label: 'Photos uploading' }];
 
 const NOT_YET_BUILT_VIEWS = ['Month matrix', 'Report review'];
 
@@ -47,8 +48,21 @@ export default function NavRail() {
   const counts: Record<AttentionKey, number> = {
     review: divisionFiltered.filter((j) => j.status === 'review').length,
     needs_booking: divisionFiltered.filter((j) => j.status === 'needs_booking').length,
+    overdue: divisionFiltered.filter((j) => j.status === 'overdue').length,
     missed: divisionFiltered.filter((j) => j.status === 'missed').length,
   };
+
+  // A report being "ready for accounts" is a per-visit condition (approved,
+  // not yet sent to accounts), not a job-level status — a job can have this
+  // sitting on an old visit while its overall status is anything. Counted
+  // directly rather than via `job.status`; not yet click-to-filter like the
+  // three above, since that would need a new visit-level filter predicate on
+  // the Jobs page, not just a status-equality check — deferred until there's
+  // a real report review queue to link to instead.
+  const readyForAccountsCount = divisionFiltered.reduce(
+    (n, j) => n + j.visits.filter((v) => v.reportReviewStatus === 'approved' && !v.sentToAccountsAt).length,
+    0,
+  );
 
   const goToFilteredJobs = (key: AttentionKey) => {
     const next = new URLSearchParams(searchParams);
@@ -88,10 +102,18 @@ export default function NavRail() {
           <b className="ml-auto font-body text-xs tabular-nums">{counts[item.key]}</b>
         </div>
       ))}
+      <div
+        title="Ready for accounts across all jobs — not yet click-to-filter"
+        className="flex cursor-default items-center gap-2.5 border-l-2 border-transparent px-4 py-1.5 text-[13px]"
+      >
+        <i className="block h-[7px] w-[7px] flex-none bg-teal" />
+        Ready for accounts
+        <b className="ml-auto font-body text-xs tabular-nums">{readyForAccountsCount}</b>
+      </div>
       {NOT_YET_BUILT_ATTENTION.map((item) => (
         <div
           key={item.label}
-          title="Not built yet — no visits/reports schema exists in this pass"
+          title="Not built yet — no photo-upload mechanism exists in this pass"
           className="flex cursor-default items-center gap-2.5 border-l-2 border-transparent px-4 py-1.5 text-[13px] text-neutral-500"
         >
           <i className="block h-[7px] w-[7px] flex-none bg-neutral-300" />
@@ -110,14 +132,14 @@ export default function NavRail() {
         className={navLinkClasses(onJobs && !status && group !== 'frequency')}
       >
         All live jobs
-        <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{jobRows.length}</span>
+        <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{divisionFiltered.length}</span>
       </div>
       <div
         onClick={() => goToView('frequency')}
         className={navLinkClasses(onJobs && !status && group === 'frequency')}
       >
         By frequency
-        <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{jobRows.length}</span>
+        <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{divisionFiltered.length}</span>
       </div>
       <div onClick={() => navigate('/buildings')} className={navLinkClasses(onBuildings)}>
         Buildings

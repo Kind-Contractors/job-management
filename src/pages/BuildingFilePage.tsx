@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { listBuildingHistory, listBuildingRows } from '../repository/buildingsRepository';
 import { listJobRows } from '../repository/jobsRepository';
+import { listContactsForClient } from '../repository/contactsRepository';
 
 const NOT_BUILT_TITLE = 'Not built yet — this pass only covers the Buildings view and Building File basics';
 
@@ -18,11 +19,31 @@ export default function BuildingFilePage() {
   const [tab, setTab] = useState<Tab>('site');
   const [revealed, setRevealed] = useState(false);
 
-  const { data: buildings = [], isLoading: buildingsLoading } = useQuery({
+  const {
+    data: buildings = [],
+    isLoading: buildingsLoading,
+    isError: buildingsError,
+    error: buildingsErrorObj,
+  } = useQuery({
     queryKey: ['buildingRows'],
     queryFn: listBuildingRows,
   });
-  const { data: jobRows = [], isLoading: jobsLoading } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
+  const {
+    data: jobRows = [],
+    isLoading: jobsLoading,
+    isError: jobsError,
+    error: jobsErrorObj,
+  } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
+  const clientId = buildings.find((b) => b.id === buildingId)?.clientId;
+  const {
+    data: contacts = [],
+    isLoading: contactsLoading,
+    isError: contactsError,
+  } = useQuery({
+    queryKey: ['contacts', clientId],
+    queryFn: () => listContactsForClient(clientId!),
+    enabled: Boolean(clientId),
+  });
   const {
     data: history = [],
     isLoading: historyLoading,
@@ -37,6 +58,25 @@ export default function BuildingFilePage() {
     return (
       <div className="p-5 font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">
         Loading building…
+      </div>
+    );
+  }
+
+  if (buildingsError || jobsError) {
+    const errorObj = buildingsError ? buildingsErrorObj : jobsErrorObj;
+    return (
+      <div className="p-5">
+        <button onClick={() => navigate('/buildings')} className="cursor-pointer text-xs text-teal-700 hover:underline">
+          ← Back to Buildings
+        </button>
+        <div className="mt-4 border border-missed bg-missed/10 p-4">
+          <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-missed-fg uppercase">
+            Couldn't load this building
+          </div>
+          <div className="mt-1.5 text-[13px] text-ink">
+            {errorObj instanceof Error ? errorObj.message : 'Something went wrong.'}
+          </div>
+        </div>
       </div>
     );
   }
@@ -152,6 +192,39 @@ export default function BuildingFilePage() {
                 <Fact label="Jobs" value={String(buildingJobs.length)} />
                 <Fact label="Per year" value={yearlyTotal ? money(yearlyTotal) : '—'} />
               </div>
+            </div>
+
+            <div className="border border-neutral-300">
+              <div className="border-b border-neutral-300 px-4 py-2.5 font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
+                Contacts ({contacts.length})
+              </div>
+              {contactsLoading ? (
+                <div className="px-4 py-3 text-[12.5px] text-neutral-500">Loading contacts…</div>
+              ) : contactsError ? (
+                <div className="px-4 py-3 text-[12.5px] text-missed-fg">Couldn't load contacts.</div>
+              ) : contacts.length === 0 ? (
+                <div className="px-4 py-3 text-[12.5px] text-neutral-500">No contacts recorded for this client.</div>
+              ) : (
+                contacts.map((c) => (
+                  <div key={c.id} className="flex justify-between gap-3 border-b border-divider px-4 py-2 text-[12.5px] last:border-b-0">
+                    <span>
+                      {c.name}
+                      {c.role && <span className="text-neutral-500"> · {c.role}</span>}
+                      {c.isPrimary && (
+                        <span className="ml-1.5 border border-teal-700 bg-teal-100 px-1 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.06em] text-teal-700 uppercase">
+                          Primary
+                        </span>
+                      )}
+                      {c.isAccountsContact && (
+                        <span className="ml-1.5 border border-teal-700 bg-teal-100 px-1 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.06em] text-teal-700 uppercase">
+                          Accounts
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-right text-neutral-600">{c.email ?? c.phoneNumber ?? '—'}</span>
+                  </div>
+                ))
+              )}
             </div>
 
             <div className="border border-dashed border-neutral-400 bg-neutral-100 p-3">

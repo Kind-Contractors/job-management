@@ -256,7 +256,11 @@ const REVIEW_LABEL: Record<ReportPanelProps['reviewStatus'], string> = {
 
 function ReportPanel({ reportId, reviewStatus, actor }: ReportPanelProps) {
   const queryClient = useQueryClient();
-  const [expanded, setExpanded] = useState(false);
+  // Auto-open whenever this report is actually actionable — this is what
+  // makes the Job Inspector's "review" banner (see JobInspectorDrawer.tsx)
+  // land the manager straight on the thing they need to act on, with no
+  // extra click and no separate expand/scroll plumbing between components.
+  const [expanded, setExpanded] = useState(reviewStatus !== 'approved');
   const [returnReason, setReturnReason] = useState('');
   const [showReturnForm, setShowReturnForm] = useState(false);
   const [editWork, setEditWork] = useState<string | null>(null);

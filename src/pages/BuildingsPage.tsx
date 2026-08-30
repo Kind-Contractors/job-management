@@ -5,16 +5,62 @@ import { AgGridReact } from 'ag-grid-react';
 import type { ColDef, RowClickedEvent } from 'ag-grid-community';
 import { listBuildingRows } from '../repository/buildingsRepository';
 import { listJobRows } from '../repository/jobsRepository';
-import type { BuildingRow } from '../domain/types';
+import type { BuildingRow, JobRow } from '../domain/types';
 import { managerGridTheme } from '../lib/gridTheme';
 
 function money(n: number): string {
   return `£${n.toLocaleString('en-GB')}`;
 }
 
+type BuildingFlag = 'Missed visit' | 'Needs booking' | 'Report to review' | 'Clear';
+
+const FLAG_DOT_CLASS: Record<BuildingFlag, string> = {
+  'Missed visit': 'bg-missed',
+  'Needs booking': 'bg-due',
+  'Report to review': 'bg-teal-700',
+  Clear: 'bg-transparent border border-neutral-400',
+};
+
+/** Same priority-cascade idiom as mapJobRow.ts's deriveVisitState — the most urgent condition across all of a building's jobs wins. */
+function deriveBuildingFlag(jobs: JobRow[]): BuildingFlag {
+  if (jobs.some((j) => j.status === 'missed')) return 'Missed visit';
+  if (jobs.some((j) => j.status === 'needs_booking' || j.status === 'overdue')) return 'Needs booking';
+  if (jobs.some((j) => j.status === 'review')) return 'Report to review';
+  return 'Clear';
+}
+
+function earliest(dates: string[]): string | null {
+  return dates.reduce<string | null>((min, d) => (min === null || d < min ? d : min), null);
+}
+
+function latest(dates: string[]): string | null {
+  return dates.reduce<string | null>((max, d) => (max === null || d > max ? d : max), null);
+}
+
+function deriveNextVisitLabel(jobs: JobRow[], todayISO: string): string {
+  const dates = jobs
+    .flatMap((j) => j.visits)
+    .filter((v) => (v.status === 'due' || v.status === 'booked') && v.scheduledDate != null && v.scheduledDate >= todayISO)
+    .map((v) => v.scheduledDate as string);
+  const next = earliest(dates);
+  return next ? new Date(next).toLocaleDateString('en-GB') : 'Not yet scheduled';
+}
+
+function deriveLastVisitLabel(jobs: JobRow[]): string {
+  const dates = jobs
+    .flatMap((j) => j.visits)
+    .filter((v) => v.status === 'completed' && v.completedAt != null)
+    .map((v) => v.completedAt as string);
+  const last = latest(dates);
+  return last ? new Date(last).toLocaleDateString('en-GB') : 'No visits recorded';
+}
+
 interface BuildingListRow extends BuildingRow {
   jobCount: number;
   yearlyTotal: number;
+  nextVisitLabel: string;
+  lastVisitLabel: string;
+  flag: BuildingFlag;
 }
 
 const COLUMN_DEFS: ColDef<BuildingListRow>[] = [
@@ -51,18 +97,21 @@ const COLUMN_DEFS: ColDef<BuildingListRow>[] = [
     valueFormatter: (p) => (!p.value ? '—' : money(p.value)),
     cellClass: 'tabular-nums text-neutral-700',
   },
-  { headerName: 'Next visit', flex: 1, minWidth: 110, valueGetter: () => 'Not yet scheduled', cellClass: 'text-neutral-600' },
-  { headerName: 'Last visit', flex: 1, minWidth: 110, valueGetter: () => 'No visits recorded', cellClass: 'text-neutral-600' },
+  { headerName: 'Next visit', flex: 1, minWidth: 110, valueGetter: (p) => p.data?.nextVisitLabel, cellClass: 'text-neutral-600' },
+  { headerName: 'Last visit', flex: 1, minWidth: 110, valueGetter: (p) => p.data?.lastVisitLabel, cellClass: 'text-neutral-600' },
   {
     headerName: 'Flags',
     flex: 1,
     minWidth: 130,
-    cellRenderer: () => (
-      <span className="flex items-center gap-1.5 font-heading text-[10.5px] font-semibold tracking-[0.07em] text-neutral-500 uppercase">
-        <i className="block h-1.5 w-1.5 border border-neutral-400 bg-transparent" />
-        No visit data yet
-      </span>
-    ),
+    cellRenderer: (p: { data?: BuildingListRow }) => {
+      if (!p.data) return null;
+      return (
+        <span className="flex items-center gap-1.5 font-heading text-[10.5px] font-semibold tracking-[0.07em] text-neutral-500 uppercase">
+          <i className={`block h-1.5 w-1.5 flex-none ${FLAG_DOT_CLASS[p.data.flag]}`} />
+          {p.data.flag}
+        </span>
+      );
+    },
   },
 ];
 
@@ -77,9 +126,16 @@ export default function BuildingsPage() {
     isError: buildingsError,
     error: buildingsErrorObj,
   } = useQuery({ queryKey: ['buildingRows'], queryFn: listBuildingRows });
-  const { data: jobRows = [], isLoading: jobsLoading } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
+  const {
+    data: jobRows = [],
+    isLoading: jobsLoading,
+    isError: jobsError,
+    error: jobsErrorObj,
+  } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
 
   const isLoading = buildingsLoading || jobsLoading;
+  const isError = buildingsError || jobsError;
+  const errorObj = buildingsError ? buildingsErrorObj : jobsErrorObj;
 
   const rows = useMemo<BuildingListRow[]>(() => {
     const jobsByBuilding = new Map<string, typeof jobRows>();
@@ -89,12 +145,16 @@ export default function BuildingsPage() {
       jobsByBuilding.set(job.buildingId, list);
     }
 
+    const todayISO = new Date().toISOString().slice(0, 10);
     const withCounts = buildingRows.map((b) => {
       const jobs = jobsByBuilding.get(b.id) ?? [];
       return {
         ...b,
         jobCount: jobs.length,
         yearlyTotal: jobs.reduce((a, j) => a + (j.yearlyValue ?? 0), 0),
+        nextVisitLabel: deriveNextVisitLabel(jobs, todayISO),
+        lastVisitLabel: deriveLastVisitLabel(jobs),
+        flag: deriveBuildingFlag(jobs),
       };
     });
 
@@ -120,8 +180,17 @@ export default function BuildingsPage() {
 
       {isLoading ? (
         <LoadingSkeleton />
-      ) : buildingsError ? (
-        <ErrorState message={buildingsErrorObj instanceof Error ? buildingsErrorObj.message : 'Something went wrong loading buildings.'} />
+      ) : isError ? (
+        <ErrorState message={errorObj instanceof Error ? errorObj.message : 'Something went wrong loading buildings.'} />
+      ) : rows.length === 0 ? (
+        <div className="p-5">
+          <div className="border border-t-0 border-neutral-300 bg-white px-5 py-10 text-center">
+            <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
+              {q ? `Nothing matches "${q}"` : 'No buildings recorded yet'}
+            </div>
+            {q && <div className="mt-1.5 text-[13px] text-neutral-600">Try a different search.</div>}
+          </div>
+        </div>
       ) : (
         <div className="min-h-0 flex-1">
           <AgGridReact<BuildingListRow>

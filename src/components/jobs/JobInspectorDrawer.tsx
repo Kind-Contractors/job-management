@@ -5,6 +5,7 @@ import { listTeams, createVisit } from '../../repository/teamsRepository';
 import { assignJobTeam } from '../../repository/jobsRepository';
 import { useAuth } from '../../auth/AuthProvider';
 import VisitRow from './VisitRow';
+import ScheduleEditor from './ScheduleEditor';
 
 interface JobInspectorDrawerProps {
   job: JobRow;
@@ -78,7 +79,7 @@ export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSib
           >
             {job.division}
           </span>
-          <span className="border border-neutral-300 px-2 py-0.5 font-heading text-[10.5px] font-semibold tracking-[0.09em] text-neutral-700 uppercase">
+          <span className="max-w-[180px] truncate border border-neutral-300 px-2 py-0.5 font-heading text-[10.5px] font-semibold tracking-[0.09em] text-neutral-700 uppercase">
             {job.schedulePattern}
           </span>
         </div>
@@ -89,14 +90,8 @@ export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSib
           <div className="font-heading text-[11px] font-semibold tracking-[0.11em] text-teal-700 uppercase">
             Report waiting on you
           </div>
-          <div className="mt-1 mb-2.5 text-[12.5px] leading-snug text-teal-700">
-            This job has a submitted report awaiting your review.
-          </div>
-          <div
-            title={NOT_BUILT_TITLE}
-            className="inline-block cursor-not-allowed bg-neutral-300 px-3 py-1.5 text-xs font-semibold text-neutral-500"
-          >
-            Review report
+          <div className="mt-1 text-[12.5px] leading-snug text-teal-700">
+            {job.nextDueLabel} — open below to approve, return, or send it.
           </div>
         </div>
       )}
@@ -180,6 +175,8 @@ export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSib
           </div>
         ))}
       </div>
+
+      <ScheduleEditor jobId={job.id} schedule={job.schedule} />
 
       {job.visits.length > 0 && (
         <div className="px-4 pb-1">

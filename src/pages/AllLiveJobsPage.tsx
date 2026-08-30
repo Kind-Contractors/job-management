@@ -7,11 +7,13 @@ import type { GroupBy } from '../lib/grouping';
 import JobsGrid from '../components/jobs/JobsGrid';
 import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
 
-// 'review'/'ask' are mock-only JobStatus values that the real mapping path
-// never produces (no report/ad-hoc-tracking data exists) — omitted here so
-// this list only offers filters that can ever actually match a real job.
+// 'ask' is a mock-only JobStatus value that the real mapping path never
+// produces (no ad-hoc-tracking data exists) — omitted here so this list only
+// offers filters that can ever actually match a real job. 'review' IS real —
+// see deriveVisitState in mapJobRow.ts.
 const STATUS_CHIPS: { key: JobStatus | null; label: string }[] = [
   { key: null, label: 'All statuses' },
+  { key: 'review', label: 'To review' },
   { key: 'needs_booking', label: 'Needs booking' },
   { key: 'overdue', label: 'Overdue' },
   { key: 'missed', label: 'Missed' },
@@ -42,10 +44,18 @@ export default function AllLiveJobsPage() {
       if (division !== 'Both' && job.division !== division) return false;
       if (status && job.status !== status) return false;
       if (!q) return true;
-      const haystack = `${job.buildingName} ${job.jobSummary} ${job.clientName} ${job.postcode} ${job.frequency} ${job.team} ${job.id}`.toLowerCase();
+      const haystack = `${job.buildingName} ${job.jobSummary} ${job.clientName} ${job.postcode} ${job.frequency} ${job.team} ${job.schedulePattern} ${job.id}`.toLowerCase();
       return haystack.includes(q);
     });
   }, [allRows, division, status, q]);
+
+  const clearFilters = () => {
+    const params = new URLSearchParams(searchParams);
+    params.delete('status');
+    params.delete('q');
+    params.delete('division');
+    setSearchParams(params, { replace: true });
+  };
 
   const setStatus = (next: JobStatus | null) => {
     const params = new URLSearchParams(searchParams);
@@ -119,6 +129,8 @@ export default function AllLiveJobsPage() {
           <LoadingSkeleton />
         ) : isError ? (
           <ErrorState message={error instanceof Error ? error.message : 'Something went wrong loading jobs.'} />
+        ) : rows.length === 0 ? (
+          <NoResultsState allRowsEmpty={allRows.length === 0} query={q} onClearFilters={clearFilters} />
         ) : (
           <>
             <JobsGrid rows={rows} groupBy={group} selectedJobId={selectedJobId} onSelectJob={setSelectedJobId} />
@@ -143,6 +155,37 @@ export default function AllLiveJobsPage() {
           onSelectSibling={setSelectedJobId}
         />
       )}
+    </div>
+  );
+}
+
+function NoResultsState({
+  allRowsEmpty,
+  query,
+  onClearFilters,
+}: {
+  allRowsEmpty: boolean;
+  query: string;
+  onClearFilters: () => void;
+}) {
+  return (
+    <div className="p-5">
+      <div className="border border-t-0 border-neutral-300 bg-white px-5 py-10 text-center">
+        <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
+          {allRowsEmpty ? 'No jobs in the system yet' : query ? `Nothing matches "${query}"` : 'No jobs match the current filters'}
+        </div>
+        {!allRowsEmpty && (
+          <>
+            <div className="mt-1.5 text-[13px] text-neutral-600">Try a different search or clear the filters below.</div>
+            <button
+              onClick={onClearFilters}
+              className="mt-3 cursor-pointer border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+            >
+              Clear filters
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

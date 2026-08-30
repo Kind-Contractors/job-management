@@ -8,8 +8,21 @@
 // and nothing here treats a stale `booked` visit as `missed` — only the DB's
 // own `visits.status = 'missed'` ever produces that status.
 
-import type { Frequency, JobRow, JobStatus, JobVisitSummary, ReportReviewStatus, VisitStatus } from '../domain/types';
+import type {
+  Frequency,
+  JobRow,
+  JobStatus,
+  JobVisitSummary,
+  ReportReviewStatus,
+  Schedule,
+  ScheduleIntervalUnit,
+  ScheduleType,
+  ScheduleWeekOrdinal,
+  ScheduleWeekday,
+  VisitStatus,
+} from '../domain/types';
 import { DEFAULT_ACCESS_NOTE } from '../lib/constants';
+import { describeScheduleShort } from '../lib/scheduleFormat';
 
 type FrequencyType =
   | 'weekly'
@@ -70,9 +83,23 @@ interface SupabaseTeam {
   is_active: boolean;
 }
 
+interface SupabaseSchedule {
+  schedule_type: ScheduleType;
+  interval_unit: ScheduleIntervalUnit | null;
+  interval_count: number | null;
+  weekday: ScheduleWeekday | null;
+  week_ordinal: ScheduleWeekOrdinal | null;
+  day_of_month: number | null;
+  roll_forward_on_weekend: boolean;
+  due_month: number | null;
+  notes: string | null;
+}
+
 interface SupabaseReport {
   id: string;
   review_status: ReportReviewStatus;
+  sent_to_client_at: string | null;
+  sent_to_accounts_at: string | null;
 }
 
 interface SupabaseVisit {
@@ -100,6 +127,7 @@ export interface SupabaseJobRecord {
   default_team_id: string | null;
   buildings: SupabaseBuilding | SupabaseBuilding[] | null;
   teams: SupabaseTeam | SupabaseTeam[] | null;
+  schedules: SupabaseSchedule | SupabaseSchedule[] | null;
   visits: SupabaseVisit[] | null;
 }
 
@@ -136,10 +164,25 @@ interface VisitState {
  * through — see the reviewed plan for the full case-by-case rationale.
  * `cancelled` visits are never considered "current"; a stale `booked`/`due`
  * visit becomes 'overdue' (a calendar observation), never 'missed' (which
- * only ever comes from the DB's own visits.status).
+ * only ever comes from the DB's own visits.status). A visit whose linked
+ * report is still `awaiting_review`/`returned_for_correction` takes priority
+ * over everything else below — it's actionable today regardless of what's
+ * scheduled next (see the "reports to review" plan).
  */
 export function deriveVisitState(visits: SupabaseVisit[], todayISO: string): VisitState {
   const active = visits.filter((v) => v.status !== 'cancelled');
+
+  const needsReview = active
+    .filter((v) => {
+      const report = one(v.reports);
+      return report != null && (report.review_status === 'awaiting_review' || report.review_status === 'returned_for_correction');
+    })
+    .sort((a, b) => (b.completed_at ?? '').localeCompare(a.completed_at ?? '') || a.id.localeCompare(b.id));
+  if (needsReview.length > 0) {
+    const report = one(needsReview[0].reports);
+    const label = report?.review_status === 'returned_for_correction' ? 'Report returned for correction' : 'Report awaiting review';
+    return { status: 'review', nextDueLabel: label };
+  }
 
   const dated = active.filter(
     (v): v is SupabaseVisit & { scheduled_date: string } =>
@@ -186,9 +229,30 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
   const frequency: Frequency = frequencyType ? FREQUENCY_TYPE_LABEL[frequencyType] : 'Unknown';
   const frequencyRaw = frequencyType ? FREQUENCY_TYPE_LABEL[frequencyType] : (row.frequency_raw ?? 'Unknown');
 
-  const canComputeYearly = row.pricing_type === 'fixed' && frequencyType != null && row.price_per_visit != null;
+  const canComputeYearly =
+    row.pricing_type === 'fixed' &&
+    frequencyType != null &&
+    frequencyType !== 'ask_adhoc' &&
+    frequencyType !== 'one_off' &&
+    row.price_per_visit != null;
   const yearlyValue = canComputeYearly
     ? row.price_per_visit! * VISITS_PER_YEAR_BY_TYPE[frequencyType!]
+    : null;
+
+  const supabaseSchedule = one(row.schedules);
+  const schedule: Schedule | null = supabaseSchedule
+    ? {
+        jobId: row.id,
+        scheduleType: supabaseSchedule.schedule_type,
+        intervalUnit: supabaseSchedule.interval_unit,
+        intervalCount: supabaseSchedule.interval_count,
+        weekday: supabaseSchedule.weekday,
+        weekOrdinal: supabaseSchedule.week_ordinal,
+        dayOfMonth: supabaseSchedule.day_of_month,
+        rollForwardOnWeekend: supabaseSchedule.roll_forward_on_weekend,
+        dueMonth: supabaseSchedule.due_month,
+        notes: supabaseSchedule.notes,
+      }
     : null;
 
   const buildingName = building?.name ?? building?.address.split(',')[0]?.trim() ?? '';
@@ -212,6 +276,8 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
         completedAt: v.completed_at,
         reportId: report?.id ?? null,
         reportReviewStatus: report?.review_status ?? null,
+        sentToClientAt: report?.sent_to_client_at ?? null,
+        sentToAccountsAt: report?.sent_to_accounts_at ?? null,
       };
     });
 
@@ -228,7 +294,8 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
     status,
     team,
     defaultTeamId: row.default_team_id,
-    schedulePattern: frequencyRaw,
+    schedulePattern: schedule ? describeScheduleShort(schedule) : frequencyRaw,
+    schedule,
     visits,
     buildingName,
     street: '',
