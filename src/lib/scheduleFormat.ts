@@ -86,3 +86,88 @@ export function describeScheduleShort(s: Schedule): string {
       return `Due ${MONTH_SHORT_LABEL[s.dueMonth! - 1]}`;
   }
 }
+
+const WEEKDAY_INDEX: Record<ScheduleWeekday, number> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+const WEEK_ORDINAL_INDEX: Record<string, number> = { '1st': 0, '2nd': 1, '3rd': 2, '4th': 3 };
+
+/** Formats a Date's own LOCAL calendar day — never `.toISOString()` here, which converts to UTC and would shift the date in any timezone ahead of UTC (a real bug caught by this function's own verification trace). */
+function toISODate(d: Date): string {
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
+/** The Nth (or last) `weekday` of the given month — always exists (every month has ≥4 of each weekday), so this never fails. */
+function nthWeekdayOfMonth(year: number, month: number, weekOrdinal: ScheduleWeekOrdinal, weekday: ScheduleWeekday): Date {
+  const targetDow = WEEKDAY_INDEX[weekday];
+  if (weekOrdinal === 'last') {
+    const lastDay = new Date(year, month + 1, 0);
+    lastDay.setDate(lastDay.getDate() - ((lastDay.getDay() - targetDow + 7) % 7));
+    return lastDay;
+  }
+  const firstDow = new Date(year, month, 1).getDay();
+  const day = 1 + ((targetDow - firstDow + 7) % 7) + WEEK_ORDINAL_INDEX[weekOrdinal] * 7;
+  return new Date(year, month, day);
+}
+
+/** `dayOfMonth` in the given month, or null if that day doesn't exist there (e.g. 31 in February) — never clamped to a different day. */
+function fixedDateInMonth(year: number, month: number, dayOfMonth: number): Date | null {
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  return dayOfMonth > daysInMonth ? null : new Date(year, month, dayOfMonth);
+}
+
+function rollForwardWeekend(d: Date): Date {
+  const dow = d.getDay();
+  if (dow === 6) return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 2);
+  if (dow === 0) return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+  return d;
+}
+
+/**
+ * A deterministic next-occurrence date, or null when the schedule doesn't
+ * store enough information to compute one without guessing — see the
+ * reviewed plan for the full case-by-case rationale. Only ever computed
+ * from the schedule's own fields and today's date, never from visit
+ * history (schedules and visits stay decoupled). Purely a UI suggestion:
+ * nothing here creates a visit or writes anything.
+ *
+ * Deliberately narrow: only `fixed_weekday`/`fixed_date` with
+ * `intervalUnit === 'month' && intervalCount === 1` (literally monthly,
+ * so every month is genuinely "in the cycle" with nothing to guess) ever
+ * returns a date. `ad_hoc` and `due_month` never do (no day is ever
+ * stored for either). `week`/`quarter`/`year` intervals, or `month` with
+ * `intervalCount > 1`, never do either — the schema has no stored anchor
+ * saying which specific week/quarter/year-cycle or which of the N months
+ * the recurrence is phased against, so picking one would be inventing
+ * information the schedule doesn't provide. Do not extend this to those
+ * cases without a schema change that adds a real anchor field.
+ */
+export function suggestNextDate(s: Schedule, todayISO: string): string | null {
+  if (s.scheduleType === 'ad_hoc' || s.scheduleType === 'due_month') return null;
+  if (s.intervalUnit !== 'month' || s.intervalCount !== 1) return null;
+
+  const today = new Date(`${todayISO}T00:00:00`);
+  const year = today.getFullYear();
+  const month = today.getMonth();
+
+  if (s.scheduleType === 'fixed_weekday') {
+    if (!s.weekOrdinal || !s.weekday) return null;
+    const thisMonth = nthWeekdayOfMonth(year, month, s.weekOrdinal, s.weekday);
+    if (toISODate(thisMonth) >= todayISO) return toISODate(thisMonth);
+    return toISODate(nthWeekdayOfMonth(year, month + 1, s.weekOrdinal, s.weekday));
+  }
+
+  if (s.scheduleType === 'fixed_date') {
+    if (s.dayOfMonth == null) return null;
+    for (let offset = 0; offset <= 12; offset++) {
+      const raw = fixedDateInMonth(year, month + offset, s.dayOfMonth);
+      if (!raw) continue;
+      const candidate = s.rollForwardOnWeekend ? rollForwardWeekend(raw) : raw;
+      const candidateISO = toISODate(candidate);
+      if (candidateISO >= todayISO) return candidateISO;
+    }
+    return null;
+  }
+
+  return null;
+}

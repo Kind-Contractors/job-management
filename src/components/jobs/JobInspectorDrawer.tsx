@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { JobRow } from '../../domain/types';
 import { listTeams, createVisit } from '../../repository/teamsRepository';
@@ -6,6 +7,8 @@ import { assignJobTeam } from '../../repository/jobsRepository';
 import { useAuth } from '../../auth/AuthProvider';
 import VisitRow from './VisitRow';
 import ScheduleEditor from './ScheduleEditor';
+import JobEditor from './JobEditor';
+import { describeSchedule, suggestNextDate } from '../../lib/scheduleFormat';
 
 interface JobInspectorDrawerProps {
   job: JobRow;
@@ -14,16 +17,18 @@ interface JobInspectorDrawerProps {
   onSelectSibling: (jobId: string) => void;
 }
 
-const NOT_BUILT_TITLE = 'Not built yet — this pass only covers the All live jobs view';
+const NOT_BUILT_TITLE = 'Not built yet';
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
 export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSibling }: JobInspectorDrawerProps) {
+  const navigate = useNavigate();
   const { session } = useAuth();
   const actor = session?.user.email ?? 'unknown';
   const [revealed, setRevealed] = useState(false);
+  const [editingJob, setEditingJob] = useState(false);
   const [visitDate, setVisitDate] = useState(todayISO());
   const [visitTeamId, setVisitTeamId] = useState<string>(job.defaultTeamId ?? '');
   const [bookingMessage, setBookingMessage] = useState<string | null>(null);
@@ -40,11 +45,14 @@ export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSib
   const bookVisitMutation = useMutation({
     mutationFn: () => createVisit(job.id, visitTeamId || null, visitDate),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['jobRows'] });
       queryClient.invalidateQueries({ queryKey: ['weekVisits'] });
       setBookingMessage(`Visit booked for ${new Date(visitDate).toLocaleDateString('en-GB')}.`);
     },
     onError: (err) => setBookingMessage(err instanceof Error ? err.message : 'Failed to book visit.'),
   });
+
+  const suggestedDate = job.schedule ? suggestNextDate(job.schedule, todayISO()) : null;
 
   const facts: [string, string][] = [
     ['Client', job.clientName],
@@ -112,6 +120,19 @@ export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSib
             </div>
           )}
           <div className="mt-2 flex flex-col gap-2">
+            {suggestedDate && (
+              <div className="text-[11.5px] text-neutral-600">
+                Per this job's schedule ({describeSchedule(job.schedule!)}): suggested{' '}
+                {new Date(suggestedDate).toLocaleDateString('en-GB')}
+                <button
+                  type="button"
+                  onClick={() => setVisitDate(suggestedDate)}
+                  className="ml-1.5 cursor-pointer text-teal-700 hover:underline"
+                >
+                  Use this date
+                </button>
+              </div>
+            )}
             <label className="flex flex-col gap-1 text-[11.5px] text-neutral-600">
               Date
               <input
@@ -176,6 +197,8 @@ export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSib
         ))}
       </div>
 
+      {editingJob && <JobEditor job={job} onDone={() => setEditingJob(false)} />}
+
       <ScheduleEditor jobId={job.id} schedule={job.schedule} />
 
       {job.visits.length > 0 && (
@@ -227,12 +250,18 @@ export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSib
       )}
 
       <div className="mt-auto flex flex-wrap gap-1.5 border-t border-divider p-3.5">
-        <div title={NOT_BUILT_TITLE} className="cursor-not-allowed border border-neutral-300 px-3 py-1.5 text-xs text-neutral-500">
+        <button
+          onClick={() => navigate(`/buildings/${job.buildingId}`)}
+          className="cursor-pointer border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+        >
           Building file
-        </div>
-        <div title={NOT_BUILT_TITLE} className="cursor-not-allowed border border-neutral-300 px-3 py-1.5 text-xs text-neutral-500">
+        </button>
+        <button
+          onClick={() => setEditingJob(true)}
+          className="cursor-pointer border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+        >
           Edit job
-        </div>
+        </button>
         <div title={NOT_BUILT_TITLE} className="cursor-not-allowed border border-neutral-300 px-3 py-1.5 text-xs text-neutral-500">
           See the year
         </div>

@@ -10,6 +10,7 @@
 
 import type {
   Frequency,
+  FrequencyType,
   JobRow,
   JobStatus,
   JobVisitSummary,
@@ -24,17 +25,7 @@ import type {
 import { DEFAULT_ACCESS_NOTE } from '../lib/constants';
 import { describeScheduleShort } from '../lib/scheduleFormat';
 
-type FrequencyType =
-  | 'weekly'
-  | 'fortnightly'
-  | 'monthly'
-  | 'quarterly'
-  | 'biannual'
-  | 'annual'
-  | 'ask_adhoc'
-  | 'one_off';
-
-const FREQUENCY_TYPE_LABEL: Record<FrequencyType, Frequency> = {
+export const FREQUENCY_TYPE_LABEL: Record<FrequencyType, Frequency> = {
   weekly: 'Weekly',
   fortnightly: 'Fortnightly',
   monthly: 'Monthly',
@@ -285,9 +276,11 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
     id: row.id,
     buildingId: row.building_id,
     jobSummary: row.job_summary ?? row.job_notes ?? '—',
+    jobNotes: row.job_notes,
     division: row.job_type === 'specialist' ? 'Specialist' : 'General',
     frequency,
     frequencyRaw,
+    frequencyType,
     pricePerVisit: row.price_per_visit,
     yearlyValue,
     nextDueLabel,

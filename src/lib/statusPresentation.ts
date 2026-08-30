@@ -1,4 +1,4 @@
-import type { JobStatus } from '../domain/types';
+import type { JobStatus, JobVisitSummary } from '../domain/types';
 
 export interface StatusPresentation {
   label: string;
@@ -36,4 +36,15 @@ export function dueColorClass(status: JobStatus, softDate: boolean): string {
   if (status === 'missed' || status === 'overdue') return 'text-missed-fg';
   if (softDate) return 'text-due-fg';
   return 'text-ink';
+}
+
+/**
+ * A report is "ready for accounts" once approved and not yet sent to
+ * accounts — a per-visit condition, not a JobStatus (a job can have this
+ * true on one visit while its overall status is anything else). The one
+ * shared source of truth for this predicate — reused by NavRail's count,
+ * AllLiveJobsPage's filter, and VisitRow's inline badge/auto-expand.
+ */
+export function isVisitReadyForAccounts(visit: JobVisitSummary): boolean {
+  return visit.reportReviewStatus === 'approved' && !visit.sentToAccountsAt;
 }

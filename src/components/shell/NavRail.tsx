@@ -3,6 +3,7 @@ import { useLocation, useSearchParams, useNavigate } from 'react-router-dom';
 import { listJobRows } from '../../repository/jobsRepository';
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import { listTeams } from '../../repository/teamsRepository';
+import { isVisitReadyForAccounts } from '../../lib/statusPresentation';
 
 type AttentionKey = 'review' | 'needs_booking' | 'overdue' | 'missed';
 
@@ -55,18 +56,27 @@ export default function NavRail() {
   // A report being "ready for accounts" is a per-visit condition (approved,
   // not yet sent to accounts), not a job-level status — a job can have this
   // sitting on an old visit while its overall status is anything. Counted
-  // directly rather than via `job.status`; not yet click-to-filter like the
-  // three above, since that would need a new visit-level filter predicate on
-  // the Jobs page, not just a status-equality check — deferred until there's
-  // a real report review queue to link to instead.
+  // directly rather than via `job.status`, using the one shared predicate
+  // (isVisitReadyForAccounts) also used by AllLiveJobsPage's filter and
+  // VisitRow's inline badge.
   const readyForAccountsCount = divisionFiltered.reduce(
-    (n, j) => n + j.visits.filter((v) => v.reportReviewStatus === 'approved' && !v.sentToAccountsAt).length,
+    (n, j) => n + j.visits.filter(isVisitReadyForAccounts).length,
     0,
   );
+  const readyForAccounts = searchParams.get('readyForAccounts') === '1';
+
+  const goToReadyForAccounts = () => {
+    const next = new URLSearchParams(searchParams);
+    next.set('readyForAccounts', '1');
+    next.delete('status');
+    next.delete('group');
+    navigate(`/jobs?${next.toString()}`);
+  };
 
   const goToFilteredJobs = (key: AttentionKey) => {
     const next = new URLSearchParams(searchParams);
     next.set('status', key);
+    next.delete('readyForAccounts');
     next.delete('group');
     navigate(`/jobs?${next.toString()}`);
   };
@@ -74,6 +84,7 @@ export default function NavRail() {
   const goToView = (nextGroup: 'client' | 'frequency') => {
     const next = new URLSearchParams(searchParams);
     next.delete('status');
+    next.delete('readyForAccounts');
     if (nextGroup === 'frequency') next.set('group', 'frequency');
     else next.delete('group');
     navigate(`/jobs?${next.toString()}`);
@@ -103,8 +114,8 @@ export default function NavRail() {
         </div>
       ))}
       <div
-        title="Ready for accounts across all jobs — not yet click-to-filter"
-        className="flex cursor-default items-center gap-2.5 border-l-2 border-transparent px-4 py-1.5 text-[13px]"
+        onClick={goToReadyForAccounts}
+        className={navLinkClasses(onJobs && readyForAccounts)}
       >
         <i className="block h-[7px] w-[7px] flex-none bg-teal" />
         Ready for accounts

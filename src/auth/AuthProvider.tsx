@@ -9,15 +9,35 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 
-export type AuthStatus = 'loading' | 'signed_out' | 'unauthorized' | 'authorized';
+/**
+ * 'check_failed' is distinct from 'unauthorized': it means the app_users
+ * lookup itself errored (a real Supabase/network problem), never that the
+ * lookup succeeded and said "not a manager." It's exactly as blocked as
+ * 'unauthorized' — see App.tsx — just with different copy and a retry.
+ */
+export type AuthStatus = 'loading' | 'signed_out' | 'unauthorized' | 'check_failed' | 'authorized';
 
 interface AuthContextValue {
   status: AuthStatus;
   session: Session | null;
   signOut: () => Promise<void>;
+  /** Re-runs the app_users lookup for the current session — for the 'check_failed' screen's "Try again". */
+  recheck: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+
+/**
+ * The one place the manager/authorization decision is made, so the mount
+ * effect and recheck() can never disagree about what counts as
+ * 'authorized' — the condition itself (data?.is_active && data.role ===
+ * 'manager') is unchanged from before 'check_failed' existed.
+ */
+async function checkAuthorization(userId: string): Promise<'authorized' | 'unauthorized' | 'check_failed'> {
+  const { data, error } = await supabase.from('app_users').select('role, is_active').eq('id', userId).maybeSingle();
+  if (error) return 'check_failed';
+  return data?.is_active && data.role === 'manager' ? 'authorized' : 'unauthorized';
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -35,15 +55,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const { data, error } = await supabase
-        .from('app_users')
-        .select('role, is_active')
-        .eq('id', nextSession.user.id)
-        .maybeSingle();
+      const result = await checkAuthorization(nextSession.user.id);
 
       if (cancelled) return;
       setSession(nextSession);
-      setStatus(!error && data?.is_active && data.role === 'manager' ? 'authorized' : 'unauthorized');
+      setStatus(result);
     }
 
     supabase.auth.getSession().then(({ data }) => resolve(data.session));
@@ -63,7 +79,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut();
   };
 
-  return <AuthContext.Provider value={{ status, session, signOut }}>{children}</AuthContext.Provider>;
+  /** Only ever called from the 'check_failed' screen — re-checks the same, already-known session, never signs in as anyone new. */
+  const recheck = () => {
+    if (!session) return;
+    setStatus('loading');
+    checkAuthorization(session.user.id).then(setStatus);
+  };
+
+  return <AuthContext.Provider value={{ status, session, signOut, recheck }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {

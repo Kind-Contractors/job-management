@@ -14,6 +14,7 @@ import {
   sendReportToClient,
   updateReport,
 } from '../../repository/reportsRepository';
+import { isVisitReadyForAccounts } from '../../lib/statusPresentation';
 
 function nowLocalDateTime(): string {
   const d = new Date();
@@ -60,6 +61,7 @@ export default function VisitRow({ job, visit, actor }: VisitRowProps) {
   });
 
   const dateLabel = visit.scheduledDate ? new Date(visit.scheduledDate).toLocaleDateString('en-GB') : 'No date set';
+  const readyForAccounts = isVisitReadyForAccounts(visit);
 
   return (
     <div className="border-b border-divider py-1.5 text-[12.5px]">
@@ -70,6 +72,7 @@ export default function VisitRow({ job, visit, actor }: VisitRowProps) {
           {visit.priceCharged != null && (
             <span className="text-neutral-500"> · £{visit.priceCharged.toLocaleString('en-GB')}</span>
           )}
+          {readyForAccounts && <span className="font-semibold text-teal-700"> · Ready for accounts</span>}
         </span>
         <span className="tabular-nums text-neutral-600">{dateLabel}</span>
       </div>
@@ -159,7 +162,12 @@ export default function VisitRow({ job, visit, actor }: VisitRowProps) {
       )}
 
       {visit.reportId && visit.reportReviewStatus && (
-        <ReportPanel reportId={visit.reportId} reviewStatus={visit.reportReviewStatus} actor={actor} />
+        <ReportPanel
+          reportId={visit.reportId}
+          reviewStatus={visit.reportReviewStatus}
+          actor={actor}
+          readyForAccounts={readyForAccounts}
+        />
       )}
     </div>
   );
@@ -246,6 +254,8 @@ interface ReportPanelProps {
   reportId: string;
   reviewStatus: 'awaiting_review' | 'approved' | 'returned_for_correction';
   actor: string;
+  /** True when this report is approved and not yet sent to accounts — see isVisitReadyForAccounts. */
+  readyForAccounts: boolean;
 }
 
 const REVIEW_LABEL: Record<ReportPanelProps['reviewStatus'], string> = {
@@ -254,14 +264,18 @@ const REVIEW_LABEL: Record<ReportPanelProps['reviewStatus'], string> = {
   returned_for_correction: 'Returned for correction',
 };
 
-function ReportPanel({ reportId, reviewStatus, actor }: ReportPanelProps) {
+function ReportPanel({ reportId, reviewStatus, actor, readyForAccounts }: ReportPanelProps) {
   const queryClient = useQueryClient();
   // Auto-open whenever this report is actually actionable — this is what
   // makes the Job Inspector's "review" banner (see JobInspectorDrawer.tsx)
   // land the manager straight on the thing they need to act on, with no
   // extra click and no separate expand/scroll plumbing between components.
-  const [expanded, setExpanded] = useState(reviewStatus !== 'approved');
+  // Approved-but-unsent (readyForAccounts) is equally actionable — a manager
+  // arriving via the "Ready for accounts" rail item should see the Send to
+  // accounts button already open, not one more click away.
+  const [expanded, setExpanded] = useState(reviewStatus !== 'approved' || readyForAccounts);
   const [returnReason, setReturnReason] = useState('');
+  const [returnError, setReturnError] = useState<string | null>(null);
   const [showReturnForm, setShowReturnForm] = useState(false);
   const [editWork, setEditWork] = useState<string | null>(null);
   const [editNotes, setEditNotes] = useState<string | null>(null);
@@ -422,9 +436,14 @@ function ReportPanel({ reportId, reviewStatus, actor }: ReportPanelProps) {
                   className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
                 />
               </label>
+              {returnError && <div className="text-[11px] text-missed-fg">{returnError}</div>}
               <button
                 onClick={() => {
-                  if (!returnReason.trim()) return;
+                  if (!returnReason.trim()) {
+                    setReturnError('Enter a reason for returning this report.');
+                    return;
+                  }
+                  setReturnError(null);
                   returnMutation.mutate();
                 }}
                 disabled={returnMutation.isPending}

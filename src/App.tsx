@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from './auth/AuthProvider';
 import LoginPage from './pages/LoginPage';
 import UnauthorizedPage from './pages/UnauthorizedPage';
+import AuthCheckFailedPage from './pages/AuthCheckFailedPage';
 import AppShell from './components/shell/AppShell';
 import AllLiveJobsPage from './pages/AllLiveJobsPage';
 import BuildingsPage from './pages/BuildingsPage';
@@ -24,6 +25,7 @@ export default function App() {
   if (status === 'loading') return <AuthLoadingScreen />;
   if (status === 'signed_out') return <LoginPage />;
   if (status === 'unauthorized') return <UnauthorizedPage />;
+  if (status === 'check_failed') return <AuthCheckFailedPage />;
 
   return (
     <Routes>

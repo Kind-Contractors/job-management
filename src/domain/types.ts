@@ -4,6 +4,17 @@
 
 export type Division = 'General' | 'Specialist';
 
+/** The real `jobs.frequency_type` enum — the bucket `frequency`/`frequencyRaw` are derived from. `null` means it was never confidently classified during migration (see CLAUDE.md section 14). */
+export type FrequencyType =
+  | 'weekly'
+  | 'fortnightly'
+  | 'monthly'
+  | 'quarterly'
+  | 'biannual'
+  | 'annual'
+  | 'ask_adhoc'
+  | 'one_off';
+
 export type Frequency =
   | 'Weekly'
   | 'Fortnightly'
@@ -66,6 +77,8 @@ export interface Job {
   id: string;
   buildingId: string;
   jobSummary: string;
+  /** The real, raw `jobs.job_notes` column — unlike `jobSummary`, which falls back to this when `job_summary` is null, this is the actual distinct value an editor must read/write. */
+  jobNotes: string | null;
   division: Division;
   /** Internal grouping/bucketing key — see `frequencyRaw` for the display text. */
   frequency: Frequency;
@@ -76,6 +89,8 @@ export interface Job {
    * lost. Equal to `frequency` for jobs whose frequency is a known bucket.
    */
   frequencyRaw: string;
+  /** The real, raw `jobs.frequency_type` value (or null) — unlike `frequency`/`frequencyRaw`, which are display labels, this is what an editor must read/write to avoid guessing from formatted text. */
+  frequencyType: FrequencyType | null;
   /** null when pricing is variable per visit — see CLAUDE.md section 14.2. */
   pricePerVisit: number | null;
   /**

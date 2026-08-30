@@ -5,7 +5,7 @@
 // dev/test seam over the original mock dataset — nothing in the app calls it,
 // but it stays available rather than being deleted.
 
-import type { JobRow } from '../domain/types';
+import type { Division, FrequencyType, JobRow } from '../domain/types';
 import { denormalizeJobRows } from '../mock/jobsData';
 import { supabase } from '../lib/supabaseClient';
 import { mapJobRow, type SupabaseJobRecord } from './mapJobRow';
@@ -67,6 +67,43 @@ export async function assignJobTeam(jobId: string, teamId: string | null): Promi
 
   if (error) {
     throw new Error(`Failed to assign team: ${error.message}`);
+  }
+}
+
+export interface JobEditInput {
+  jobSummary: string;
+  jobNotes: string | null;
+  division: Division;
+  pricingType: 'fixed' | 'variable';
+  pricePerVisit: number | null;
+  frequencyType: FrequencyType | null;
+}
+
+/**
+ * Edits a job's own descriptive/pricing/frequency fields only — never
+ * touches building_id, lifecycle_status, the source_ traceability columns,
+ * created_at/updated_at, or the recontact_ fields/lost_reason (see the
+ * reviewed plan for why each of those stays out of scope for this pass).
+ * `pricePerVisit` must already satisfy
+ * the DB's own jobs_pricing_consistency_check (fixed -> non-null, variable
+ * -> null) before calling this — it sends exactly what's given, never
+ * transforms a value to fit.
+ */
+export async function updateJob(jobId: string, input: JobEditInput): Promise<void> {
+  const { error } = await supabase
+    .from('jobs')
+    .update({
+      job_summary: input.jobSummary,
+      job_notes: input.jobNotes,
+      job_type: input.division === 'Specialist' ? 'specialist' : 'general',
+      pricing_type: input.pricingType,
+      price_per_visit: input.pricePerVisit,
+      frequency_type: input.frequencyType,
+    })
+    .eq('id', jobId);
+
+  if (error) {
+    throw new Error(`Failed to update job: ${error.message}`);
   }
 }
 
