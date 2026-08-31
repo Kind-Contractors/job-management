@@ -167,7 +167,16 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
         getRowHeight={(params) => (params.data?.kind === 'band' ? 34 : 38)}
         getRowClass={(params: RowClassParams<GridBlock>) => {
           if (params.data?.kind !== 'row') return undefined;
-          return params.data.job.id === selectedJobId ? 'cursor-pointer bg-teal-100' : 'cursor-pointer';
+          // `!bg-teal-100` (Tailwind's important-modifier syntax), not plain
+          // `bg-teal-100` — AG Grid's Theming API injects its own
+          // `.ag-row-odd`/`.ag-row-even { background-color: ... }` rule at
+          // grid-mount time, after Tailwind's stylesheet. Same specificity,
+          // later in source order, so it silently wins ties and the plain
+          // utility class never painted (confirmed via a real rendered row:
+          // the class was present in the DOM but computed background-color
+          // stayed white). The `!` forces `!important`, which beats it
+          // regardless of source order.
+          return params.data.job.id === selectedJobId ? 'cursor-pointer !bg-teal-100' : 'cursor-pointer';
         }}
         onRowClicked={(event) => {
           if (event.data?.kind === 'row') onSelectJob(event.data.job.id);
