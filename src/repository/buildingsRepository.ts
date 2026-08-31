@@ -30,6 +30,75 @@ export async function listBuildingRows(): Promise<BuildingRow[]> {
   return ((data ?? []) as unknown as SupabaseBuildingRecord[]).map(mapBuildingRow);
 }
 
+export interface BuildingCreateFields {
+  address: string;
+  name: string | null;
+  postcode: string | null;
+  invoiceDetails: string | null;
+  siteInstructions: string | null;
+}
+
+/**
+ * Creates a building for an already-existing client — a plain single-table
+ * insert, no atomicity requirement (see createClientAndBuilding() for the
+ * new-client case, which genuinely needs one). `building_access`/`who` are
+ * never set here — access details are a separate table with no creation UI
+ * yet, and `who` is a legacy column nothing in this app reads.
+ */
+export async function createBuilding(clientId: string, input: BuildingCreateFields): Promise<string> {
+  const { data, error } = await supabase
+    .from('buildings')
+    .insert({
+      client_id: clientId,
+      address: input.address,
+      name: input.name,
+      postcode: input.postcode,
+      invoice_details: input.invoiceDetails,
+      extra_requirements: input.siteInstructions,
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to create building: ${error.message}`);
+  }
+
+  return data.id;
+}
+
+export interface NewClientBuildingInput extends BuildingCreateFields {
+  companyName: string;
+}
+
+/**
+ * Creates a brand-new client and its first building together, atomically —
+ * via the create_client_and_building() Postgres function (SECURITY INVOKER,
+ * so it's bound by the exact same manager_full_access RLS check the two
+ * inserts would face individually; no new privilege surface). Atomic by
+ * Postgres's own function-call transaction semantics: if the building insert
+ * fails, the client insert inside the same call is rolled back too — an
+ * orphan client cannot result from a failed building insert.
+ */
+export async function createClientAndBuilding(input: NewClientBuildingInput): Promise<{ clientId: string; buildingId: string }> {
+  const { data, error } = await supabase
+    .rpc('create_client_and_building', {
+      p_company_name: input.companyName,
+      p_address: input.address,
+      p_name: input.name,
+      p_postcode: input.postcode,
+      p_invoice_details: input.invoiceDetails,
+      p_extra_requirements: input.siteInstructions,
+    })
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to create client and building: ${error.message}`);
+  }
+
+  const row = data as unknown as { client_id: string; building_id: string };
+  return { clientId: row.client_id, buildingId: row.building_id };
+}
+
 /**
  * Real activity_events for a building's History tab. The table is empty for
  * every building today — this returns [] rather than any fabricated event

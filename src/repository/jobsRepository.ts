@@ -107,6 +107,56 @@ export async function updateJob(jobId: string, input: JobEditInput): Promise<voi
   }
 }
 
+export interface JobCreateInput {
+  buildingId: string;
+  division: Division;
+  jobSummary: string;
+  jobNotes: string | null;
+  pricingType: 'fixed' | 'variable';
+  pricePerVisit: number | null;
+  frequencyType: FrequencyType | null;
+  defaultTeamId: string | null;
+}
+
+/**
+ * Creates a genuinely new job for an existing building — never a new
+ * building/client (see the reviewed plan for why that stays a separate,
+ * later feature) and never a schedule (the existing ScheduleEditor covers
+ * that immediately afterward, from the Job Inspector this returns into).
+ * `source_file: 'manager_created'` states the job's real, true provenance
+ * (widened onto `jobs_source_file_check` for exactly this purpose) — never
+ * one of the three legacy import labels, which would misrepresent a job
+ * that never came from a spreadsheet row. `lifecycle_status`/`created_at`/
+ * `updated_at` use the table's own defaults ('active'/`now()`) — not set
+ * here. Every legacy staging-era column (`frequency_raw`,
+ * `frequency_normalised`, the `charge_per_visit_raw`/`monthly_invoice_raw`/
+ * `yearly_total_raw`/`status_notes`/`source_job_id`/`source_*_row` columns)
+ * is left at its column default (null) — genuinely inapplicable, not a gap.
+ */
+export async function createJob(input: JobCreateInput): Promise<string> {
+  const { data, error } = await supabase
+    .from('jobs')
+    .insert({
+      building_id: input.buildingId,
+      job_type: input.division === 'Specialist' ? 'specialist' : 'general',
+      job_summary: input.jobSummary,
+      job_notes: input.jobNotes,
+      pricing_type: input.pricingType,
+      price_per_visit: input.pricePerVisit,
+      frequency_type: input.frequencyType,
+      default_team_id: input.defaultTeamId,
+      source_file: 'manager_created',
+    })
+    .select('id')
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to create job: ${error.message}`);
+  }
+
+  return data.id;
+}
+
 /** Deliberate dev/test seam over the original mock dataset — not used by the app. */
 export function listJobRowsFromMock(): Promise<JobRow[]> {
   const SIMULATED_LATENCY_MS = 150;

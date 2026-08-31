@@ -17,7 +17,7 @@ const ATTENTION_ITEMS: { key: AttentionKey; label: string; dotClass: string }[] 
 /** Not modeled yet — no photo-upload mechanism exists in this pass. */
 const NOT_YET_BUILT_ATTENTION = [{ label: 'Photos uploading' }];
 
-const NOT_YET_BUILT_VIEWS = ['Report review'];
+const NOT_YET_BUILT_VIEWS: string[] = [];
 
 const DIVISIONS = ['General', 'Specialist', 'Both'] as const;
 
@@ -38,12 +38,12 @@ export default function NavRail() {
   const { data: teams = [] } = useQuery({ queryKey: ['teams'], queryFn: listTeams });
 
   const status = searchParams.get('status');
-  const group = searchParams.get('group') ?? 'client';
   const division = searchParams.get('division') ?? 'Both';
   const onJobs = pathname === '/jobs';
   const onBuildings = pathname.startsWith('/buildings');
   const onThisWeek = pathname === '/this-week';
   const onMonthMatrix = pathname === '/month-matrix';
+  const onReportReview = pathname === '/report-review';
 
   const divisionFiltered = jobRows.filter((j) => division === 'Both' || j.division === division);
 
@@ -106,8 +106,8 @@ export default function NavRail() {
       {ATTENTION_ITEMS.map((item) => (
         <div
           key={item.key}
-          onClick={() => goToFilteredJobs(item.key)}
-          className={navLinkClasses(onJobs && status === item.key)}
+          onClick={() => (item.key === 'review' ? navigate('/report-review') : goToFilteredJobs(item.key))}
+          className={navLinkClasses(item.key === 'review' ? onReportReview : onJobs && status === item.key)}
         >
           <i className={`block h-[7px] w-[7px] flex-none ${item.dotClass}`} />
           {item.label}
@@ -141,16 +141,9 @@ export default function NavRail() {
       </div>
       <div
         onClick={() => goToView('client')}
-        className={navLinkClasses(onJobs && !status && group !== 'frequency')}
+        className={navLinkClasses(onJobs && !status)}
       >
         All live jobs
-        <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{divisionFiltered.length}</span>
-      </div>
-      <div
-        onClick={() => goToView('frequency')}
-        className={navLinkClasses(onJobs && !status && group === 'frequency')}
-      >
-        By frequency
         <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{divisionFiltered.length}</span>
       </div>
       <div onClick={() => navigate('/buildings')} className={navLinkClasses(onBuildings)}>
@@ -164,6 +157,10 @@ export default function NavRail() {
       <div onClick={() => navigate('/month-matrix')} className={navLinkClasses(onMonthMatrix)}>
         Month matrix
         <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{divisionFiltered.length}</span>
+      </div>
+      <div onClick={() => navigate('/report-review')} className={navLinkClasses(onReportReview)}>
+        Report review
+        <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{counts.review}</span>
       </div>
       {NOT_YET_BUILT_VIEWS.map((label) => (
         <div

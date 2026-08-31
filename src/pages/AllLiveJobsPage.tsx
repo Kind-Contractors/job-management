@@ -6,6 +6,7 @@ import type { JobRow, JobStatus } from '../domain/types';
 import { buildGridBlocks, type GridBlock, type GroupBy } from '../lib/grouping';
 import JobsGrid, { COLUMN_IDS, COLUMN_LABELS, type JobsGridColumnId } from '../components/jobs/JobsGrid';
 import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
+import JobCreator from '../components/jobs/JobCreator';
 import { getStatusPresentation, isVisitReadyForAccounts } from '../lib/statusPresentation';
 
 // 'ask' is a mock-only JobStatus value that the real mapping path never
@@ -80,6 +81,7 @@ export default function AllLiveJobsPage() {
   const [hiddenColumns, setHiddenColumns] = useState<Set<JobsGridColumnId>>(new Set());
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [creatingJob, setCreatingJob] = useState(false);
 
   const {
     data: allRows = [],
@@ -219,9 +221,15 @@ export default function AllLiveJobsPage() {
               </button>
               {exportError && <div className="text-[11px] text-missed-fg">{exportError}</div>}
             </div>
-            <div title="Not built yet" className="cursor-not-allowed bg-neutral-300 px-3 py-1.5 text-xs font-semibold text-neutral-500">
+            <button
+              onClick={() => {
+                setSelectedJobId(null);
+                setCreatingJob(true);
+              }}
+              className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+            >
               + New job
-            </div>
+            </button>
           </div>
         </div>
 
@@ -265,7 +273,10 @@ export default function AllLiveJobsPage() {
               rows={rows}
               groupBy={group}
               selectedJobId={selectedJobId}
-              onSelectJob={setSelectedJobId}
+              onSelectJob={(jobId) => {
+                setCreatingJob(false);
+                setSelectedJobId(jobId);
+              }}
               hiddenColumns={hiddenColumns}
             />
             <div className="flex h-[34px] flex-none items-center gap-4 border-t border-neutral-400 bg-neutral-200 px-5 text-xs text-neutral-700 tabular-nums">
@@ -280,14 +291,24 @@ export default function AllLiveJobsPage() {
         )}
       </div>
 
-      {selectedJob && (
-        <JobInspectorDrawer
-          key={selectedJob.id}
-          job={selectedJob}
-          siblings={siblings}
-          onClose={() => setSelectedJobId(null)}
-          onSelectSibling={setSelectedJobId}
+      {creatingJob ? (
+        <JobCreator
+          onCreated={(jobId) => {
+            setCreatingJob(false);
+            setSelectedJobId(jobId);
+          }}
+          onCancel={() => setCreatingJob(false)}
         />
+      ) : (
+        selectedJob && (
+          <JobInspectorDrawer
+            key={selectedJob.id}
+            job={selectedJob}
+            siblings={siblings}
+            onClose={() => setSelectedJobId(null)}
+            onSelectSibling={setSelectedJobId}
+          />
+        )
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
@@ -7,6 +7,7 @@ import { listBuildingRows } from '../repository/buildingsRepository';
 import { listJobRows } from '../repository/jobsRepository';
 import type { BuildingRow, JobRow } from '../domain/types';
 import { managerGridTheme } from '../lib/gridTheme';
+import BuildingCreator from '../components/jobs/BuildingCreator';
 
 function money(n: number): string {
   return `£${n.toLocaleString('en-GB')}`;
@@ -119,6 +120,7 @@ export default function BuildingsPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const q = (searchParams.get('q') ?? '').trim().toLowerCase();
+  const [creatingBuilding, setCreatingBuilding] = useState(false);
 
   const {
     data: buildingRows = [],
@@ -168,7 +170,8 @@ export default function BuildingsPage() {
   const totalBuildings = buildingRows.length;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1">
+    <div className="flex min-w-0 flex-1 flex-col">
       <div className="flex flex-none items-end gap-3.5 px-5 pt-4 pb-3">
         <div>
           <h1 className="font-heading text-[26px] leading-none font-semibold">Buildings</h1>
@@ -176,6 +179,12 @@ export default function BuildingsPage() {
             {totalBuildings} building{totalBuildings === 1 ? '' : 's'} · {rows.length} shown
           </div>
         </div>
+        <button
+          onClick={() => setCreatingBuilding(true)}
+          className="ml-auto cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+        >
+          + New building
+        </button>
       </div>
 
       {isLoading ? (
@@ -209,6 +218,17 @@ export default function BuildingsPage() {
           />
         </div>
       )}
+    </div>
+
+    {creatingBuilding && (
+      <BuildingCreator
+        onCreated={(buildingId) => {
+          setCreatingBuilding(false);
+          navigate(`/buildings/${buildingId}`);
+        }}
+        onCancel={() => setCreatingBuilding(false)}
+      />
+    )}
     </div>
   );
 }

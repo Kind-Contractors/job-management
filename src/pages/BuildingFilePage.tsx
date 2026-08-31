@@ -4,6 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { listBuildingHistory, listBuildingRows } from '../repository/buildingsRepository';
 import { listJobRows } from '../repository/jobsRepository';
 import { listContactsForClient } from '../repository/contactsRepository';
+import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
+import JobCreator from '../components/jobs/JobCreator';
 
 const NOT_BUILT_TITLE = 'Not built yet — this pass only covers the Buildings view and Building File basics';
 
@@ -18,6 +20,8 @@ export default function BuildingFilePage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('site');
   const [revealed, setRevealed] = useState(false);
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [creatingJob, setCreatingJob] = useState(false);
 
   const {
     data: buildings = [],
@@ -96,6 +100,8 @@ export default function BuildingFilePage() {
 
   const buildingJobs = jobRows.filter((j) => j.buildingId === building.id);
   const yearlyTotal = buildingJobs.reduce((a, j) => a + (j.yearlyValue ?? 0), 0);
+  const selectedJob = jobRows.find((j) => j.id === selectedJobId);
+  const siblings = selectedJob ? buildingJobs.filter((j) => j.id !== selectedJob.id) : [];
 
   const accessFields: [string, string | null][] = building.access
     ? [
@@ -108,7 +114,8 @@ export default function BuildingFilePage() {
     : [];
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-5">
+    <div className="flex min-h-0 flex-1">
+    <div className="flex min-w-0 flex-1 flex-col overflow-y-auto p-5">
       <button onClick={() => navigate('/buildings')} className="mb-3 w-fit cursor-pointer text-xs text-teal-700 hover:underline">
         ← Back to Buildings
       </button>
@@ -127,9 +134,15 @@ export default function BuildingFilePage() {
           <div title={NOT_BUILT_TITLE} className="cursor-not-allowed border border-neutral-300 px-3 py-1.5 text-xs text-neutral-500">
             Print site sheet
           </div>
-          <div title={NOT_BUILT_TITLE} className="cursor-not-allowed bg-neutral-300 px-3 py-1.5 text-xs font-semibold text-neutral-500">
+          <button
+            onClick={() => {
+              setSelectedJobId(null);
+              setCreatingJob(true);
+            }}
+            className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+          >
             + Add job here
-          </div>
+          </button>
         </div>
       </div>
 
@@ -286,6 +299,28 @@ export default function BuildingFilePage() {
           )}
         </div>
       )}
+    </div>
+
+    {creatingJob ? (
+      <JobCreator
+        buildingId={building.id}
+        onCreated={(jobId) => {
+          setCreatingJob(false);
+          setSelectedJobId(jobId);
+        }}
+        onCancel={() => setCreatingJob(false)}
+      />
+    ) : (
+      selectedJob && (
+        <JobInspectorDrawer
+          key={selectedJob.id}
+          job={selectedJob}
+          siblings={siblings}
+          onClose={() => setSelectedJobId(null)}
+          onSelectSibling={setSelectedJobId}
+        />
+      )
+    )}
     </div>
   );
 }

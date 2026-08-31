@@ -9,6 +9,7 @@ import BuildingsPage from './pages/BuildingsPage';
 import BuildingFilePage from './pages/BuildingFilePage';
 import ThisWeekPage from './pages/ThisWeekPage';
 import MonthMatrixPage from './pages/MonthMatrixPage';
+import ReportReviewPage from './pages/ReportReviewPage';
 
 function AuthLoadingScreen() {
   return (
@@ -37,6 +38,7 @@ export default function App() {
         <Route path="/buildings/:buildingId" element={<BuildingFilePage />} />
         <Route path="/this-week" element={<ThisWeekPage />} />
         <Route path="/month-matrix" element={<MonthMatrixPage />} />
+        <Route path="/report-review" element={<ReportReviewPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/jobs" replace />} />
     </Routes>
