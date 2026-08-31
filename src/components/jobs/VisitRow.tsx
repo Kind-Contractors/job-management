@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { JobRow, JobVisitSummary } from '../../domain/types';
 import { completeVisit, createReport, markVisitCancelled, markVisitMissed } from '../../repository/reportsRepository';
-import { isVisitReadyForAccounts } from '../../lib/statusPresentation';
+import { getVisitStatusPresentation, isVisitReadyForAccounts } from '../../lib/statusPresentation';
 import ReportPanel from './ReportPanel';
+import StatusPill from './StatusPill';
 
 function nowLocalDateTime(): string {
   const d = new Date();
@@ -54,9 +55,9 @@ export default function VisitRow({ job, visit, actor }: VisitRowProps) {
 
   return (
     <div className="border-b border-divider py-1.5 text-[12.5px]">
-      <div className="flex justify-between gap-3">
-        <span className="capitalize">
-          {visit.status}
+      <div className="flex items-center justify-between gap-3">
+        <span className="flex items-center gap-1.5">
+          <StatusPill presentation={getVisitStatusPresentation(visit.status)} />
           {visit.teamName && <span className="text-neutral-500"> · {visit.teamName}</span>}
           {visit.priceCharged != null && (
             <span className="text-neutral-500"> · £{visit.priceCharged.toLocaleString('en-GB')}</span>

@@ -112,7 +112,7 @@ export default function JobCreator({ buildingId, onCreated, onCancel }: JobCreat
       <div className="border-b border-divider p-4">
         <div className="flex items-center gap-2 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
           New job
-          <button onClick={onCancel} className="ml-auto font-body text-sm text-neutral-500 hover:text-ink">
+          <button onClick={onCancel} className="ml-auto cursor-pointer font-body text-sm text-neutral-500 hover:text-ink">
             ✕
           </button>
         </div>

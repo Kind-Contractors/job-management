@@ -70,6 +70,21 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
     buildingFields.address.length > 0 &&
     (form.clientMode === 'existing' ? form.clientId.length > 0 : form.companyName.trim().length > 0);
 
+  /**
+   * Root cause of the "selection doesn't stick" bug: the toggle buttons used
+   * to call setForm(blankForm()) unconditionally on every click — including
+   * a click on the *already-active* tab, which silently wiped a just-picked
+   * clientId (and every typed building field) back to blank with no warning.
+   * Fixed by making same-mode clicks a genuine no-op, and only clearing the
+   * client-identifying fields (not address/name/postcode/etc.) when the mode
+   * actually changes.
+   */
+  const setClientMode = (nextMode: ClientMode) => {
+    if (nextMode === form.clientMode) return;
+    setForm({ ...form, clientMode: nextMode, clientId: '', companyName: '' });
+    setClientQuery('');
+  };
+
   const createMutation = useMutation({
     mutationFn: async (): Promise<string> => {
       if (form.clientMode === 'existing') {
@@ -91,7 +106,7 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
       <div className="border-b border-divider p-4">
         <div className="flex items-center gap-2 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
           New building
-          <button onClick={onCancel} className="ml-auto font-body text-sm text-neutral-500 hover:text-ink">
+          <button onClick={onCancel} className="ml-auto cursor-pointer font-body text-sm text-neutral-500 hover:text-ink">
             ✕
           </button>
         </div>
@@ -102,7 +117,7 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
         <div className="flex border border-neutral-300">
           <button
             type="button"
-            onClick={() => setForm({ ...blankForm(), clientMode: 'existing' })}
+            onClick={() => setClientMode('existing')}
             className={`flex-1 cursor-pointer py-1.5 text-xs ${
               form.clientMode === 'existing' ? 'bg-teal font-semibold text-white' : 'text-neutral-700 hover:bg-neutral-100'
             }`}
@@ -111,7 +126,7 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
           </button>
           <button
             type="button"
-            onClick={() => setForm({ ...blankForm(), clientMode: 'new' })}
+            onClick={() => setClientMode('new')}
             className={`flex-1 cursor-pointer border-l border-neutral-300 py-1.5 text-xs ${
               form.clientMode === 'new' ? 'bg-teal font-semibold text-white' : 'text-neutral-700 hover:bg-neutral-100'
             }`}
@@ -121,7 +136,7 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
         </div>
 
         {form.clientMode === 'existing' ? (
-          <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
+          <div className="flex flex-col gap-1 text-[11px] text-neutral-600">
             Client
             {selectedClient ? (
               <div className="flex items-center gap-2 border border-neutral-300 px-2 py-1.5 text-[12.5px] text-ink">
@@ -137,6 +152,7 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
             ) : (
               <>
                 <input
+                  aria-label="Search for an existing client"
                   value={clientQuery}
                   onChange={(e) => setClientQuery(e.target.value)}
                   placeholder="Search clients…"
@@ -160,7 +176,7 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
                 )}
               </>
             )}
-          </label>
+          </div>
         ) : (
           <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
             New client's company name

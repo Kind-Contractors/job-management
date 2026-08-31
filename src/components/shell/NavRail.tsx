@@ -1,5 +1,20 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useSearchParams, useNavigate } from 'react-router-dom';
+import type { IconType } from 'react-icons';
+import {
+  HiOutlineBanknotes,
+  HiOutlineBriefcase,
+  HiOutlineBuildingOffice2,
+  HiOutlineCalendarDays,
+  HiOutlineClipboardDocumentCheck,
+  HiOutlineClock,
+  HiOutlineDocumentText,
+  HiOutlineExclamationTriangle,
+  HiOutlinePhoto,
+  HiOutlineTableCells,
+  HiOutlineXCircle,
+} from 'react-icons/hi2';
 import { listJobRows } from '../../repository/jobsRepository';
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import { listTeams } from '../../repository/teamsRepository';
@@ -7,19 +22,68 @@ import { isVisitReadyForAccounts } from '../../lib/statusPresentation';
 
 type AttentionKey = 'review' | 'needs_booking' | 'overdue' | 'missed';
 
-const ATTENTION_ITEMS: { key: AttentionKey; label: string; dotClass: string }[] = [
-  { key: 'review', label: 'Reports to review', dotClass: 'bg-teal-700' },
-  { key: 'needs_booking', label: 'Due, not scheduled', dotClass: 'bg-due' },
-  { key: 'overdue', label: 'Overdue', dotClass: 'bg-missed' },
-  { key: 'missed', label: 'Missed visits', dotClass: 'bg-missed' },
+const ATTENTION_ITEMS: { key: AttentionKey; label: string; icon: IconType; dotClass: string }[] = [
+  { key: 'review', label: 'Reports to review', icon: HiOutlineDocumentText, dotClass: 'bg-teal-700' },
+  { key: 'needs_booking', label: 'Due, not scheduled', icon: HiOutlineClock, dotClass: 'bg-due' },
+  { key: 'overdue', label: 'Overdue', icon: HiOutlineExclamationTriangle, dotClass: 'bg-missed' },
+  { key: 'missed', label: 'Missed visits', icon: HiOutlineXCircle, dotClass: 'bg-missed' },
 ];
 
-/** Not modeled yet — no photo-upload mechanism exists in this pass. */
-const NOT_YET_BUILT_ATTENTION = [{ label: 'Photos uploading' }];
-
-const NOT_YET_BUILT_VIEWS: string[] = [];
-
 const DIVISIONS = ['General', 'Specialist', 'Both'] as const;
+
+/**
+ * The one nav-row renderer, shared by every clickable "Needs you today" and
+ * "Views of the same data" row — expanded shows the existing label+count
+ * layout exactly unchanged; collapsed swaps it for a real icon (react-icons,
+ * Heroicons outline set — the previous pass used 2-letter monograms here,
+ * replaced per feedback) plus the count, with the full label always
+ * available as a native title tooltip. Active-state highlighting and click
+ * behavior are identical in both states.
+ */
+function NavItem({
+  active,
+  onClick,
+  dotClass,
+  icon: Icon,
+  label,
+  count,
+  collapsed,
+}: {
+  active: boolean;
+  onClick: () => void;
+  dotClass?: string;
+  icon: IconType;
+  label: string;
+  count: number;
+  collapsed: boolean;
+}) {
+  if (collapsed) {
+    return (
+      <div
+        onClick={onClick}
+        title={`${label} — ${count}`}
+        className={[
+          'flex cursor-pointer flex-col items-center gap-0.5 border-l-2 py-2 hover:bg-neutral-200',
+          active ? 'border-ink bg-neutral-200' : 'border-transparent',
+        ].join(' ')}
+      >
+        <span className="relative flex h-6 w-6 items-center justify-center text-neutral-700">
+          <Icon size={16} />
+          {dotClass && <i className={`absolute -top-1 -right-1 block h-1.5 w-1.5 flex-none ${dotClass}`} />}
+        </span>
+        <span className="font-body text-[9px] text-neutral-500 tabular-nums">{count}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div onClick={onClick} title={label} className={navLinkClasses(active)}>
+      {dotClass && <i className={`block h-[7px] w-[7px] flex-none ${dotClass}`} />}
+      {label}
+      <b className="ml-auto font-body text-xs tabular-nums">{count}</b>
+    </div>
+  );
+}
 
 function navLinkClasses(active: boolean) {
   return [
@@ -32,6 +96,7 @@ export default function NavRail() {
   const { pathname } = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+  const [collapsed, setCollapsed] = useState(false);
 
   const { data: jobRows = [] } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
   const { data: buildingRows = [] } = useQuery({ queryKey: ['buildingRows'], queryFn: listBuildingRows });
@@ -98,102 +163,123 @@ export default function NavRail() {
     setSearchParams(next, { replace: true });
   };
 
+  const viewItems: { key: string; label: string; icon: IconType; active: boolean; count: number; onClick: () => void }[] = [
+    { key: 'jobs', label: 'All live jobs', icon: HiOutlineBriefcase, active: onJobs && !status, count: divisionFiltered.length, onClick: () => goToView('client') },
+    { key: 'buildings', label: 'Buildings', icon: HiOutlineBuildingOffice2, active: onBuildings, count: buildingRows.length, onClick: () => navigate('/buildings') },
+    { key: 'schedule', label: 'Schedule', icon: HiOutlineCalendarDays, active: onThisWeek, count: teams.length, onClick: () => navigate('/this-week') },
+    { key: 'matrix', label: 'Month matrix', icon: HiOutlineTableCells, active: onMonthMatrix, count: divisionFiltered.length, onClick: () => navigate('/month-matrix') },
+    { key: 'reviews', label: 'Report review', icon: HiOutlineClipboardDocumentCheck, active: onReportReview, count: counts.review, onClick: () => navigate('/report-review') },
+  ];
+
   return (
-    <nav className="flex w-[236px] flex-none flex-col overflow-y-auto border-r border-divider bg-neutral-100 py-4">
-      <div className="px-4 pb-2 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
-        Needs you · today
+    <nav
+      className={`flex flex-none flex-col overflow-y-auto border-r border-divider bg-neutral-100 py-4 transition-[width] duration-200 ${
+        collapsed ? 'w-14' : 'w-[236px]'
+      }`}
+    >
+      <div className={`flex items-center pb-2 ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
+        {!collapsed && (
+          <span className="font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">Needs you · today</span>
+        )}
+        <button
+          onClick={() => setCollapsed((c) => !c)}
+          title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+          className="cursor-pointer border border-neutral-300 px-1.5 py-0.5 text-[11px] text-neutral-600 hover:bg-neutral-200"
+        >
+          {collapsed ? '»' : '«'}
+        </button>
       </div>
       {ATTENTION_ITEMS.map((item) => (
-        <div
+        <NavItem
           key={item.key}
-          onClick={() => (item.key === 'review' ? navigate('/report-review') : goToFilteredJobs(item.key))}
-          className={navLinkClasses(item.key === 'review' ? onReportReview : onJobs && status === item.key)}
-        >
-          <i className={`block h-[7px] w-[7px] flex-none ${item.dotClass}`} />
-          {item.label}
-          <b className="ml-auto font-body text-xs tabular-nums">{counts[item.key]}</b>
-        </div>
+          active={onJobs && status === item.key}
+          onClick={() => goToFilteredJobs(item.key)}
+          dotClass={item.dotClass}
+          icon={item.icon}
+          label={item.label}
+          count={counts[item.key]}
+          collapsed={collapsed}
+        />
       ))}
-      <div
+      <NavItem
+        active={onJobs && readyForAccounts}
         onClick={goToReadyForAccounts}
-        className={navLinkClasses(onJobs && readyForAccounts)}
+        dotClass="bg-teal"
+        icon={HiOutlineBanknotes}
+        label="Ready for accounts"
+        count={readyForAccountsCount}
+        collapsed={collapsed}
+      />
+      <div
+        title="Photos uploading — not built yet, no photo-upload mechanism exists in this pass"
+        className={
+          collapsed
+            ? 'flex cursor-default flex-col items-center gap-0.5 border-l-2 border-transparent py-2'
+            : 'flex cursor-default items-center gap-2.5 border-l-2 border-transparent px-4 py-1.5 text-[13px] text-neutral-500'
+        }
       >
-        <i className="block h-[7px] w-[7px] flex-none bg-teal" />
-        Ready for accounts
-        <b className="ml-auto font-body text-xs tabular-nums">{readyForAccountsCount}</b>
+        {collapsed ? (
+          <span className="flex h-6 w-6 items-center justify-center text-neutral-400">
+            <HiOutlinePhoto size={16} />
+          </span>
+        ) : (
+          <>
+            <i className="block h-[7px] w-[7px] flex-none bg-neutral-300" />
+            Photos uploading
+            <b className="ml-auto font-body text-xs text-neutral-400">—</b>
+          </>
+        )}
       </div>
-      {NOT_YET_BUILT_ATTENTION.map((item) => (
-        <div
-          key={item.label}
-          title="Not built yet — no photo-upload mechanism exists in this pass"
-          className="flex cursor-default items-center gap-2.5 border-l-2 border-transparent px-4 py-1.5 text-[13px] text-neutral-500"
-        >
-          <i className="block h-[7px] w-[7px] flex-none bg-neutral-300" />
-          {item.label}
-          <b className="ml-auto font-body text-xs text-neutral-400">—</b>
-        </div>
-      ))}
 
       <div className="mx-4 my-4 h-px bg-divider" />
 
-      <div className="px-4 pb-2 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
-        Views of the same data
-      </div>
-      <div
-        onClick={() => goToView('client')}
-        className={navLinkClasses(onJobs && !status)}
-      >
-        All live jobs
-        <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{divisionFiltered.length}</span>
-      </div>
-      <div onClick={() => navigate('/buildings')} className={navLinkClasses(onBuildings)}>
-        Buildings
-        <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{buildingRows.length}</span>
-      </div>
-      <div onClick={() => navigate('/this-week')} className={navLinkClasses(onThisWeek)}>
-        This week
-        <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{teams.length}</span>
-      </div>
-      <div onClick={() => navigate('/month-matrix')} className={navLinkClasses(onMonthMatrix)}>
-        Month matrix
-        <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{divisionFiltered.length}</span>
-      </div>
-      <div onClick={() => navigate('/report-review')} className={navLinkClasses(onReportReview)}>
-        Report review
-        <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{counts.review}</span>
-      </div>
-      {NOT_YET_BUILT_VIEWS.map((label) => (
-        <div
-          key={label}
-          title="Not built yet — this pass only covers All live jobs / By frequency"
-          className="flex cursor-default items-center border-l-2 border-transparent px-4 py-1.5 text-[13px] text-neutral-400"
-        >
-          {label}
-          <span className="ml-auto text-[11px] text-neutral-300">—</span>
+      {!collapsed && (
+        <div className="px-4 pb-2 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
+          Views of the same data
         </div>
+      )}
+      {viewItems.map((item) => (
+        <NavItem
+          key={item.key}
+          active={item.active}
+          onClick={item.onClick}
+          icon={item.icon}
+          label={item.label}
+          count={item.count}
+          collapsed={collapsed}
+        />
       ))}
 
-      <div className="mt-auto px-4 pt-4 pb-2">
-        <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
-          Division
-        </div>
-        <div className="grid grid-cols-3 border border-neutral-300">
+      <div className={`mt-auto pt-4 pb-2 ${collapsed ? 'px-2' : 'px-4'}`}>
+        {!collapsed && (
+          <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">Division</div>
+        )}
+        <div className={collapsed ? 'flex flex-col gap-1' : 'grid grid-cols-3 border border-neutral-300'}>
           {DIVISIONS.map((d) => (
             <button
               key={d}
               onClick={() => setDivision(d)}
-              className={[
-                'border-l border-neutral-300 py-1 text-center text-[11.5px] first:border-l-0',
-                division === d ? 'bg-teal font-semibold text-white' : 'font-normal text-neutral-700',
-              ].join(' ')}
+              title={`Division: ${d}`}
+              className={
+                collapsed
+                  ? `cursor-pointer border border-neutral-300 py-1 text-center text-[10px] font-semibold uppercase ${
+                      division === d ? 'bg-teal text-white' : 'text-neutral-700 hover:bg-neutral-200'
+                    }`
+                  : [
+                      'cursor-pointer border-l border-neutral-300 py-1 text-center text-[11.5px] first:border-l-0',
+                      division === d ? 'bg-teal font-semibold text-white' : 'font-normal text-neutral-700',
+                    ].join(' ')
+              }
             >
-              {d}
+              {collapsed ? d.slice(0, 1) : d}
             </button>
           ))}
         </div>
-        <div className="mt-3 text-[11.5px] leading-normal text-neutral-600">
-          One master record per job. Every view above reads the same row.
-        </div>
+        {!collapsed && (
+          <div className="mt-3 text-[11.5px] leading-normal text-neutral-600">
+            One master record per job. Every view above reads the same row.
+          </div>
+        )}
       </div>
     </nav>
   );

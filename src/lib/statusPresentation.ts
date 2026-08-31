@@ -1,4 +1,4 @@
-import type { JobStatus, JobVisitSummary } from '../domain/types';
+import type { JobStatus, JobVisitSummary, ReportReviewStatus, VisitStatus } from '../domain/types';
 import type { MonthCellStateKind } from './monthMatrix';
 
 export interface StatusPresentation {
@@ -9,6 +9,16 @@ export interface StatusPresentation {
   dot: string;
   /** Dot border, for the "not due" hollow-dot look. */
   border: string;
+  /**
+   * A light background tint of the same hue as `border` — a literal class
+   * (never built at runtime: Tailwind's compiler only picks up classes it
+   * can see as-written in source, so a string-concatenated class like
+   * `${border.replace(...)}/10` would silently produce no CSS at all).
+   * Used where a status needs to read as a chip among dense plain-text
+   * rows (JobsGrid's status column) — StatusPill itself stays a bare
+   * dot+text everywhere else, unchanged.
+   */
+  bg: string;
 }
 
 /**
@@ -18,15 +28,15 @@ export interface StatusPresentation {
  * new hue for a new status without updating that rule deliberately.
  */
 const PRESENTATIONS: Record<JobStatus, StatusPresentation> = {
-  booked: { label: 'Booked', fg: 'text-teal-700', dot: 'bg-teal', border: 'border-teal' },
-  needs_booking: { label: 'Needs booking', fg: 'text-due-fg', dot: 'bg-due', border: 'border-due' },
-  not_due: { label: 'Not due yet', fg: 'text-neutral-600', dot: 'bg-transparent', border: 'border-neutral-400' },
-  review: { label: 'Report to review', fg: 'text-teal-700', dot: 'bg-teal-700', border: 'border-teal-700' },
-  onsite: { label: 'On site now', fg: 'text-teal-700', dot: 'bg-teal-700', border: 'border-teal-700' },
-  missed: { label: 'Missed', fg: 'text-missed-fg', dot: 'bg-missed', border: 'border-missed' },
-  ask: { label: 'No schedule', fg: 'text-neutral-600', dot: 'bg-transparent', border: 'border-neutral-400' },
-  unscheduled: { label: 'Not yet scheduled', fg: 'text-neutral-600', dot: 'bg-transparent', border: 'border-neutral-400' },
-  overdue: { label: 'Overdue', fg: 'text-missed-fg', dot: 'bg-missed', border: 'border-missed' },
+  booked: { label: 'Booked', fg: 'text-teal-700', dot: 'bg-teal', border: 'border-teal', bg: 'bg-teal/10' },
+  needs_booking: { label: 'Needs booking', fg: 'text-due-fg', dot: 'bg-due', border: 'border-due', bg: 'bg-due/10' },
+  not_due: { label: 'Not due yet', fg: 'text-neutral-600', dot: 'bg-transparent', border: 'border-neutral-400', bg: 'bg-neutral-400/10' },
+  review: { label: 'Report to review', fg: 'text-teal-700', dot: 'bg-teal-700', border: 'border-teal-700', bg: 'bg-teal-700/10' },
+  onsite: { label: 'On site now', fg: 'text-teal-700', dot: 'bg-teal-700', border: 'border-teal-700', bg: 'bg-teal-700/10' },
+  missed: { label: 'Missed', fg: 'text-missed-fg', dot: 'bg-missed', border: 'border-missed', bg: 'bg-missed/10' },
+  ask: { label: 'No schedule', fg: 'text-neutral-600', dot: 'bg-transparent', border: 'border-neutral-400', bg: 'bg-neutral-400/10' },
+  unscheduled: { label: 'Not yet scheduled', fg: 'text-neutral-600', dot: 'bg-transparent', border: 'border-neutral-400', bg: 'bg-neutral-400/10' },
+  overdue: { label: 'Overdue', fg: 'text-missed-fg', dot: 'bg-missed', border: 'border-missed', bg: 'bg-missed/10' },
 };
 
 export function getStatusPresentation(status: JobStatus): StatusPresentation {
@@ -81,4 +91,39 @@ const MONTH_CELL_PRESENTATIONS: Record<MonthCellStateKind, MonthCellPresentation
 
 export function getMonthCellPresentation(kind: MonthCellStateKind): MonthCellPresentation {
   return MONTH_CELL_PRESENTATIONS[kind];
+}
+
+/**
+ * Visit-status chip colors — reuses the exact same values already
+ * established for Calendar visit chips (ThisWeekPage.tsx/MonthGrid.tsx's
+ * VISIT_STATUS_STYLE), just in the {label, fg, dot, border} shape StatusPill
+ * already renders, so a real VisitStatus gets the same chip treatment as a
+ * JobStatus rather than plain text. No new colors, no new statuses.
+ */
+const VISIT_STATUS_PRESENTATIONS: Record<VisitStatus, StatusPresentation> = {
+  due: { label: 'Due', fg: 'text-neutral-700', dot: 'bg-neutral-400', border: 'border-neutral-400', bg: 'bg-neutral-400/10' },
+  booked: { label: 'Booked', fg: 'text-teal-700', dot: 'bg-teal', border: 'border-teal', bg: 'bg-teal/10' },
+  completed: { label: 'Completed', fg: 'text-teal-700', dot: 'bg-teal-700', border: 'border-teal-700', bg: 'bg-teal-700/10' },
+  missed: { label: 'Missed', fg: 'text-missed-fg', dot: 'bg-missed', border: 'border-missed', bg: 'bg-missed/10' },
+  cancelled: { label: 'Cancelled', fg: 'text-neutral-400', dot: 'bg-transparent', border: 'border-neutral-300', bg: 'bg-neutral-300/10' },
+};
+
+export function getVisitStatusPresentation(status: VisitStatus): StatusPresentation {
+  return VISIT_STATUS_PRESENTATIONS[status];
+}
+
+/**
+ * Report review-status chip colors — same restrained palette: teal for
+ * "in progress normally" and "approved/done", ochre/due for "sent back,
+ * needs attention". Matches ReportPanel.tsx's existing REVIEW_LABEL strings
+ * exactly; this only adds the dot/border chip shape around them.
+ */
+const REPORT_REVIEW_STATUS_PRESENTATIONS: Record<ReportReviewStatus, StatusPresentation> = {
+  awaiting_review: { label: 'Awaiting review', fg: 'text-teal-700', dot: 'bg-teal-700', border: 'border-teal-700', bg: 'bg-teal-700/10' },
+  returned_for_correction: { label: 'Returned for correction', fg: 'text-due-fg', dot: 'bg-due', border: 'border-due', bg: 'bg-due/10' },
+  approved: { label: 'Approved', fg: 'text-teal-700', dot: 'bg-teal-700', border: 'border-teal-700', bg: 'bg-teal-700/10' },
+};
+
+export function getReportReviewStatusPresentation(status: ReportReviewStatus): StatusPresentation {
+  return REPORT_REVIEW_STATUS_PRESENTATIONS[status];
 }

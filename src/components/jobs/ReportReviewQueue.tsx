@@ -1,5 +1,6 @@
 import type { JobRow, JobVisitSummary } from '../../domain/types';
-import { REVIEW_LABEL } from './ReportPanel';
+import { getReportReviewStatusPresentation } from '../../lib/statusPresentation';
+import StatusPill from './StatusPill';
 
 export interface ReportQueueRow {
   job: JobRow;
@@ -39,13 +40,11 @@ export default function ReportReviewQueue({ rows, selectedReportId, onSelect }: 
           >
             <div className="flex items-start justify-between gap-2">
               <span className="text-[12.5px] font-semibold text-ink">{job.buildingName}</span>
-              <span
-                className={`flex-none font-heading text-[9.5px] font-semibold tracking-[0.07em] uppercase ${
-                  visit.reportReviewStatus === 'returned_for_correction' ? 'text-due-fg' : 'text-teal-700'
-                }`}
-              >
-                {visit.reportReviewStatus ? REVIEW_LABEL[visit.reportReviewStatus] : ''}
-              </span>
+              {visit.reportReviewStatus && (
+                <span className="flex-none">
+                  <StatusPill presentation={getReportReviewStatusPresentation(visit.reportReviewStatus)} />
+                </span>
+              )}
             </div>
             <div className="text-[11.5px] text-neutral-600">{job.clientName} · {job.jobSummary}</div>
             <div className="mt-0.5 text-[11px] text-neutral-500 tabular-nums">Completed {completedLabel}</div>

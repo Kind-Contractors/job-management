@@ -64,7 +64,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     supabase.auth.getSession().then(({ data }) => resolve(data.session));
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      // TOKEN_REFRESHED is a routine, same-user event — notably, Supabase's
+      // own client checks/refreshes the session on tab-visibility change, so
+      // simply switching back to this tab fires it. Treating every event
+      // here identically (the previous behavior) sent the whole app through
+      // 'loading' — a full-screen wipe via App.tsx's AuthLoadingScreen — and
+      // re-ran the app_users authorization lookup from scratch, for a token
+      // refresh that changes nothing about who's signed in or their manager
+      // status. That round-trip through 'loading' was the "the app reloads
+      // when I come back to the tab" symptom — not a real reload, no
+      // navigation ever happened, and not a TanStack Query refetch (nothing
+      // here shows a loading UI on a background refetch). Update the
+      // session in place instead, and skip the loading flash and the
+      // redundant DB round-trip entirely. Every other event (SIGNED_IN,
+      // SIGNED_OUT, USER_UPDATED, etc.) still goes through the full,
+      // unchanged resolve() flow — this only narrows the one case that was
+      // never a meaningful authorization change to begin with.
+      if (event === 'TOKEN_REFRESHED') {
+        if (nextSession) setSession(nextSession);
+        return;
+      }
       setStatus('loading');
       resolve(nextSession);
     });

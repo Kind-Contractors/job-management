@@ -1,5 +1,6 @@
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthProvider';
+import kindContractorsLogo from '../../assets/kind_Contractors_logo.png';
 
 /** The only two routes whose page actually reads the `q` search param — see AllLiveJobsPage.tsx/BuildingsPage.tsx. Exact match, not startsWith, so /buildings/:id (Building File) is correctly excluded. */
 const SEARCHABLE_ROUTES = ['/jobs', '/buildings'];
@@ -35,12 +36,9 @@ export default function TopBar() {
 
   return (
     <header className="flex h-[46px] flex-none items-center gap-4 border-b border-divider bg-neutral-100 px-4">
-      <div className="flex items-center gap-2">
-        <div className="flex h-[22px] w-[22px] items-center justify-center bg-teal font-heading text-xs font-bold text-white">
-          K
-        </div>
-        <div className="font-heading text-sm font-semibold tracking-[0.1em] uppercase">Kind Contractors</div>
-        <div className="border-l border-divider pl-2 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
+      <div className="flex items-center gap-2.5">
+        <img src={kindContractorsLogo} alt="Kind Contractors" className="h-9 w-auto object-contain" />
+        <div className="border-l border-divider pl-2.5 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
           Operations
         </div>
       </div>

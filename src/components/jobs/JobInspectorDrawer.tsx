@@ -9,6 +9,8 @@ import VisitRow from './VisitRow';
 import ScheduleEditor from './ScheduleEditor';
 import JobEditor from './JobEditor';
 import { describeSchedule, suggestNextDate } from '../../lib/scheduleFormat';
+import { getStatusPresentation } from '../../lib/statusPresentation';
+import StatusPill from './StatusPill';
 
 interface JobInspectorDrawerProps {
   job: JobRow;
@@ -87,7 +89,7 @@ export default function JobInspectorDrawer({
       <div className="border-b border-divider p-4">
         <div className="flex items-center gap-2 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
           Job · {job.id}
-          <button onClick={onClose} className="ml-auto font-body text-sm text-neutral-500 hover:text-ink">
+          <button onClick={onClose} className="ml-auto cursor-pointer font-body text-sm text-neutral-500 hover:text-ink">
             ✕
           </button>
         </div>
@@ -109,6 +111,9 @@ export default function JobInspectorDrawer({
           </span>
           <span className="max-w-[180px] truncate border border-neutral-300 px-2 py-0.5 font-heading text-[10.5px] font-semibold tracking-[0.09em] text-neutral-700 uppercase">
             {job.schedulePattern}
+          </span>
+          <span className="border border-neutral-300 px-2 py-0.5">
+            <StatusPill presentation={getStatusPresentation(job.status)} />
           </span>
         </div>
       </div>

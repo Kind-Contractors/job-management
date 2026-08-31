@@ -9,6 +9,8 @@ import {
   sendReportToClient,
   updateReport,
 } from '../../repository/reportsRepository';
+import { getReportReviewStatusPresentation } from '../../lib/statusPresentation';
+import StatusPill from './StatusPill';
 
 export interface ReportPanelProps {
   reportId: string;
@@ -84,9 +86,8 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
   return (
     <div className="mt-2 border border-neutral-300 p-2.5">
       <div className="flex items-center gap-2">
-        <span className="font-heading text-[10.5px] font-semibold tracking-[0.09em] text-neutral-700 uppercase">
-          Report · {REVIEW_LABEL[reviewStatus]}
-        </span>
+        <span className="font-heading text-[10.5px] font-semibold tracking-[0.09em] text-neutral-700 uppercase">Report ·</span>
+        <StatusPill presentation={getReportReviewStatusPresentation(reviewStatus)} />
         <button onClick={() => setExpanded((e) => !e)} className="ml-auto cursor-pointer text-[11px] text-teal-700 hover:underline">
           {expanded ? 'Hide' : 'View'}
         </button>

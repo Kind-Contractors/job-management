@@ -1,10 +1,10 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react';
-import type { ColDef, GetRowIdParams, RowClassParams } from 'ag-grid-community';
+import type { ColDef, GetRowIdParams, GridApi, RowClassParams } from 'ag-grid-community';
 import type { JobRow } from '../../domain/types';
 import type { GridBlock, GroupBy } from '../../lib/grouping';
 import { buildGridBlocks } from '../../lib/grouping';
-import { dueColorClass } from '../../lib/statusPresentation';
+import { dueColorClass, getStatusPresentation } from '../../lib/statusPresentation';
 import { managerGridTheme } from '../../lib/gridTheme';
 import GridBandRow from './GridBandRow';
 import StatusPill from './StatusPill';
@@ -106,7 +106,17 @@ function buildColumnDefs(hiddenColumns: ReadonlySet<JobsGridColumnId>): ColDef<G
       cellRenderer: (p: { data?: GridBlock }) => {
         const job = jobOf(p);
         if (!job) return null;
-        return <StatusPill status={job.status} />;
+        const presentation = getStatusPresentation(job.status);
+        // A bordered/tinted pill, not just the bare dot+text StatusPill uses
+        // elsewhere (Job Inspector, Report Review) — this column sits among
+        // many rows of plain text, so it needs to read as a chip at a glance,
+        // not just a colored label. Same colors, no new ones: the tint is
+        // just the existing border color at low opacity.
+        return (
+          <span className={`inline-flex items-center border px-1.5 py-0.5 ${presentation.border} ${presentation.bg}`}>
+            <StatusPill presentation={presentation} />
+          </span>
+        );
       },
     },
     { colId: 'team', headerName: COLUMN_LABELS.team, flex: 0.9, minWidth: 90, hide: hide('team'), valueGetter: (p) => jobOf(p)?.team },
@@ -126,6 +136,18 @@ const NO_HIDDEN_COLUMNS: ReadonlySet<JobsGridColumnId> = new Set();
 export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hiddenColumns = NO_HIDDEN_COLUMNS }: JobsGridProps) {
   const blocks = useMemo(() => buildGridBlocks(rows, groupBy), [rows, groupBy]);
   const columnDefs = useMemo(() => buildColumnDefs(hiddenColumns), [hiddenColumns]);
+  const gridApiRef = useRef<GridApi<GridBlock> | null>(null);
+
+  // getRowClass is only re-evaluated by AG Grid when it decides to (new
+  // rowData, or an explicit redraw) — it does NOT automatically notice that
+  // selectedJobId, an unrelated React prop, changed. Without this, clicking
+  // a different row updates React state correctly but the grid keeps
+  // showing the OLD row's highlight (or none) until something else happens
+  // to force a redraw. redrawRows() is the correct, minimal way to tell AG
+  // Grid "re-run getRowClass now" without touching rowData/columnDefs.
+  useEffect(() => {
+    gridApiRef.current?.redrawRows();
+  }, [selectedJobId]);
 
   return (
     <div className="min-h-0 flex-1">
@@ -133,13 +155,20 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
         theme={managerGridTheme}
         rowData={blocks}
         columnDefs={columnDefs}
+        defaultColDef={{
+          tooltipValueGetter: (p) => (p.data?.kind === 'row' ? 'Click to view job details' : undefined),
+        }}
         getRowId={(params: GetRowIdParams<GridBlock>) => params.data.id}
+        onGridReady={(params) => {
+          gridApiRef.current = params.api;
+        }}
         isFullWidthRow={(params) => params.rowNode.data?.kind === 'band'}
         fullWidthCellRenderer={GridBandRow}
         getRowHeight={(params) => (params.data?.kind === 'band' ? 34 : 38)}
-        getRowClass={(params: RowClassParams<GridBlock>) =>
-          params.data?.kind === 'row' && params.data.job.id === selectedJobId ? 'bg-teal-100' : undefined
-        }
+        getRowClass={(params: RowClassParams<GridBlock>) => {
+          if (params.data?.kind !== 'row') return undefined;
+          return params.data.job.id === selectedJobId ? 'cursor-pointer bg-teal-100' : 'cursor-pointer';
+        }}
         onRowClicked={(event) => {
           if (event.data?.kind === 'row') onSelectJob(event.data.job.id);
         }}

@@ -237,7 +237,7 @@ export default function ThisWeekPage() {
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex flex-none items-end gap-3.5 px-5 pt-4 pb-3">
         <div>
-          <h1 className="font-heading text-[26px] leading-none font-semibold">This week</h1>
+          <h1 className="font-heading text-[26px] leading-none font-semibold">Schedule</h1>
           <div className="mt-1 flex items-center gap-2 text-xs text-neutral-600 tabular-nums">
             {mode === 'week' ? (
               <>
@@ -292,8 +292,16 @@ export default function ThisWeekPage() {
         <div className="ml-auto flex items-center gap-3">
           <div className="flex border border-neutral-300">
             <button
-              onClick={() => setMode('week')}
+              onClick={() => setMode('day')}
               className={`px-3 py-1.5 text-xs cursor-pointer ${
+                mode === 'day' ? 'bg-teal font-semibold text-white' : 'text-neutral-700 hover:bg-neutral-100'
+              }`}
+            >
+              Day
+            </button>
+            <button
+              onClick={() => setMode('week')}
+              className={`border-l border-neutral-300 px-3 py-1.5 text-xs cursor-pointer ${
                 mode === 'week' ? 'bg-teal font-semibold text-white' : 'text-neutral-700 hover:bg-neutral-100'
               }`}
             >
@@ -306,14 +314,6 @@ export default function ThisWeekPage() {
               }`}
             >
               Month
-            </button>
-            <button
-              onClick={() => setMode('day')}
-              className={`border-l border-neutral-300 px-3 py-1.5 text-xs cursor-pointer ${
-                mode === 'day' ? 'bg-teal font-semibold text-white' : 'text-neutral-700 hover:bg-neutral-100'
-              }`}
-            >
-              Day
             </button>
           </div>
 
@@ -344,14 +344,14 @@ export default function ThisWeekPage() {
       {isLoading ? (
         <div className="p-5">
           <div className="font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">
-            Loading this week…
+            Loading schedule…
           </div>
         </div>
       ) : isError ? (
         <div className="p-5">
           <div className="border border-missed bg-missed/10 p-4">
             <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-missed-fg uppercase">
-              Couldn't load this week
+              Couldn't load schedule
             </div>
             <div className="mt-1.5 text-[13px] text-ink">
               {errorObj instanceof Error ? errorObj.message : 'Something went wrong.'}

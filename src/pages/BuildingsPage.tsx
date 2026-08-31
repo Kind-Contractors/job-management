@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AgGridReact } from 'ag-grid-react';
-import type { ColDef, RowClickedEvent } from 'ag-grid-community';
+import type { ColDef, GridApi, RowClickedEvent } from 'ag-grid-community';
 import { listBuildingRows } from '../repository/buildingsRepository';
 import { listJobRows } from '../repository/jobsRepository';
 import type { BuildingRow, JobRow } from '../domain/types';
@@ -121,6 +121,7 @@ export default function BuildingsPage() {
   const [searchParams] = useSearchParams();
   const q = (searchParams.get('q') ?? '').trim().toLowerCase();
   const [creatingBuilding, setCreatingBuilding] = useState(false);
+  const gridApiRef = useRef<GridApi<BuildingListRow> | null>(null);
 
   const {
     data: buildingRows = [],
@@ -169,6 +170,13 @@ export default function BuildingsPage() {
 
   const totalBuildings = buildingRows.length;
 
+  // Reset to page 1 whenever the search filter changes — AG Grid keeps
+  // whatever page index was showing otherwise, which could land on a now-
+  // empty page if a filter shrinks the row count.
+  useEffect(() => {
+    gridApiRef.current?.paginationGoToFirstPage();
+  }, [q]);
+
   return (
     <div className="flex min-h-0 flex-1">
     <div className="flex min-w-0 flex-1 flex-col">
@@ -206,7 +214,12 @@ export default function BuildingsPage() {
             theme={managerGridTheme}
             rowData={rows}
             columnDefs={COLUMN_DEFS}
+            defaultColDef={{ tooltipValueGetter: () => 'Click to view building details' }}
             getRowId={(params) => params.data.id}
+            getRowClass={() => 'cursor-pointer'}
+            onGridReady={(params) => {
+              gridApiRef.current = params.api;
+            }}
             onRowClicked={(event: RowClickedEvent<BuildingListRow>) => {
               if (event.data) navigate(`/buildings/${event.data.id}`);
             }}
@@ -214,6 +227,9 @@ export default function BuildingsPage() {
             rowHeight={38}
             suppressCellFocus
             domLayout="normal"
+            pagination
+            paginationPageSize={50}
+            paginationPageSizeSelector={[25, 50, 100]}
             className="h-full cursor-pointer"
           />
         </div>
