@@ -171,3 +171,80 @@ export function suggestNextDate(s: Schedule, todayISO: string): string | null {
 
   return null;
 }
+
+/**
+ * The set of calendar months (1-12) this schedule is honestly "due" in,
+ * every year — or `null` when that can't be safely computed from what's
+ * stored (see the Month Matrix plan's §3.1 for the full case-by-case
+ * rationale). Only ever called for a real structured (non-`ad_hoc`)
+ * schedule; the caller decides `ad_hoc`/no-schedule separately.
+ *
+ * `fixed_weekday`/`fixed_date`: determinable only for literally-monthly
+ * cadence (`intervalUnit === 'month' && intervalCount === 1`) — every
+ * month is genuinely in the cycle, same restriction `suggestNextDate`
+ * already enforces. Any other interval never stores an anchor month, so
+ * no specific month(s) can be named without guessing.
+ *
+ * `due_month`: does store a real anchor month, so the full set is
+ * computed by stepping forward from `dueMonth` by the schedule's own
+ * interval, converted to whole months (`week` never converts cleanly to
+ * a fixed calendar month — not determinable). Only returned when the
+ * step evenly divides 12, so the same set of months recurs identically
+ * every calendar year shown — a step that doesn't (e.g. every 5 months)
+ * would put different months in-cycle in different years, and there's no
+ * stored anchor *year* to resolve that, so it's left undetermined rather
+ * than guessed.
+ */
+export function monthsDueInYear(s: Schedule): Set<number> | null {
+  if (s.scheduleType === 'fixed_weekday' || s.scheduleType === 'fixed_date') {
+    if (s.intervalUnit === 'month' && s.intervalCount === 1) {
+      return new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    }
+    return null;
+  }
+
+  if (s.scheduleType === 'due_month') {
+    if (s.dueMonth == null || s.intervalUnit == null || s.intervalCount == null) return null;
+    if (s.intervalUnit === 'week') return null;
+
+    const stepMonths = s.intervalUnit === 'month' ? s.intervalCount : s.intervalUnit === 'quarter' ? s.intervalCount * 3 : s.intervalCount * 12;
+    if (stepMonths <= 0 || 12 % stepMonths !== 0) return null;
+
+    const months = new Set<number>();
+    let m = ((s.dueMonth - 1) % 12 + 12) % 12;
+    for (let i = 0; i < 12 / stepMonths; i++) {
+      months.add(m + 1);
+      m = (m + stepMonths) % 12;
+    }
+    return months;
+  }
+
+  return null;
+}
+
+/**
+ * The real date this schedule falls on within a specific `year`/`month`
+ * (1-12) — for pre-filling the Month Matrix's booking form when a manager
+ * clicks a due cell. `null` whenever no honest day can be computed:
+ * `due_month` (no day ever stored), `ad_hoc` (no date at all), or any
+ * interval other than literally-monthly (same restriction as
+ * `suggestNextDate`/`monthsDueInYear` — never guess which month/week/
+ * quarter-cycle phase a non-monthly schedule is on).
+ */
+export function suggestDateInMonth(s: Schedule, year: number, month: number): string | null {
+  const monthIndex = month - 1;
+
+  if (s.scheduleType === 'fixed_weekday') {
+    if (s.intervalUnit !== 'month' || s.intervalCount !== 1 || !s.weekOrdinal || !s.weekday) return null;
+    return toISODate(nthWeekdayOfMonth(year, monthIndex, s.weekOrdinal, s.weekday));
+  }
+
+  if (s.scheduleType === 'fixed_date') {
+    if (s.intervalUnit !== 'month' || s.intervalCount !== 1 || s.dayOfMonth == null) return null;
+    const raw = fixedDateInMonth(year, monthIndex, s.dayOfMonth);
+    if (!raw) return null;
+    return toISODate(s.rollForwardOnWeekend ? rollForwardWeekend(raw) : raw);
+  }
+
+  return null;
+}

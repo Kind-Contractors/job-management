@@ -21,8 +21,13 @@ export async function listTeams(): Promise<Team[]> {
   }));
 }
 
-/** startDate/endDate are 'YYYY-MM-DD' — inclusive range. Never derives a date from job frequency. */
-export async function listVisitsForWeek(startDate: string, endDate: string): Promise<WeekVisit[]> {
+/**
+ * startDate/endDate are 'YYYY-MM-DD' — inclusive range. Never derives a date
+ * from job frequency. Shared by every calendar mode (day/week/month) and
+ * This Week — one query, one cache-key shape, so every view that reads it
+ * stays live-linked by construction (see the Calendar plan's §3.1/§3.6).
+ */
+export async function listVisitsForRange(startDate: string, endDate: string): Promise<WeekVisit[]> {
   const { data, error } = await supabase
     .from('visits')
     .select('id, job_id, team_id, scheduled_date, status')
@@ -30,7 +35,7 @@ export async function listVisitsForWeek(startDate: string, endDate: string): Pro
     .lte('scheduled_date', endDate);
 
   if (error) {
-    throw new Error(`Failed to load this week's visits: ${error.message}`);
+    throw new Error(`Failed to load visits: ${error.message}`);
   }
 
   return (data ?? []).map((row) => ({

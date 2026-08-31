@@ -24,7 +24,7 @@ function nowLocalDateTime(): string {
 
 function invalidateAfterVisitChange(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: ['jobRows'] });
-  queryClient.invalidateQueries({ queryKey: ['weekVisits'] });
+  queryClient.invalidateQueries({ queryKey: ['visits'] });
 }
 
 interface VisitRowProps {

@@ -1,4 +1,5 @@
 import type { JobStatus, JobVisitSummary } from '../domain/types';
+import type { MonthCellStateKind } from './monthMatrix';
 
 export interface StatusPresentation {
   label: string;
@@ -47,4 +48,37 @@ export function dueColorClass(status: JobStatus, softDate: boolean): string {
  */
 export function isVisitReadyForAccounts(visit: JobVisitSummary): boolean {
   return visit.reportReviewStatus === 'approved' && !visit.sentToAccountsAt;
+}
+
+export interface MonthCellPresentation {
+  /** Background/border classes for a solid (real-visit-derived) cell. */
+  className: string;
+  /** True for every schedule-derived "nothing booked" state — rendered as the same restrained hollow style, distinguished only by tooltip text (CLAUDE.md §4/§9: only 3-4 functional colors). */
+  hollow: boolean;
+}
+
+/**
+ * Month Matrix cell styling — reuses the same restrained functional
+ * palette as `PRESENTATIONS` above (teal=normal/done, ochre/due=due,
+ * brick/missed=missed/overdue), never a new hue per state. Every
+ * schedule-derived "nothing booked" state (not due / no schedule / ad-hoc
+ * / undeterminable) renders identically (hollow, neutral) — the
+ * difference is only ever in the hover tooltip (`MonthCellState.label`),
+ * never a new color.
+ */
+const MONTH_CELL_PRESENTATIONS: Record<MonthCellStateKind, MonthCellPresentation> = {
+  done_approved: { className: 'border-teal-700 bg-teal-700', hollow: false },
+  completed_awaiting_review: { className: 'border-teal-700 bg-teal-100', hollow: false },
+  booked: { className: 'border-teal bg-teal-100', hollow: false },
+  overdue: { className: 'border-missed bg-missed/20', hollow: false },
+  missed: { className: 'border-missed bg-missed/10', hollow: false },
+  due_no_date: { className: 'border-due bg-due/10', hollow: false },
+  not_due: { className: 'border-neutral-300 bg-transparent', hollow: true },
+  schedule_not_determinable: { className: 'border-neutral-300 bg-transparent', hollow: true },
+  no_schedule: { className: 'border-neutral-300 bg-transparent', hollow: true },
+  ad_hoc: { className: 'border-neutral-300 bg-transparent', hollow: true },
+};
+
+export function getMonthCellPresentation(kind: MonthCellStateKind): MonthCellPresentation {
+  return MONTH_CELL_PRESENTATIONS[kind];
 }

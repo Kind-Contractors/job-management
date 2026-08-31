@@ -15,21 +15,41 @@ interface JobInspectorDrawerProps {
   siblings: JobRow[];
   onClose: () => void;
   onSelectSibling: (jobId: string) => void;
+  /**
+   * Forces the "Book a visit" panel open regardless of `job.status` — for
+   * callers like the Month Matrix, where a specific month can be honestly
+   * due-and-unbooked even while the job's own single, job-level status is
+   * something else (e.g. booked from a visit in a different month).
+   */
+  forceShowBooking?: boolean;
+  /** Pre-fills the booking date input — never fabricated by this component itself, only ever passed in by a caller that computed a real, honest date (or left it undefined for the normal today-default). */
+  presetVisitDate?: string;
 }
 
 const NOT_BUILT_TITLE = 'Not built yet';
 
+/** Formats today's own LOCAL calendar day — never `.toISOString()` here, which converts to UTC and would shift the date in any timezone ahead of UTC (same fix as scheduleFormat.ts/ThisWeekPage.tsx's toISODate). */
 function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day}`;
 }
 
-export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSibling }: JobInspectorDrawerProps) {
+export default function JobInspectorDrawer({
+  job,
+  siblings,
+  onClose,
+  onSelectSibling,
+  forceShowBooking = false,
+  presetVisitDate,
+}: JobInspectorDrawerProps) {
   const navigate = useNavigate();
   const { session } = useAuth();
   const actor = session?.user.email ?? 'unknown';
   const [revealed, setRevealed] = useState(false);
   const [editingJob, setEditingJob] = useState(false);
-  const [visitDate, setVisitDate] = useState(todayISO());
+  const [visitDate, setVisitDate] = useState(presetVisitDate ?? todayISO());
   const [visitTeamId, setVisitTeamId] = useState<string>(job.defaultTeamId ?? '');
   const [bookingMessage, setBookingMessage] = useState<string | null>(null);
 
@@ -46,7 +66,7 @@ export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSib
     mutationFn: () => createVisit(job.id, visitTeamId || null, visitDate),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['jobRows'] });
-      queryClient.invalidateQueries({ queryKey: ['weekVisits'] });
+      queryClient.invalidateQueries({ queryKey: ['visits'] });
       setBookingMessage(`Visit booked for ${new Date(visitDate).toLocaleDateString('en-GB')}.`);
     },
     onError: (err) => setBookingMessage(err instanceof Error ? err.message : 'Failed to book visit.'),
@@ -103,7 +123,7 @@ export default function JobInspectorDrawer({ job, siblings, onClose, onSelectSib
           </div>
         </div>
       )}
-      {(job.status === 'unscheduled' || job.status === 'needs_booking' || job.status === 'overdue') && (
+      {(forceShowBooking || job.status === 'unscheduled' || job.status === 'needs_booking' || job.status === 'overdue') && (
         <div className="m-3.5 border border-neutral-300 p-3">
           <div className="font-heading text-[11px] font-semibold tracking-[0.11em] text-neutral-700 uppercase">
             Book a visit

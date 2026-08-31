@@ -17,7 +17,7 @@ const ATTENTION_ITEMS: { key: AttentionKey; label: string; dotClass: string }[] 
 /** Not modeled yet — no photo-upload mechanism exists in this pass. */
 const NOT_YET_BUILT_ATTENTION = [{ label: 'Photos uploading' }];
 
-const NOT_YET_BUILT_VIEWS = ['Month matrix', 'Report review'];
+const NOT_YET_BUILT_VIEWS = ['Report review'];
 
 const DIVISIONS = ['General', 'Specialist', 'Both'] as const;
 
@@ -43,6 +43,7 @@ export default function NavRail() {
   const onJobs = pathname === '/jobs';
   const onBuildings = pathname.startsWith('/buildings');
   const onThisWeek = pathname === '/this-week';
+  const onMonthMatrix = pathname === '/month-matrix';
 
   const divisionFiltered = jobRows.filter((j) => division === 'Both' || j.division === division);
 
@@ -159,6 +160,10 @@ export default function NavRail() {
       <div onClick={() => navigate('/this-week')} className={navLinkClasses(onThisWeek)}>
         This week
         <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{teams.length}</span>
+      </div>
+      <div onClick={() => navigate('/month-matrix')} className={navLinkClasses(onMonthMatrix)}>
+        Month matrix
+        <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{divisionFiltered.length}</span>
       </div>
       {NOT_YET_BUILT_VIEWS.map((label) => (
         <div
