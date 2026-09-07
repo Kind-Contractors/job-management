@@ -21,7 +21,7 @@ const JOB_SELECT = `
   pricing_type,
   price_per_visit,
   source_job_id,
-  default_team_id,
+  default_technician_id,
   buildings (
     id,
     client_id,
@@ -32,11 +32,11 @@ const JOB_SELECT = `
     clients ( id, company_name ),
     building_access ( access_notes )
   ),
-  teams ( id, name, is_active ),
+  technicians ( id, name, is_active ),
   schedules ( schedule_type, interval_unit, interval_count, weekday, week_ordinal, day_of_month, roll_forward_on_weekend, due_month, notes ),
   visits (
-    id, team_id, scheduled_date, status, price_charged, completed_at,
-    teams ( id, name, is_active ),
+    id, technician_id, scheduled_date, status, price_charged, completed_at,
+    technicians ( id, name, is_active ),
     reports ( id, review_status, sent_to_client_at, sent_to_accounts_at ),
     invoice_line_items ( invoice_id, invoices ( status ) )
   )
@@ -60,14 +60,15 @@ export async function listJobRows(): Promise<JobRow[]> {
 }
 
 /**
- * Assigns (or clears, if teamId is null) a job's default team — the first
- * write this repository performs. Does not touch visits/schedules.
+ * Assigns (or clears, if technicianId is null) a job's default/usual
+ * technician — independent of any individual visit's own assignee. Does not
+ * touch visits/schedules.
  */
-export async function assignJobTeam(jobId: string, teamId: string | null): Promise<void> {
-  const { error } = await supabase.from('jobs').update({ default_team_id: teamId }).eq('id', jobId);
+export async function assignJobTechnician(jobId: string, technicianId: string | null): Promise<void> {
+  const { error } = await supabase.from('jobs').update({ default_technician_id: technicianId }).eq('id', jobId);
 
   if (error) {
-    throw new Error(`Failed to assign team: ${error.message}`);
+    throw new Error(`Failed to assign technician: ${error.message}`);
   }
 }
 
@@ -116,7 +117,7 @@ export interface JobCreateInput {
   pricingType: 'fixed' | 'variable';
   pricePerVisit: number | null;
   frequencyType: FrequencyType | null;
-  defaultTeamId: string | null;
+  defaultTechnicianId: string | null;
 }
 
 /**
@@ -145,7 +146,7 @@ export async function createJob(input: JobCreateInput): Promise<string> {
       pricing_type: input.pricingType,
       price_per_visit: input.pricePerVisit,
       frequency_type: input.frequencyType,
-      default_team_id: input.defaultTeamId,
+      default_technician_id: input.defaultTechnicianId,
       source_file: 'manager_created',
     })
     .select('id')

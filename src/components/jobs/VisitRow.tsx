@@ -96,7 +96,7 @@ export default function VisitRow({
             />
           )}
           <StatusPill presentation={getVisitStatusPresentation(visit.status)} />
-          {visit.teamName && <span className="text-neutral-500"> · {visit.teamName}</span>}
+          {visit.technicianName && <span className="text-neutral-500"> · {visit.technicianName}</span>}
           {visit.priceCharged != null && (
             <span className="text-neutral-500"> · £{visit.priceCharged.toLocaleString('en-GB')}</span>
           )}

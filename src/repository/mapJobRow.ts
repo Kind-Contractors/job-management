@@ -1,10 +1,11 @@
 // Maps a raw Supabase `jobs` row (with its embedded building/client/access/
-// team/visits data) onto the existing JobRow shape, applying every honest-
-// fallback rule from the reviewed integration plans (CLAUDE.md section 14
-// and the "Jobs view reflects real operational state" plan). `team`/
-// `status`/`nextDueLabel` are now derived from real `jobs.default_team_id`/
-// `visits` data — see `deriveVisitState` below for the exact, deterministic
-// cascade. Nothing here infers a date from `frequency_type`/`frequency_raw`,
+// technician/visits data) onto the existing JobRow shape, applying every
+// honest-fallback rule from the reviewed integration plans (CLAUDE.md
+// section 14 and the "Jobs view reflects real operational state" plan).
+// `technician`/`status`/`nextDueLabel` are now derived from real
+// `jobs.default_technician_id`/`visits` data — see `deriveVisitState` below
+// for the exact, deterministic cascade. Nothing here infers a date from
+// `frequency_type`/`frequency_raw`,
 // and nothing here treats a stale `booked` visit as `missed` — only the DB's
 // own `visits.status = 'missed'` ever produces that status.
 
@@ -69,7 +70,7 @@ interface SupabaseBuilding {
   building_access: SupabaseBuildingAccess | SupabaseBuildingAccess[] | null;
 }
 
-interface SupabaseTeam {
+interface SupabaseTechnician {
   id: string;
   name: string;
   is_active: boolean;
@@ -105,12 +106,12 @@ interface SupabaseInvoiceLineItem {
 
 interface SupabaseVisit {
   id: string;
-  team_id: string | null;
+  technician_id: string | null;
   scheduled_date: string | null;
   status: VisitStatus;
   price_charged: number | null;
   completed_at: string | null;
-  teams: SupabaseTeam | SupabaseTeam[] | null;
+  technicians: SupabaseTechnician | SupabaseTechnician[] | null;
   reports: SupabaseReport | SupabaseReport[] | null;
   invoice_line_items: SupabaseInvoiceLineItem | SupabaseInvoiceLineItem[] | null;
 }
@@ -126,9 +127,9 @@ export interface SupabaseJobRecord {
   pricing_type: 'fixed' | 'variable';
   price_per_visit: number | null;
   source_job_id: string | null;
-  default_team_id: string | null;
+  default_technician_id: string | null;
   buildings: SupabaseBuilding | SupabaseBuilding[] | null;
-  teams: SupabaseTeam | SupabaseTeam[] | null;
+  technicians: SupabaseTechnician | SupabaseTechnician[] | null;
   schedules: SupabaseSchedule | SupabaseSchedule[] | null;
   visits: SupabaseVisit[] | null;
 }
@@ -225,7 +226,7 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
   const building = one(row.buildings);
   const client = building ? one(building.clients) : null;
   const access = building ? one(building.building_access) : null;
-  const defaultTeam = one(row.teams);
+  const defaultTechnician = one(row.technicians);
 
   const frequencyType = row.frequency_type;
   const frequency: Frequency = frequencyType ? FREQUENCY_TYPE_LABEL[frequencyType] : 'Unknown';
@@ -259,7 +260,11 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
 
   const buildingName = building?.name ?? building?.address.split(',')[0]?.trim() ?? '';
 
-  const team = !defaultTeam ? 'Unassigned' : defaultTeam.is_active ? defaultTeam.name : `${defaultTeam.name} (inactive)`;
+  const technician = !defaultTechnician
+    ? 'Unassigned'
+    : defaultTechnician.is_active
+      ? defaultTechnician.name
+      : `${defaultTechnician.name} (inactive)`;
 
   const todayISO = new Date().toISOString().slice(0, 10);
   const rawVisits = row.visits ?? [];
@@ -275,7 +280,7 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
         id: v.id,
         scheduledDate: v.scheduled_date,
         status: v.status,
-        teamName: one(v.teams)?.name ?? null,
+        technicianName: one(v.technicians)?.name ?? null,
         priceCharged: v.price_charged,
         completedAt: v.completed_at,
         reportId: report?.id ?? null,
@@ -300,8 +305,8 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
     yearlyValue,
     nextDueLabel,
     status,
-    team,
-    defaultTeamId: row.default_team_id,
+    technician,
+    defaultTechnicianId: row.default_technician_id,
     schedulePattern: schedule ? describeScheduleShort(schedule) : frequencyRaw,
     schedule,
     visits,

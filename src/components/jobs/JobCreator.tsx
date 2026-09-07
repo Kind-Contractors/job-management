@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Division, FrequencyType } from '../../domain/types';
 import { createJob, type JobCreateInput } from '../../repository/jobsRepository';
 import { listBuildingRows } from '../../repository/buildingsRepository';
-import { listTeams } from '../../repository/teamsRepository';
+import { listTechnicians } from '../../repository/techniciansRepository';
 import { FREQUENCY_TYPE_LABEL } from '../../repository/mapJobRow';
 
 const DIVISIONS: Division[] = ['General', 'Specialist'];
@@ -17,7 +17,7 @@ interface FormState {
   pricingType: 'fixed' | 'variable';
   pricePerVisit: string;
   frequencyType: FrequencyType | '';
-  defaultTeamId: string;
+  defaultTechnicianId: string;
 }
 
 function blankForm(presetBuildingId?: string): FormState {
@@ -29,7 +29,7 @@ function blankForm(presetBuildingId?: string): FormState {
     pricingType: 'fixed',
     pricePerVisit: '',
     frequencyType: '',
-    defaultTeamId: '',
+    defaultTechnicianId: '',
   };
 }
 
@@ -55,7 +55,7 @@ function toInput(form: FormState): JobCreateInput | null {
     pricingType: form.pricingType,
     pricePerVisit,
     frequencyType: form.frequencyType || null,
-    defaultTeamId: form.defaultTeamId || null,
+    defaultTechnicianId: form.defaultTechnicianId || null,
   };
 }
 
@@ -81,8 +81,8 @@ export default function JobCreator({ buildingId, onCreated, onCancel }: JobCreat
   const [error, setError] = useState<string | null>(null);
 
   const { data: buildingRows = [] } = useQuery({ queryKey: ['buildingRows'], queryFn: listBuildingRows });
-  const { data: teams = [] } = useQuery({ queryKey: ['teams'], queryFn: listTeams });
-  const activeTeams = teams.filter((t) => t.isActive);
+  const { data: technicians = [] } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
+  const activeTechnicians = technicians.filter((t) => t.isActive);
 
   const presetBuilding = buildingId ? buildingRows.find((b) => b.id === buildingId) : undefined;
   const selectedBuilding = buildingRows.find((b) => b.id === form.buildingId);
@@ -252,14 +252,14 @@ export default function JobCreator({ buildingId, onCreated, onCancel }: JobCreat
         </div>
 
         <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-          Team (optional)
+          Technician (optional)
           <select
-            value={form.defaultTeamId}
-            onChange={(e) => setForm({ ...form, defaultTeamId: e.target.value })}
+            value={form.defaultTechnicianId}
+            onChange={(e) => setForm({ ...form, defaultTechnicianId: e.target.value })}
             className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
           >
             <option value="">Unassigned</option>
-            {activeTeams.map((t) => (
+            {activeTechnicians.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
               </option>

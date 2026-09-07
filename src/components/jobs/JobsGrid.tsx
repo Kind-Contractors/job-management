@@ -17,7 +17,7 @@ function jobOf(params: { data?: GridBlock }): JobRow | undefined {
   return params.data?.kind === 'row' ? params.data.job : undefined;
 }
 
-export const COLUMN_IDS = ['building', 'job', 'frequency', 'price', 'perYear', 'nextDue', 'status', 'team'] as const;
+export const COLUMN_IDS = ['building', 'job', 'frequency', 'price', 'perYear', 'nextDue', 'status', 'technician'] as const;
 export type JobsGridColumnId = (typeof COLUMN_IDS)[number];
 
 /** Shared with AllLiveJobsPage's "Columns" show/hide control — one label per column, defined once. */
@@ -29,7 +29,7 @@ export const COLUMN_LABELS: Record<JobsGridColumnId, string> = {
   perYear: 'Per year',
   nextDue: 'Next due',
   status: 'Status',
-  team: 'Team',
+  technician: 'Technician',
 };
 
 function buildColumnDefs(hiddenColumns: ReadonlySet<JobsGridColumnId>): ColDef<GridBlock>[] {
@@ -119,7 +119,7 @@ function buildColumnDefs(hiddenColumns: ReadonlySet<JobsGridColumnId>): ColDef<G
         );
       },
     },
-    { colId: 'team', headerName: COLUMN_LABELS.team, flex: 0.9, minWidth: 90, hide: hide('team'), valueGetter: (p) => jobOf(p)?.team },
+    { colId: 'technician', headerName: COLUMN_LABELS.technician, flex: 0.9, minWidth: 90, hide: hide('technician'), valueGetter: (p) => jobOf(p)?.technician },
   ];
 }
 

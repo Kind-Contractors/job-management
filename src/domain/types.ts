@@ -103,10 +103,10 @@ export interface Job {
   nextDueLabel: string;
   /** Derived from real `visits` rows — see `mapJobRow.ts`'s `deriveVisitState`. */
   status: JobStatus;
-  /** The active team's name, `"Unassigned"`, or `"<name> (inactive)"` if the assigned team has since been deactivated. */
-  team: string;
-  /** `jobs.default_team_id` — drives the team-assignment editor and pre-fills the visit-booking form. */
-  defaultTeamId: string | null;
+  /** The default technician's name, `"Unassigned"`, or `"<name> (inactive)"` if the assigned technician has since been deactivated. */
+  technician: string;
+  /** `jobs.default_technician_id` — the job's usual/default technician. Independent of any individual visit's own assignee — drives the assignment editor and pre-fills the visit-booking form, but a visit can always be assigned a different technician. */
+  defaultTechnicianId: string | null;
   /** Human-readable recurrence — a real, structured description when `schedule` exists, otherwise `frequencyRaw` (see CLAUDE.md section 6). */
   schedulePattern: string;
   /** The job's real, manager-entered recurrence definition — null for most jobs today. Never inferred from frequency_raw/frequency_type/staging data. */
@@ -151,7 +151,7 @@ export interface JobVisitSummary {
   id: string;
   scheduledDate: string | null;
   status: VisitStatus;
-  teamName: string | null;
+  technicianName: string | null;
   /** Set once the visit is marked completed — see CLAUDE.md section 14.2/the visit-completion plan. */
   priceCharged: number | null;
   completedAt: string | null;
@@ -273,12 +273,15 @@ export interface BuildingHistoryEvent {
 }
 
 /**
- * A real `teams` row — for the This Week view (CLAUDE.md section 4/6: rows
- * are teams, not hours). The table has 0 rows in production today; this
- * shape is minimal on purpose since there's no real team yet to design a
- * richer shape (members, load bar) against.
+ * A real `technicians` row — one individual person, for the This Week view
+ * (CLAUDE.md section 4/6: rows are teams, not hours — read today as
+ * "technicians", per Luke's own explicit correction that he does not use a
+ * team/group concept; see reference/Luke_manager_app_version_1.txt).
+ * Assignment (job default and per-visit) is always to one such row, and is
+ * always optional — a job or visit can be left unassigned. Renamed from
+ * `teams`; this shape is unchanged (id/name/isActive/notes).
  */
-export interface Team {
+export interface Technician {
   id: string;
   name: string;
   isActive: boolean;
@@ -287,13 +290,13 @@ export interface Team {
 
 /**
  * A real `visits` row scoped to a week, for placing chips in This Week's
- * grid once teams/visits exist. Never derived from job frequency — only a
- * real scheduled_date means anything here (CLAUDE.md section 15).
+ * grid once technicians/visits exist. Never derived from job frequency —
+ * only a real scheduled_date means anything here (CLAUDE.md section 15).
  */
 export interface WeekVisit {
   id: string;
   jobId: string;
-  teamId: string | null;
+  technicianId: string | null;
   scheduledDate: string | null;
   status: VisitStatus;
 }

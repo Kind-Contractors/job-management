@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useState, type DragEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { createTeam, createVisit, listTeams, listVisitsForRange, setTeamActive } from '../repository/teamsRepository';
+import { createTechnician, createVisit, listTechnicians, listVisitsForRange, setTechnicianActive } from '../repository/techniciansRepository';
 import { listJobRows } from '../repository/jobsRepository';
 import type { JobRow, WeekVisit } from '../domain/types';
 import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
@@ -100,11 +100,11 @@ export default function ThisWeekPage() {
   const [weekOffset, setWeekOffset] = useState(0);
   const [monthOffset, setMonthOffset] = useState(0);
   const [dayOffset, setDayOffset] = useState(0);
-  const [newTeamName, setNewTeamName] = useState('');
+  const [newTechnicianName, setNewTechnicianName] = useState('');
   const [bookingError, setBookingError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [pendingDrop, setPendingDrop] = useState<{ jobId: string; date: string } | null>(null);
-  const [pendingTeamId, setPendingTeamId] = useState('');
+  const [pendingTechnicianId, setPendingTechnicianId] = useState('');
   const [searchParams] = useSearchParams();
 
   const queryClient = useQueryClient();
@@ -132,11 +132,11 @@ export default function ThisWeekPage() {
   const division = searchParams.get('division') ?? 'Both';
 
   const {
-    data: teams = [],
-    isLoading: teamsLoading,
-    isError: teamsError,
-    error: teamsErrorObj,
-  } = useQuery({ queryKey: ['teams'], queryFn: listTeams });
+    data: technicians = [],
+    isLoading: techniciansLoading,
+    isError: techniciansError,
+    error: techniciansErrorObj,
+  } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
   const {
     data: visits = [],
     isLoading: visitsLoading,
@@ -153,48 +153,48 @@ export default function ThisWeekPage() {
     error: jobRowsErrorObj,
   } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
 
-  const createTeamMutation = useMutation({
-    mutationFn: (name: string) => createTeam(name),
+  const createTechnicianMutation = useMutation({
+    mutationFn: (name: string) => createTechnician(name),
     onSuccess: () => {
-      setNewTeamName('');
-      queryClient.invalidateQueries({ queryKey: ['teams'] });
+      setNewTechnicianName('');
+      queryClient.invalidateQueries({ queryKey: ['technicians'] });
     },
   });
 
   const toggleActiveMutation = useMutation({
-    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) => setTeamActive(id, isActive),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['teams'] }),
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) => setTechnicianActive(id, isActive),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['technicians'] }),
   });
 
   const bookMutation = useMutation({
-    mutationFn: ({ jobId, teamId, date }: { jobId: string; teamId: string; date: string }) =>
-      createVisit(jobId, teamId, date),
+    mutationFn: ({ jobId, technicianId, date }: { jobId: string; technicianId: string; date: string }) =>
+      createVisit(jobId, technicianId, date),
     onSuccess: () => {
       setBookingError(null);
       setPendingDrop(null);
-      setPendingTeamId('');
+      setPendingTechnicianId('');
       queryClient.invalidateQueries({ queryKey: ['jobRows'] });
       queryClient.invalidateQueries({ queryKey: ['visits'] });
     },
     onError: (err) => setBookingError(err instanceof Error ? err.message : 'Failed to book visit.'),
   });
 
-  const activeTeams = useMemo(() => teams.filter((t) => t.isActive), [teams]);
+  const activeTechnicians = useMemo(() => technicians.filter((t) => t.isActive), [technicians]);
 
   const handleDropJob = (jobId: string, date: string) => {
     setBookingError(null);
-    setPendingTeamId('');
+    setPendingTechnicianId('');
     setPendingDrop({ jobId, date });
   };
 
   const handleConfirmBooking = () => {
-    if (!pendingDrop || !pendingTeamId) return;
-    bookMutation.mutate({ jobId: pendingDrop.jobId, teamId: pendingTeamId, date: pendingDrop.date });
+    if (!pendingDrop || !pendingTechnicianId) return;
+    bookMutation.mutate({ jobId: pendingDrop.jobId, technicianId: pendingTechnicianId, date: pendingDrop.date });
   };
 
   const handleCancelBooking = () => {
     setPendingDrop(null);
-    setPendingTeamId('');
+    setPendingTechnicianId('');
   };
 
   const jobById = useMemo(() => new Map(jobRows.map((j) => [j.id, j])), [jobRows]);
@@ -218,16 +218,16 @@ export default function ThisWeekPage() {
     [divisionFilteredJobs],
   );
 
-  const handleDrop = (teamId: string, dateISO: string) => (e: DragEvent) => {
+  const handleDrop = (technicianId: string, dateISO: string) => (e: DragEvent) => {
     e.preventDefault();
     const jobId = e.dataTransfer.getData('text/plain');
     if (!jobId) return;
-    bookMutation.mutate({ jobId, teamId, date: dateISO });
+    bookMutation.mutate({ jobId, technicianId, date: dateISO });
   };
 
-  const isLoading = teamsLoading || visitsLoading || jobRowsLoading;
-  const isError = teamsError || visitsError || jobRowsError;
-  const errorObj = teamsError ? teamsErrorObj : visitsError ? visitsErrorObj : jobRowsErrorObj;
+  const isLoading = techniciansLoading || visitsLoading || jobRowsLoading;
+  const isError = techniciansError || visitsError || jobRowsError;
+  const errorObj = techniciansError ? techniciansErrorObj : visitsError ? visitsErrorObj : jobRowsErrorObj;
 
   const selectedJob: JobRow | undefined = jobRows.find((j) => j.id === selectedJobId);
   const siblings = selectedJob ? jobRows.filter((j) => j.buildingId === selectedJob.buildingId && j.id !== selectedJob.id) : [];
@@ -285,7 +285,7 @@ export default function ThisWeekPage() {
                 )}
               </>
             )}
-            <span>· {teams.length} team{teams.length === 1 ? '' : 's'}</span>
+            <span>· {technicians.length} technician{technicians.length === 1 ? '' : 's'}</span>
           </div>
         </div>
 
@@ -320,22 +320,22 @@ export default function ThisWeekPage() {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              if (newTeamName.trim()) createTeamMutation.mutate(newTeamName.trim());
+              if (newTechnicianName.trim()) createTechnicianMutation.mutate(newTechnicianName.trim());
             }}
             className="flex items-center gap-1.5"
           >
             <input
-              value={newTeamName}
-              onChange={(e) => setNewTeamName(e.target.value)}
-              placeholder="New team name"
+              value={newTechnicianName}
+              onChange={(e) => setNewTechnicianName(e.target.value)}
+              placeholder="New technician name"
               className="border border-neutral-300 px-2 py-1.5 text-xs text-ink outline-none focus:border-teal"
             />
             <button
               type="submit"
-              disabled={!newTeamName.trim() || createTeamMutation.isPending}
+              disabled={!newTechnicianName.trim() || createTechnicianMutation.isPending}
               className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
             >
-              + Add team
+              + Add technician
             </button>
           </form>
         </div>
@@ -372,10 +372,10 @@ export default function ThisWeekPage() {
               visits={visits}
               jobById={jobById}
               visitStatusStyle={VISIT_STATUS_STYLE}
-              activeTeams={activeTeams}
+              activeTechnicians={activeTechnicians}
               pendingDrop={pendingDrop}
-              pendingTeamId={pendingTeamId}
-              onPendingTeamChange={setPendingTeamId}
+              pendingTechnicianId={pendingTechnicianId}
+              onPendingTechnicianChange={setPendingTechnicianId}
               onDropJob={handleDropJob}
               onConfirmBooking={handleConfirmBooking}
               onCancelBooking={handleCancelBooking}
@@ -386,7 +386,7 @@ export default function ThisWeekPage() {
           <>
           <div className={`grid border border-neutral-300 ${displayDays.length === 1 ? 'grid-cols-[160px_1fr]' : 'grid-cols-[160px_repeat(6,1fr)]'}`}>
             <div className="border-b border-neutral-300 bg-neutral-200 px-3 py-2 font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-600 uppercase">
-              Team
+              Technician
             </div>
             {displayDays.map((d) => (
               <div
@@ -397,32 +397,32 @@ export default function ThisWeekPage() {
               </div>
             ))}
 
-            {teams.map((team) => {
-              const teamVisits = visits.filter((v) => v.teamId === team.id);
+            {technicians.map((technician) => {
+              const technicianVisits = visits.filter((v) => v.technicianId === technician.id);
               return (
-                <Fragment key={team.id}>
+                <Fragment key={technician.id}>
                   <div
                     className={`flex items-center gap-2 border-b border-neutral-300 px-3 py-2 text-[12.5px] ${
-                      team.isActive ? '' : 'text-neutral-400'
+                      technician.isActive ? '' : 'text-neutral-400'
                     }`}
                   >
-                    <span className="font-semibold">{team.name}</span>
-                    <span className="ml-auto text-[10.5px] text-neutral-500 tabular-nums">{teamVisits.length}</span>
+                    <span className="font-semibold">{technician.name}</span>
+                    <span className="ml-auto text-[10.5px] text-neutral-500 tabular-nums">{technicianVisits.length}</span>
                     <button
-                      onClick={() => toggleActiveMutation.mutate({ id: team.id, isActive: !team.isActive })}
+                      onClick={() => toggleActiveMutation.mutate({ id: technician.id, isActive: !technician.isActive })}
                       className="cursor-pointer text-[10.5px] text-teal-700 hover:underline"
                     >
-                      {team.isActive ? 'Deactivate' : 'Reactivate'}
+                      {technician.isActive ? 'Deactivate' : 'Reactivate'}
                     </button>
                   </div>
                   {displayDays.map((d) => {
                     const cellDateISO = toISODate(d);
-                    const dayVisits = teamVisits.filter((v) => v.scheduledDate === cellDateISO);
+                    const dayVisits = technicianVisits.filter((v) => v.scheduledDate === cellDateISO);
                     return (
                       <div
-                        key={`${team.id}-${cellDateISO}`}
+                        key={`${technician.id}-${cellDateISO}`}
                         onDragOver={(e) => e.preventDefault()}
-                        onDrop={handleDrop(team.id, cellDateISO)}
+                        onDrop={handleDrop(technician.id, cellDateISO)}
                         className="border-b border-l border-neutral-300 px-2 py-2"
                       >
                         {dayVisits.length === 0 ? (
@@ -452,13 +452,13 @@ export default function ThisWeekPage() {
             })}
           </div>
 
-          {teams.length === 0 && (
+          {technicians.length === 0 && (
             <div className="border border-t-0 border-neutral-300 bg-white px-5 py-10 text-center">
               <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
-                No teams have been set up yet
+                No technicians have been set up yet
               </div>
               <div className="mt-1.5 text-[13px] text-neutral-600">
-                Add a team above to start booking visits for {mode === 'day' ? 'today' : 'this week'}.
+                Add a technician above to start booking visits for {mode === 'day' ? 'today' : 'this week'}.
               </div>
             </div>
           )}
@@ -501,7 +501,7 @@ export default function ThisWeekPage() {
             })}
           </div>
           <div className="border-t border-neutral-300 px-3 py-2 text-[10.5px] leading-normal text-neutral-500">
-            Drag a job onto a team/day to book it.
+            Drag a job onto a technician/day to book it.
           </div>
         </div>
         </div>

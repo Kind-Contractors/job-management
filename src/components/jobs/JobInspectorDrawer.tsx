@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { JobRow } from '../../domain/types';
-import { listTeams, createVisit } from '../../repository/teamsRepository';
-import { assignJobTeam } from '../../repository/jobsRepository';
+import { listTechnicians, createVisit } from '../../repository/techniciansRepository';
+import { assignJobTechnician } from '../../repository/jobsRepository';
 import { createInvoiceDraft } from '../../repository/invoicesRepository';
 import { useAuth } from '../../auth/AuthProvider';
 import VisitRow from './VisitRow';
@@ -54,23 +54,23 @@ export default function JobInspectorDrawer({
   const [revealed, setRevealed] = useState(false);
   const [editingJob, setEditingJob] = useState(false);
   const [visitDate, setVisitDate] = useState(presetVisitDate ?? todayISO());
-  const [visitTeamId, setVisitTeamId] = useState<string>(job.defaultTeamId ?? '');
+  const [visitTechnicianId, setVisitTechnicianId] = useState<string>(job.defaultTechnicianId ?? '');
   const [bookingMessage, setBookingMessage] = useState<string | null>(null);
   const [selectedVisitIds, setSelectedVisitIds] = useState<Set<string>>(new Set());
   const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null);
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
-  const { data: teams = [] } = useQuery({ queryKey: ['teams'], queryFn: listTeams });
-  const activeTeams = teams.filter((t) => t.isActive);
+  const { data: technicians = [] } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
+  const activeTechnicians = technicians.filter((t) => t.isActive);
 
-  const assignTeamMutation = useMutation({
-    mutationFn: (teamId: string | null) => assignJobTeam(job.id, teamId),
+  const assignTechnicianMutation = useMutation({
+    mutationFn: (technicianId: string | null) => assignJobTechnician(job.id, technicianId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobRows'] }),
   });
 
   const bookVisitMutation = useMutation({
-    mutationFn: () => createVisit(job.id, visitTeamId || null, visitDate),
+    mutationFn: () => createVisit(job.id, visitTechnicianId || null, visitDate),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['jobRows'] });
       queryClient.invalidateQueries({ queryKey: ['visits'] });
@@ -204,14 +204,14 @@ export default function JobInspectorDrawer({
               />
             </label>
             <label className="flex flex-col gap-1 text-[11.5px] text-neutral-600">
-              Team
+              Technician
               <select
-                value={visitTeamId}
-                onChange={(e) => setVisitTeamId(e.target.value)}
+                value={visitTechnicianId}
+                onChange={(e) => setVisitTechnicianId(e.target.value)}
                 className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
               >
                 <option value="">Unassigned</option>
-                {activeTeams.map((t) => (
+                {activeTechnicians.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}
                   </option>
@@ -237,13 +237,13 @@ export default function JobInspectorDrawer({
         <div className="flex justify-between gap-3 border-b border-divider py-1.5 text-[12.5px]">
           <span className="text-neutral-600">Assigned</span>
           <select
-            value={job.defaultTeamId ?? ''}
-            onChange={(e) => assignTeamMutation.mutate(e.target.value || null)}
-            disabled={assignTeamMutation.isPending}
+            value={job.defaultTechnicianId ?? ''}
+            onChange={(e) => assignTechnicianMutation.mutate(e.target.value || null)}
+            disabled={assignTechnicianMutation.isPending}
             className="cursor-pointer border-0 bg-transparent text-right text-[12.5px] text-ink outline-none"
           >
             <option value="">Unassigned</option>
-            {activeTeams.map((t) => (
+            {activeTechnicians.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
               </option>

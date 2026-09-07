@@ -17,7 +17,7 @@ import {
 } from 'react-icons/hi2';
 import { listJobRows } from '../../repository/jobsRepository';
 import { listBuildingRows } from '../../repository/buildingsRepository';
-import { listTeams } from '../../repository/teamsRepository';
+import { listTechnicians } from '../../repository/techniciansRepository';
 import { isVisitReadyForAccounts } from '../../lib/statusPresentation';
 
 type AttentionKey = 'review' | 'needs_booking' | 'overdue' | 'missed';
@@ -100,7 +100,7 @@ export default function NavRail() {
 
   const { data: jobRows = [] } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
   const { data: buildingRows = [] } = useQuery({ queryKey: ['buildingRows'], queryFn: listBuildingRows });
-  const { data: teams = [] } = useQuery({ queryKey: ['teams'], queryFn: listTeams });
+  const { data: technicians = [] } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
 
   const status = searchParams.get('status');
   const division = searchParams.get('division') ?? 'Both';
@@ -166,7 +166,7 @@ export default function NavRail() {
   const viewItems: { key: string; label: string; icon: IconType; active: boolean; count: number; onClick: () => void }[] = [
     { key: 'jobs', label: 'All live jobs', icon: HiOutlineBriefcase, active: onJobs && !status, count: divisionFiltered.length, onClick: () => goToView('client') },
     { key: 'buildings', label: 'Buildings', icon: HiOutlineBuildingOffice2, active: onBuildings, count: buildingRows.length, onClick: () => navigate('/buildings') },
-    { key: 'schedule', label: 'Schedule', icon: HiOutlineCalendarDays, active: onThisWeek, count: teams.length, onClick: () => navigate('/this-week') },
+    { key: 'schedule', label: 'Schedule', icon: HiOutlineCalendarDays, active: onThisWeek, count: technicians.length, onClick: () => navigate('/this-week') },
     { key: 'matrix', label: 'Month matrix', icon: HiOutlineTableCells, active: onMonthMatrix, count: divisionFiltered.length, onClick: () => navigate('/month-matrix') },
     { key: 'reviews', label: 'Report review', icon: HiOutlineClipboardDocumentCheck, active: onReportReview, count: counts.review, onClick: () => navigate('/report-review') },
   ];
