@@ -14,6 +14,7 @@ import type {
   JobRow,
   JobStatus,
   JobVisitSummary,
+  LocalInvoiceStatus,
   ReportReviewStatus,
   Schedule,
   ScheduleIntervalUnit,
@@ -93,6 +94,15 @@ interface SupabaseReport {
   sent_to_accounts_at: string | null;
 }
 
+interface SupabaseInvoice {
+  status: LocalInvoiceStatus;
+}
+
+interface SupabaseInvoiceLineItem {
+  invoice_id: string;
+  invoices: SupabaseInvoice | SupabaseInvoice[] | null;
+}
+
 interface SupabaseVisit {
   id: string;
   team_id: string | null;
@@ -102,6 +112,7 @@ interface SupabaseVisit {
   completed_at: string | null;
   teams: SupabaseTeam | SupabaseTeam[] | null;
   reports: SupabaseReport | SupabaseReport[] | null;
+  invoice_line_items: SupabaseInvoiceLineItem | SupabaseInvoiceLineItem[] | null;
 }
 
 export interface SupabaseJobRecord {
@@ -258,6 +269,8 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
     .sort((a, b) => (a.scheduled_date ?? '').localeCompare(b.scheduled_date ?? ''))
     .map((v) => {
       const report = one(v.reports);
+      const invoiceLineItem = one(v.invoice_line_items);
+      const invoice = invoiceLineItem ? one(invoiceLineItem.invoices) : null;
       return {
         id: v.id,
         scheduledDate: v.scheduled_date,
@@ -269,6 +282,8 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
         reportReviewStatus: report?.review_status ?? null,
         sentToClientAt: report?.sent_to_client_at ?? null,
         sentToAccountsAt: report?.sent_to_accounts_at ?? null,
+        invoiceId: invoiceLineItem?.invoice_id ?? null,
+        invoiceStatus: invoice?.status ?? null,
       };
     });
 

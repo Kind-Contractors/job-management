@@ -144,6 +144,9 @@ export type VisitStatus = 'due' | 'booked' | 'completed' | 'missed' | 'cancelled
 
 export type ReportReviewStatus = 'awaiting_review' | 'approved' | 'returned_for_correction';
 
+/** Local invoice lifecycle state (`invoices.status`) — independent of any Xero-side status. */
+export type LocalInvoiceStatus = 'draft' | 'sending' | 'sent' | 'failed';
+
 export interface JobVisitSummary {
   id: string;
   scheduledDate: string | null;
@@ -158,6 +161,14 @@ export interface JobVisitSummary {
   /** Mirrors the linked report's send timestamps — null until that report is actually sent. */
   sentToClientAt: string | null;
   sentToAccountsAt: string | null;
+  /**
+   * Non-null once this visit is linked to an invoice line item
+   * (invoice_line_items.visit_id is UNIQUE — at most one). This is the
+   * actual duplicate-invoicing guard: a visit with a non-null invoiceId
+   * must never be offered for selection into another invoice.
+   */
+  invoiceId: string | null;
+  invoiceStatus: LocalInvoiceStatus | null;
 }
 
 /**
@@ -285,4 +296,33 @@ export interface WeekVisit {
   teamId: string | null;
   scheduledDate: string | null;
   status: VisitStatus;
+}
+
+/** One line of an invoice — either backed by a real visit, or a manually-added line (visitId null). */
+export interface InvoiceLineItem {
+  id: string;
+  visitId: string | null;
+  description: string;
+  quantity: number;
+  unitAmount: number;
+}
+
+/**
+ * A real `invoices` row plus its line items — the draft-through-sent
+ * lifecycle for one Xero invoice. `status` is this app's own local
+ * lifecycle state, independent of anything Xero-side.
+ */
+export interface InvoiceDetail {
+  id: string;
+  jobId: string;
+  status: LocalInvoiceStatus;
+  /** Sent to Xero as the invoice DueDate — required by Xero, defaults to 30 days from creation, always editable before send. */
+  dueDate: string;
+  description: string | null;
+  worksOrderNumber: string | null;
+  xeroInvoiceId: string | null;
+  xeroInvoiceNumber: string | null;
+  lastError: string | null;
+  sentAt: string | null;
+  lineItems: InvoiceLineItem[];
 }

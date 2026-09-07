@@ -37,7 +37,8 @@ const JOB_SELECT = `
   visits (
     id, team_id, scheduled_date, status, price_charged, completed_at,
     teams ( id, name, is_active ),
-    reports ( id, review_status, sent_to_client_at, sent_to_accounts_at )
+    reports ( id, review_status, sent_to_client_at, sent_to_accounts_at ),
+    invoice_line_items ( invoice_id, invoices ( status ) )
   )
 `;
 

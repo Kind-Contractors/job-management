@@ -6,6 +6,21 @@ import { getVisitStatusPresentation, isVisitReadyForAccounts } from '../../lib/s
 import ReportPanel from './ReportPanel';
 import StatusPill from './StatusPill';
 
+function invoiceStatusLabel(status: JobVisitSummary['invoiceStatus']): string {
+  switch (status) {
+    case 'draft':
+      return 'drafted';
+    case 'sending':
+      return 'sending…';
+    case 'sent':
+      return 'sent';
+    case 'failed':
+      return 'failed';
+    default:
+      return '';
+  }
+}
+
 function nowLocalDateTime(): string {
   const d = new Date();
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
@@ -21,9 +36,23 @@ interface VisitRowProps {
   job: JobRow;
   visit: JobVisitSummary;
   actor: string;
+  /** True once this visit is approved and not yet linked to any invoice — see isVisitReadyForAccounts + JobVisitSummary.invoiceId. */
+  selectableForInvoice?: boolean;
+  selectedForInvoice?: boolean;
+  onToggleSelectForInvoice?: () => void;
+  /** Reopens the existing invoice's editor — never creates a new one. */
+  onOpenInvoice?: (invoiceId: string) => void;
 }
 
-export default function VisitRow({ job, visit, actor }: VisitRowProps) {
+export default function VisitRow({
+  job,
+  visit,
+  actor,
+  selectableForInvoice = false,
+  selectedForInvoice = false,
+  onToggleSelectForInvoice,
+  onOpenInvoice,
+}: VisitRowProps) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<'summary' | 'complete' | 'report'>('summary');
   const [price, setPrice] = useState(job.pricePerVisit != null ? String(job.pricePerVisit) : '');
@@ -57,12 +86,31 @@ export default function VisitRow({ job, visit, actor }: VisitRowProps) {
     <div className="border-b border-divider py-1.5 text-[12.5px]">
       <div className="flex items-center justify-between gap-3">
         <span className="flex items-center gap-1.5">
+          {selectableForInvoice && (
+            <input
+              type="checkbox"
+              checked={selectedForInvoice}
+              onChange={onToggleSelectForInvoice}
+              title="Select for invoicing"
+              className="cursor-pointer"
+            />
+          )}
           <StatusPill presentation={getVisitStatusPresentation(visit.status)} />
           {visit.teamName && <span className="text-neutral-500"> · {visit.teamName}</span>}
           {visit.priceCharged != null && (
             <span className="text-neutral-500"> · £{visit.priceCharged.toLocaleString('en-GB')}</span>
           )}
           {readyForAccounts && <span className="font-semibold text-teal-700"> · Ready for accounts</span>}
+          {visit.invoiceId && (
+            <button
+              onClick={() => onOpenInvoice?.(visit.invoiceId!)}
+              title="Reopen this invoice"
+              className="cursor-pointer font-semibold text-neutral-500 hover:text-teal-700 hover:underline"
+            >
+              {' '}
+              · Invoice {invoiceStatusLabel(visit.invoiceStatus)}
+            </button>
+          )}
         </span>
         <span className="tabular-nums text-neutral-600">{dateLabel}</span>
       </div>
