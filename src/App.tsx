@@ -10,6 +10,11 @@ import BuildingFilePage from './pages/BuildingFilePage';
 import ThisWeekPage from './pages/ThisWeekPage';
 import MonthMatrixPage from './pages/MonthMatrixPage';
 import ReportReviewPage from './pages/ReportReviewPage';
+import TechnicianShell from './technician/TechnicianShell';
+import DayViewPage from './technician/DayViewPage';
+import JobFilePage from './technician/JobFilePage';
+import JobReportPage from './technician/JobReportPage';
+import CompletedPage from './technician/CompletedPage';
 
 function AuthLoadingScreen() {
   return (
@@ -22,12 +27,27 @@ function AuthLoadingScreen() {
 }
 
 export default function App() {
-  const { status } = useAuth();
+  const { status, role } = useAuth();
 
   if (status === 'loading') return <AuthLoadingScreen />;
   if (status === 'signed_out') return <LoginPage />;
   if (status === 'unauthorized') return <UnauthorizedPage />;
   if (status === 'check_failed') return <AuthCheckFailedPage />;
+
+  if (role === 'technician') {
+    return (
+      <Routes>
+        <Route element={<TechnicianShell />}>
+          <Route index element={<DayViewPage />} />
+          <Route path="/technician" element={<DayViewPage />} />
+          <Route path="/technician/visits/:visitId" element={<JobFilePage />} />
+          <Route path="/technician/visits/:visitId/report" element={<JobReportPage />} />
+          <Route path="/technician/visits/:visitId/completed" element={<CompletedPage />} />
+          <Route path="*" element={<Navigate to="/technician" replace />} />
+        </Route>
+      </Routes>
+    );
+  }
 
   return (
     <Routes>

@@ -3,14 +3,70 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   approveReport,
   getReport,
+  listPhotosForReport,
   resubmitReport,
   returnReportForCorrection,
   sendReportToAccounts,
   sendReportToClient,
   updateReport,
+  type ReportPhoto,
 } from '../../repository/reportsRepository';
+import { supabase } from '../../lib/supabaseClient';
 import { getReportReviewStatusPresentation } from '../../lib/statusPresentation';
 import StatusPill from './StatusPill';
+
+const PHOTO_PHASE_LABEL: Record<ReportPhoto['phase'], string> = { before: 'Before', during: 'During', after: 'After' };
+
+/** Signed URLs for a private bucket — one per photo, 1 hour expiry, refetched whenever the photo list changes. */
+async function signPhotoUrls(photos: ReportPhoto[]): Promise<Record<string, string>> {
+  const entries = await Promise.all(
+    photos.map(async (p) => {
+      const { data } = await supabase.storage.from('visit-photos').createSignedUrl(p.storagePath, 3600);
+      return [p.id, data?.signedUrl ?? ''] as const;
+    }),
+  );
+  return Object.fromEntries(entries);
+}
+
+function ReportPhotos({ reportId }: { reportId: string }) {
+  const { data: photos = [] } = useQuery({ queryKey: ['reportPhotos', reportId], queryFn: () => listPhotosForReport(reportId) });
+  const { data: urls = {} } = useQuery({
+    queryKey: ['reportPhotoUrls', reportId, photos.map((p) => p.id).join(',')],
+    queryFn: () => signPhotoUrls(photos),
+    enabled: photos.length > 0,
+  });
+
+  if (photos.length === 0) {
+    return <div className="text-[11.5px] text-neutral-500">No photos on this visit yet.</div>;
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {(['before', 'during', 'after'] as const).map((phase) => {
+        const phasePhotos = photos.filter((p) => p.phase === phase);
+        if (phasePhotos.length === 0) return null;
+        return (
+          <div key={phase}>
+            <div className="mb-1 font-heading text-[9.5px] font-semibold tracking-[0.1em] text-neutral-500 uppercase">
+              {PHOTO_PHASE_LABEL[phase]} ({phasePhotos.length})
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {phasePhotos.map((p) =>
+                urls[p.id] ? (
+                  <a key={p.id} href={urls[p.id]} target="_blank" rel="noreferrer">
+                    <img src={urls[p.id]} alt="" className="h-16 w-16 border border-neutral-300 object-cover" />
+                  </a>
+                ) : (
+                  <div key={p.id} className="h-16 w-16 animate-shimmer border border-neutral-300 bg-neutral-200" />
+                ),
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export interface ReportPanelProps {
   reportId: string;
@@ -104,6 +160,11 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
               Returned: {report.returnReason}
             </div>
           )}
+
+          <div>
+            <div className="mb-1 font-heading text-[10.5px] font-semibold tracking-[0.09em] text-neutral-700 uppercase">Photos</div>
+            <ReportPhotos reportId={reportId} />
+          </div>
 
           <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
             Work carried out

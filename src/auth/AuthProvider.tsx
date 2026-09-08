@@ -12,13 +12,18 @@ import { supabase } from '../lib/supabaseClient';
 /**
  * 'check_failed' is distinct from 'unauthorized': it means the app_users
  * lookup itself errored (a real Supabase/network problem), never that the
- * lookup succeeded and said "not a manager." It's exactly as blocked as
+ * lookup succeeded and said "not authorized." It's exactly as blocked as
  * 'unauthorized' — see App.tsx — just with different copy and a retry.
  */
 export type AuthStatus = 'loading' | 'signed_out' | 'unauthorized' | 'check_failed' | 'authorized';
 
+/** `app_users.role` — the only two values the DB's own CHECK constraint allows. */
+export type AppRole = 'manager' | 'technician';
+
 interface AuthContextValue {
   status: AuthStatus;
+  /** Non-null only when status === 'authorized'. Lets App.tsx route to the Manager tree vs. the technician tree — the two never share a route or component. */
+  role: AppRole | null;
   session: Session | null;
   signOut: () => Promise<void>;
   /** Re-runs the app_users lookup for the current session — for the 'check_failed' screen's "Try again". */
@@ -27,21 +32,31 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+interface AuthorizationResult {
+  status: 'authorized' | 'unauthorized' | 'check_failed';
+  role: AppRole | null;
+}
+
 /**
- * The one place the manager/authorization decision is made, so the mount
- * effect and recheck() can never disagree about what counts as
- * 'authorized' — the condition itself (data?.is_active && data.role ===
- * 'manager') is unchanged from before 'check_failed' existed.
+ * The one place the authorization decision is made, so the mount effect and
+ * recheck() can never disagree about what counts as 'authorized'. Both
+ * 'manager' and 'technician' are valid authorized roles — the condition is
+ * unchanged for 'manager' (data?.is_active && role === 'manager'), widened
+ * only to also accept 'technician' the same way.
  */
-async function checkAuthorization(userId: string): Promise<'authorized' | 'unauthorized' | 'check_failed'> {
+async function checkAuthorization(userId: string): Promise<AuthorizationResult> {
   const { data, error } = await supabase.from('app_users').select('role, is_active').eq('id', userId).maybeSingle();
-  if (error) return 'check_failed';
-  return data?.is_active && data.role === 'manager' ? 'authorized' : 'unauthorized';
+  if (error) return { status: 'check_failed', role: null };
+  if (data?.is_active && (data.role === 'manager' || data.role === 'technician')) {
+    return { status: 'authorized', role: data.role };
+  }
+  return { status: 'unauthorized', role: null };
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [status, setStatus] = useState<AuthStatus>('loading');
+  const [role, setRole] = useState<AppRole | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -51,6 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!cancelled) {
           setSession(null);
           setStatus('signed_out');
+          setRole(null);
         }
         return;
       }
@@ -59,7 +75,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (cancelled) return;
       setSession(nextSession);
-      setStatus(result);
+      setStatus(result.status);
+      setRole(result.role);
     }
 
     supabase.auth.getSession().then(({ data }) => resolve(data.session));
@@ -103,10 +120,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const recheck = () => {
     if (!session) return;
     setStatus('loading');
-    checkAuthorization(session.user.id).then(setStatus);
+    checkAuthorization(session.user.id).then((result) => {
+      setStatus(result.status);
+      setRole(result.role);
+    });
   };
 
-  return <AuthContext.Provider value={{ status, session, signOut, recheck }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ status, role, session, signOut, recheck }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {

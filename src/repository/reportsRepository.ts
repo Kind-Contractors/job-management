@@ -102,6 +102,37 @@ export async function getReport(reportId: string): Promise<ReportDetail> {
   return mapReport(data as unknown as SupabaseReportRow);
 }
 
+export interface ReportPhoto {
+  id: string;
+  phase: 'before' | 'during' | 'after';
+  storagePath: string;
+  uploadStatus: 'pending' | 'uploaded' | 'failed';
+}
+
+/**
+ * Real photos for a report — [] for any report with none (the common case
+ * for a manager-created report today; technician-submitted reports always
+ * have at least one, per technician_submit_report()'s own requirement).
+ * Manager already has full table access (manager_full_access); this is a
+ * plain read, no new RLS/migration needed.
+ */
+export async function listPhotosForReport(reportId: string): Promise<ReportPhoto[]> {
+  const { data, error } = await supabase
+    .from('photos')
+    .select('id, phase, storage_path, upload_status')
+    .eq('report_id', reportId)
+    .order('phase');
+
+  if (error) throw new Error(`Failed to load photos: ${error.message}`);
+
+  return (data ?? []).map((row) => ({
+    id: row.id,
+    phase: row.phase,
+    storagePath: row.storage_path,
+    uploadStatus: row.upload_status,
+  }));
+}
+
 export interface CreateReportInput {
   workCarriedOut: string | null;
   technicianNotes: string | null;
