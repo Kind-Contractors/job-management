@@ -1,25 +1,43 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { jobTypeLabel, listNeedsCorrection, listTodayVisits, type TechnicianCorrectionSummary, type TechnicianVisitSummary } from './api';
+import {
+  jobTypeLabel,
+  listNeedsCorrection,
+  listTodayVisits,
+  listUpcomingVisits,
+  type TechnicianCorrectionSummary,
+  type TechnicianVisitSummary,
+} from './api';
 
 type Tab = 'today' | 'upcoming' | 'returned';
+
+const UPCOMING_DATE_FORMAT = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 
 /**
  * The next stop is the only one that carries visual weight (per the
  * technician flow PDF's own stated rule) — every other incomplete stop
  * stays neutral. `isNext` is true only for the first non-completed visit in
  * the (already office-ordered) list; done stops fade regardless of position.
+ *
+ * `dateLabel`, when given (the Upcoming tab only), replaces the numbered
+ * stop-order circle with a plain date badge instead — Upcoming spans many
+ * different days, so a "1/2/3" sequence badge would wrongly imply an
+ * office-set running order the way it genuinely does within a single day
+ * on Today. No reordering affordance exists here or anywhere else in this
+ * list; it's read-only, chronological, server-sorted.
  */
 function StopRow({
   visit,
   index,
   isNext,
+  dateLabel,
   onSelect,
 }: {
   visit: TechnicianVisitSummary;
   index: number;
   isNext: boolean;
+  dateLabel?: string;
   onSelect: () => void;
 }) {
   const done = visit.status === 'completed' || visit.reportSubmitted;
@@ -30,13 +48,19 @@ function StopRow({
         done ? 'border-l-transparent bg-white opacity-50' : isNext ? 'border-l-teal bg-teal-100' : 'border-l-transparent bg-white'
       }`}
     >
-      <span
-        className={`flex h-6 w-6 flex-none items-center justify-center rounded-full font-heading text-[11px] font-semibold ${
-          done ? 'bg-neutral-300 text-neutral-600' : isNext ? 'bg-teal text-white' : 'border border-neutral-400 text-neutral-600'
-        }`}
-      >
-        {done ? '✓' : index + 1}
-      </span>
+      {dateLabel ? (
+        <span className="flex h-10 w-12 flex-none flex-col items-center justify-center border border-neutral-300 font-heading text-[10px] font-semibold text-neutral-600 uppercase">
+          {dateLabel}
+        </span>
+      ) : (
+        <span
+          className={`flex h-6 w-6 flex-none items-center justify-center rounded-full font-heading text-[11px] font-semibold ${
+            done ? 'bg-neutral-300 text-neutral-600' : isNext ? 'bg-teal text-white' : 'border border-neutral-400 text-neutral-600'
+          }`}
+        >
+          {done ? '✓' : index + 1}
+        </span>
+      )}
       <div className="min-w-0 flex-1">
         {isNext && (
           <div className="mb-0.5 font-heading text-[9.5px] font-semibold tracking-[0.13em] text-teal-700 uppercase">Next stop</div>
@@ -85,6 +109,16 @@ export default function DayViewPage() {
   const { data: needsCorrection = [], isLoading: correctionLoading, isError: correctionError } = useQuery({
     queryKey: ['technician', 'needsCorrection'],
     queryFn: listNeedsCorrection,
+  });
+  const {
+    data: upcomingVisits = [],
+    isLoading: upcomingLoading,
+    isError: upcomingError,
+    error: upcomingErrorObj,
+  } = useQuery({
+    queryKey: ['technician', 'upcomingVisits'],
+    queryFn: listUpcomingVisits,
+    enabled: tab === 'upcoming',
   });
 
   const doneCount = visits.filter((v) => v.status === 'completed' || v.reportSubmitted).length;
@@ -146,14 +180,45 @@ export default function DayViewPage() {
             </div>
           ))}
 
-        {tab === 'upcoming' && (
-          <div className="p-4">
-            <div className="border border-neutral-300 bg-white px-5 py-10 text-center">
-              <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">Not built yet</div>
-              <div className="mt-1.5 text-[13px] text-neutral-600">This view isn't available yet.</div>
+        {tab === 'upcoming' &&
+          (upcomingLoading ? (
+            <div className="p-4">
+              <div className="font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">Loading…</div>
             </div>
-          </div>
-        )}
+          ) : upcomingError ? (
+            <div className="p-4">
+              <div className="border border-missed bg-missed/10 p-4">
+                <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-missed-fg uppercase">
+                  Couldn't load upcoming visits
+                </div>
+                <div className="mt-1.5 text-[13px] text-ink">
+                  {upcomingErrorObj instanceof Error ? upcomingErrorObj.message : 'Something went wrong.'}
+                </div>
+              </div>
+            </div>
+          ) : upcomingVisits.length === 0 ? (
+            <div className="p-4">
+              <div className="border border-neutral-300 bg-white px-5 py-10 text-center">
+                <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
+                  Nothing scheduled yet
+                </div>
+                <div className="mt-1.5 text-[13px] text-neutral-600">No future visits assigned to you at the moment.</div>
+              </div>
+            </div>
+          ) : (
+            <div>
+              {upcomingVisits.map((visit, index) => (
+                <StopRow
+                  key={visit.visitId}
+                  visit={visit}
+                  index={index}
+                  isNext={false}
+                  dateLabel={UPCOMING_DATE_FORMAT.format(new Date(`${visit.scheduledDate}T00:00:00`))}
+                  onSelect={() => navigate(`/technician/visits/${visit.visitId}`)}
+                />
+              ))}
+            </div>
+          ))}
 
         {tab === 'returned' &&
           (correctionLoading ? (

@@ -82,6 +82,30 @@ export async function listTodayVisits(): Promise<TechnicianVisitSummary[]> {
   }));
 }
 
+/**
+ * This technician's own future-scheduled visits (scheduled_date strictly
+ * after today), soonest first — see technician_upcoming_visits(). Same
+ * technician-safe column set and ownership check as listTodayVisits();
+ * only the date condition and sort differ.
+ */
+export async function listUpcomingVisits(): Promise<TechnicianVisitSummary[]> {
+  const { data, error } = await supabase.rpc('technician_upcoming_visits');
+  if (error) throw new Error(`Failed to load upcoming visits: ${error.message}`);
+
+  return ((data ?? []) as RpcTodayVisitRow[]).map((row) => ({
+    visitId: row.visit_id,
+    scheduledDate: row.scheduled_date,
+    status: row.visit_status,
+    jobId: row.job_id,
+    jobSummary: row.job_summary,
+    jobType: row.job_type,
+    buildingName: row.building_name,
+    buildingAddress: row.building_address,
+    buildingPostcode: row.building_postcode,
+    reportSubmitted: row.report_submitted,
+  }));
+}
+
 export interface TechnicianVisitDetail {
   visitId: string;
   scheduledDate: string;

@@ -60,6 +60,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    // Effect-scoped (not React state) so the onAuthStateChange closure below
+    // always reads the LATEST known user/status, never a stale value from
+    // when the effect first ran — updated synchronously alongside every
+    // corresponding setSession/setStatus call.
+    let currentUserId: string | null = null;
+    let currentStatus: AuthStatus = 'loading';
 
     async function resolve(nextSession: Session | null) {
       if (!nextSession) {
@@ -67,6 +73,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setSession(null);
           setStatus('signed_out');
           setRole(null);
+          currentUserId = null;
+          currentStatus = 'signed_out';
         }
         return;
       }
@@ -77,32 +85,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(nextSession);
       setStatus(result.status);
       setRole(result.role);
+      currentUserId = nextSession.user.id;
+      currentStatus = result.status;
     }
 
     supabase.auth.getSession().then(({ data }) => resolve(data.session));
 
-    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
-      // TOKEN_REFRESHED is a routine, same-user event — notably, Supabase's
-      // own client checks/refreshes the session on tab-visibility change, so
-      // simply switching back to this tab fires it. Treating every event
-      // here identically (the previous behavior) sent the whole app through
-      // 'loading' — a full-screen wipe via App.tsx's AuthLoadingScreen — and
-      // re-ran the app_users authorization lookup from scratch, for a token
-      // refresh that changes nothing about who's signed in or their manager
-      // status. That round-trip through 'loading' was the "the app reloads
-      // when I come back to the tab" symptom — not a real reload, no
-      // navigation ever happened, and not a TanStack Query refetch (nothing
-      // here shows a loading UI on a background refetch). Update the
-      // session in place instead, and skip the loading flash and the
-      // redundant DB round-trip entirely. Every other event (SIGNED_IN,
-      // SIGNED_OUT, USER_UPDATED, etc.) still goes through the full,
-      // unchanged resolve() flow — this only narrows the one case that was
-      // never a meaningful authorization change to begin with.
-      if (event === 'TOKEN_REFRESHED') {
-        if (nextSession) setSession(nextSession);
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      // Supabase's own client re-validates the session whenever the tab
+      // regains visibility (GoTrueClient's _onVisibilityChanged ->
+      // _recoverAndRefresh) — confirmed directly from the installed
+      // @supabase/auth-js source. If the token is close to expiring this
+      // fires TOKEN_REFRESHED; the FAR more common case (you switched tabs
+      // for a minute, the token is nowhere near expiry) fires SIGNED_IN
+      // instead, with the exact same session. Treating every event here
+      // identically sends the whole app through 'loading' — a full-screen
+      // wipe via App.tsx's AuthLoadingScreen, unmounting and remounting
+      // every page (resetting Schedule's week/month offset, open drawers,
+      // Users' active tab/search, everything) — for a re-notification that
+      // changes nothing about who's signed in or their manager/technician
+      // status. That round-trip was the "the app reloads when I come back
+      // to the tab" symptom — not a real reload, no navigation ever
+      // happened, and not a TanStack Query refetch. A previous fix here
+      // special-cased only TOKEN_REFRESHED, which misses this same-user
+      // SIGNED_IN case entirely. The correct condition is "same user we've
+      // already resolved," regardless of which event name reports it:
+      // update the session object in place and skip both the loading flash
+      // and the redundant app_users round-trip. A genuine identity change —
+      // a different user signing in, or signing out (nextSession null) —
+      // still goes through the full resolve() flow below, unchanged.
+      const sameUserAlreadyResolved = !!nextSession && nextSession.user.id === currentUserId && currentStatus !== 'loading';
+      if (sameUserAlreadyResolved) {
+        setSession(nextSession);
         return;
       }
       setStatus('loading');
+      currentStatus = 'loading';
       resolve(nextSession);
     });
 
