@@ -10,7 +10,7 @@ import type { Technician, WeekVisit } from '../domain/types';
 import { supabase } from '../lib/supabaseClient';
 
 export async function listTechnicians(): Promise<Technician[]> {
-  const { data, error } = await supabase.from('technicians').select('id, name, is_active, notes');
+  const { data, error } = await supabase.from('technicians').select('id, name, is_active, notes, app_user_id');
 
   if (error) {
     throw new Error(`Failed to load technicians: ${error.message}`);
@@ -21,6 +21,7 @@ export async function listTechnicians(): Promise<Technician[]> {
     name: row.name,
     isActive: row.is_active,
     notes: row.notes,
+    appUserId: row.app_user_id,
   }));
 }
 
@@ -55,14 +56,14 @@ export async function createTechnician(name: string, notes?: string | null): Pro
   const { data, error } = await supabase
     .from('technicians')
     .insert({ name, notes: notes ?? null })
-    .select('id, name, is_active, notes')
+    .select('id, name, is_active, notes, app_user_id')
     .single();
 
   if (error) {
     throw new Error(`Failed to create technician: ${error.message}`);
   }
 
-  return { id: data.id, name: data.name, isActive: data.is_active, notes: data.notes };
+  return { id: data.id, name: data.name, isActive: data.is_active, notes: data.notes, appUserId: data.app_user_id };
 }
 
 /** Deactivate/reactivate a technician — never delete (jobs/visits reference it with ON DELETE RESTRICT). */
@@ -94,5 +95,24 @@ export async function createVisit(jobId: string, technicianId: string | null, sc
 
   if (error) {
     throw new Error(`Failed to book visit: ${error.message}`);
+  }
+}
+
+/**
+ * Reschedules an EXISTING visit to a new date — a plain update against its
+ * own row (by id), never an insert. Used by dragging an already-booked
+ * chip from one calendar day to another. Deliberately touches only
+ * scheduled_date: technician_id, job_id, status, price_charged, and every
+ * other field are left exactly as they are, so the assigned technician and
+ * all job/building data stay unchanged, per the calendar's own drag-to-
+ * reschedule requirement. Never call this for a job with no existing
+ * visit — that's createVisit's job (a genuinely new booking), not this
+ * one's.
+ */
+export async function rescheduleVisit(visitId: string, scheduledDate: string): Promise<void> {
+  const { error } = await supabase.from('visits').update({ scheduled_date: scheduledDate }).eq('id', visitId);
+
+  if (error) {
+    throw new Error(`Failed to reschedule visit: ${error.message}`);
   }
 }

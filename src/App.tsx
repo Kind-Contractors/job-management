@@ -10,6 +10,7 @@ import BuildingFilePage from './pages/BuildingFilePage';
 import ThisWeekPage from './pages/ThisWeekPage';
 import MonthMatrixPage from './pages/MonthMatrixPage';
 import ReportReviewPage from './pages/ReportReviewPage';
+import UsersPage from './pages/UsersPage';
 import TechnicianShell from './technician/TechnicianShell';
 import DayViewPage from './technician/DayViewPage';
 import JobFilePage from './technician/JobFilePage';
@@ -59,6 +60,7 @@ export default function App() {
         <Route path="/this-week" element={<ThisWeekPage />} />
         <Route path="/month-matrix" element={<MonthMatrixPage />} />
         <Route path="/report-review" element={<ReportReviewPage />} />
+        <Route path="/users" element={<UsersPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/jobs" replace />} />
     </Routes>

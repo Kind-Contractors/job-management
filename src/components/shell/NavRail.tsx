@@ -13,11 +13,13 @@ import {
   HiOutlineExclamationTriangle,
   HiOutlinePhoto,
   HiOutlineTableCells,
+  HiOutlineUsers,
   HiOutlineXCircle,
 } from 'react-icons/hi2';
 import { listJobRows } from '../../repository/jobsRepository';
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import { listTechnicians } from '../../repository/techniciansRepository';
+import { listUsers } from '../../repository/usersRepository';
 import { isVisitReadyForAccounts } from '../../lib/statusPresentation';
 
 type AttentionKey = 'review' | 'needs_booking' | 'overdue' | 'missed';
@@ -101,6 +103,7 @@ export default function NavRail() {
   const { data: jobRows = [] } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
   const { data: buildingRows = [] } = useQuery({ queryKey: ['buildingRows'], queryFn: listBuildingRows });
   const { data: technicians = [] } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
+  const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: listUsers });
 
   const status = searchParams.get('status');
   const division = searchParams.get('division') ?? 'Both';
@@ -109,6 +112,7 @@ export default function NavRail() {
   const onThisWeek = pathname === '/this-week';
   const onMonthMatrix = pathname === '/month-matrix';
   const onReportReview = pathname === '/report-review';
+  const onUsers = pathname === '/users';
 
   const divisionFiltered = jobRows.filter((j) => division === 'Both' || j.division === division);
 
@@ -169,6 +173,7 @@ export default function NavRail() {
     { key: 'schedule', label: 'Schedule', icon: HiOutlineCalendarDays, active: onThisWeek, count: technicians.length, onClick: () => navigate('/this-week') },
     { key: 'matrix', label: 'Month matrix', icon: HiOutlineTableCells, active: onMonthMatrix, count: divisionFiltered.length, onClick: () => navigate('/month-matrix') },
     { key: 'reviews', label: 'Report review', icon: HiOutlineClipboardDocumentCheck, active: onReportReview, count: counts.review, onClick: () => navigate('/report-review') },
+    { key: 'users', label: 'Users', icon: HiOutlineUsers, active: onUsers, count: users.filter((u) => u.isActive).length, onClick: () => navigate('/users') },
   ];
 
   return (

@@ -1,14 +1,25 @@
-import { Fragment, useMemo, useState, type DragEvent } from 'react';
+import { useMemo, useState, type DragEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { createTechnician, createVisit, listTechnicians, listVisitsForRange, setTechnicianActive } from '../repository/techniciansRepository';
+import {
+  createTechnician,
+  createVisit,
+  listTechnicians,
+  listVisitsForRange,
+  rescheduleVisit,
+  setTechnicianActive,
+} from '../repository/techniciansRepository';
 import { listJobRows } from '../repository/jobsRepository';
+import { setUserActive } from '../repository/usersRepository';
 import type { JobRow, WeekVisit } from '../domain/types';
 import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
 import MonthGrid, { type MonthGridDay } from '../components/calendar/MonthGrid';
+import ScheduleTechnicianGrid from '../components/calendar/ScheduleTechnicianGrid';
+import ScheduleDayDrawer from '../components/calendar/ScheduleDayDrawer';
+import ScheduleHeader from '../components/calendar/ScheduleHeader';
+import ScheduleToolbar from '../components/calendar/ScheduleToolbar';
 
 const DAY_LABEL = new Intl.DateTimeFormat('en-GB', { weekday: 'short' });
-const DAY_NUM = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' });
 const RANGE_FORMAT = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 const MONTH_LABEL_FORMAT = new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric' });
 
@@ -18,11 +29,6 @@ const MONTH_LABEL_FORMAT = new Intl.DateTimeFormat('en-GB', { month: 'long', yea
  * a job is actually due, only that nothing has ever been booked for it. See
  * the Calendar plan's §3.3 for the full rationale.
  */
-const DUE_GROUPS: { key: 'overdue' | 'unscheduled'; label: string; emptyLabel: string }[] = [
-  { key: 'overdue', label: 'Overdue', emptyLabel: 'Nothing overdue' },
-  { key: 'unscheduled', label: 'Needs booking', emptyLabel: 'Nothing waiting' },
-];
-
 const VISIT_STATUS_STYLE: Record<WeekVisit['status'], string> = {
   due: 'border-neutral-400 bg-neutral-200 text-neutral-700',
   booked: 'border-teal bg-teal-100 text-teal-700',
@@ -96,16 +102,18 @@ function workWeek(weekOffset: number): Date[] {
 }
 
 export default function ThisWeekPage() {
-  const [mode, setMode] = useState<'week' | 'month' | 'day'>('week');
+  const [mode, setMode] = useState<'day' | 'week' | 'month'>('week');
   const [weekOffset, setWeekOffset] = useState(0);
   const [monthOffset, setMonthOffset] = useState(0);
   const [dayOffset, setDayOffset] = useState(0);
+  const [manageTechniciansOpen, setManageTechniciansOpen] = useState(false);
   const [newTechnicianName, setNewTechnicianName] = useState('');
   const [bookingError, setBookingError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [pendingDrop, setPendingDrop] = useState<{ jobId: string; date: string } | null>(null);
   const [pendingTechnicianId, setPendingTechnicianId] = useState('');
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const queryClient = useQueryClient();
   const days = useMemo(() => workWeek(weekOffset), [weekOffset]);
@@ -125,11 +133,71 @@ export default function ThisWeekPage() {
     return d;
   }, [dayOffset]);
   const dayISO = toISODate(dayViewDate);
-  const displayDays = mode === 'day' ? [dayViewDate] : days;
+  const technicianDisplayDays = mode === 'day' ? [dayViewDate] : days;
   const rangeStartDate = mode === 'month' ? monthStartDate : mode === 'day' ? dayISO : startDate;
   const rangeEndDate = mode === 'month' ? monthEndDate : mode === 'day' ? dayISO : endDate;
   const todayISO = toISODate(new Date());
+  /** Division has one home — the left rail's control (NavRail.tsx). This page only ever reads the shared URL param, never renders its own toggle for it (tried and removed per feedback). */
   const division = searchParams.get('division') ?? 'Both';
+  const q = (searchParams.get('q') ?? '').trim().toLowerCase();
+
+  const dateRangeLabel =
+    mode === 'month'
+      ? MONTH_LABEL_FORMAT.format(monthAnchorDate)
+      : mode === 'day'
+        ? `${DAY_LABEL.format(dayViewDate)} ${RANGE_FORMAT.format(dayViewDate)}`
+        : `${RANGE_FORMAT.format(days[0])} – ${RANGE_FORMAT.format(days[days.length - 1])}`;
+  const isAtToday = mode === 'month' ? monthOffset === 0 : mode === 'day' ? dayOffset === 0 : weekOffset === 0;
+  const datePickerValue = mode === 'month' ? toISODate(monthAnchorDate) : mode === 'day' ? dayISO : startDate;
+
+  const setQuery = (value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set('q', value);
+    else next.delete('q');
+    setSearchParams(next, { replace: true });
+  };
+
+  const handlePrev = () => {
+    if (mode === 'month') setMonthOffset((m) => m - 1);
+    else if (mode === 'day') setDayOffset((d) => d - 1);
+    else setWeekOffset((w) => w - 1);
+  };
+  const handleNext = () => {
+    if (mode === 'month') setMonthOffset((m) => m + 1);
+    else if (mode === 'day') setDayOffset((d) => d + 1);
+    else setWeekOffset((w) => w + 1);
+  };
+  const handleToday = () => {
+    if (mode === 'month') setMonthOffset(0);
+    else if (mode === 'day') setDayOffset(0);
+    else setWeekOffset(0);
+  };
+
+  /** Jumps the current mode's own offset to an arbitrary picked date — never mixes offsets across modes (picking a date in Month mode only ever changes monthOffset, etc.). */
+  const handleDatePick = (value: string) => {
+    if (!value) return;
+    const picked = new Date(`${value}T00:00:00`);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (mode === 'day') {
+      setDayOffset(Math.round((picked.getTime() - today.getTime()) / 86400000));
+      return;
+    }
+
+    const mondayOf = (d: Date) => {
+      const monday = new Date(d);
+      const dow = d.getDay();
+      monday.setDate(d.getDate() + (dow === 0 ? -6 : 1 - dow));
+      return monday;
+    };
+
+    if (mode === 'week') {
+      setWeekOffset(Math.round((mondayOf(picked).getTime() - mondayOf(today).getTime()) / (7 * 86400000)));
+    } else {
+      setMonthOffset((picked.getFullYear() - today.getFullYear()) * 12 + (picked.getMonth() - today.getMonth()));
+    }
+  };
 
   const {
     data: technicians = [],
@@ -166,6 +234,26 @@ export default function ThisWeekPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['technicians'] }),
   });
 
+  /**
+   * A technician linked to a real login (technician.appUserId set — created
+   * via the Users screen) must be activated/deactivated through the same
+   * admin-users Edge Function the Users screen itself uses, which keeps
+   * BOTH technicians.is_active and that login's own app_users.is_active in
+   * sync. Reusing plain setTechnicianActive for a linked technician would
+   * silently desync them: a manager's client-side session has no write
+   * access to another user's app_users row at all (only self_select RLS),
+   * so the login side would never actually change, and the person would
+   * become invisible/stuck on the Users screen despite Schedule showing
+   * them as active — exactly the bug this fixes.
+   */
+  const setLinkedUserActiveMutation = useMutation({
+    mutationFn: ({ appUserId, isActive }: { appUserId: string; isActive: boolean }) => setUserActive(appUserId, isActive),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['technicians'] });
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+  });
+
   const bookMutation = useMutation({
     mutationFn: ({ jobId, technicianId, date }: { jobId: string; technicianId: string; date: string }) =>
       createVisit(jobId, technicianId, date),
@@ -179,12 +267,37 @@ export default function ThisWeekPage() {
     onError: (err) => setBookingError(err instanceof Error ? err.message : 'Failed to book visit.'),
   });
 
+  /**
+   * Reschedules an already-booked visit to a new date (dragged from one
+   * calendar day to another) — updates the same visit row by id via
+   * rescheduleVisit(), never createVisit(), so this can never create a
+   * duplicate. Reuses the exact same ['jobRows']/['visits'] invalidation as
+   * every other booking mutation, so Month Matrix, All Live Jobs, and the
+   * technician app's Today/Upcoming all pick up the new date the same way
+   * they already pick up a brand-new booking.
+   */
+  const rescheduleMutation = useMutation({
+    mutationFn: ({ visitId, date }: { visitId: string; date: string }) => rescheduleVisit(visitId, date),
+    onSuccess: () => {
+      setBookingError(null);
+      queryClient.invalidateQueries({ queryKey: ['jobRows'] });
+      queryClient.invalidateQueries({ queryKey: ['visits'] });
+    },
+    onError: (err) => setBookingError(err instanceof Error ? err.message : 'Failed to reschedule visit.'),
+  });
+
   const activeTechnicians = useMemo(() => technicians.filter((t) => t.isActive), [technicians]);
 
   const handleDropJob = (jobId: string, date: string) => {
     setBookingError(null);
     setPendingTechnicianId('');
     setPendingDrop({ jobId, date });
+  };
+
+  /** Immediate — unlike a brand-new booking, a reschedule never needs a technician picked (it keeps its existing one), so there's no pending-confirmation step here. */
+  const handleRescheduleVisit = (visitId: string, date: string) => {
+    setBookingError(null);
+    rescheduleMutation.mutate({ visitId, date });
   };
 
   const handleConfirmBooking = () => {
@@ -198,6 +311,19 @@ export default function ThisWeekPage() {
   };
 
   const jobById = useMemo(() => new Map(jobRows.map((j) => [j.id, j])), [jobRows]);
+  const technicianById = useMemo(() => new Map(technicians.map((t) => [t.id, t])), [technicians]);
+
+  /** Search and Division narrow what's rendered on the calendar itself only — the day drawer always shows a day's complete, unfiltered bookings, since these are viewing aids for the grid, not a claim that other bookings don't exist. */
+  const displayVisits = useMemo(() => {
+    return visits.filter((v) => {
+      const job = jobById.get(v.jobId);
+      if (division !== 'Both' && job?.division !== division) return false;
+      if (!q) return true;
+      const technician = v.technicianId ? technicianById.get(v.technicianId) : undefined;
+      const haystack = `${job?.buildingName ?? ''} ${job?.jobSummary ?? ''} ${technician?.name ?? ''}`.toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [visits, q, division, jobById, technicianById]);
 
   const divisionFilteredJobs = useMemo(
     () => jobRows.filter((j) => division === 'Both' || j.division === division),
@@ -218,8 +344,30 @@ export default function ThisWeekPage() {
     [divisionFilteredJobs],
   );
 
+  /** The day drawer and JobInspectorDrawer are mutually exclusive — opening one always closes the other, mirroring the existing selectedJobId/creatingJob split in BuildingFilePage.tsx. */
+  const openDay = (dateISO: string) => {
+    setSelectedJobId(null);
+    setSelectedDate(dateISO);
+  };
+  const openJob = (jobId: string) => {
+    setSelectedDate(null);
+    setSelectedJobId(jobId);
+  };
+
   const handleDrop = (technicianId: string, dateISO: string) => (e: DragEvent) => {
     e.preventDefault();
+    // An already-booked chip carries its visit id under this dedicated mime
+    // type (set by the chip's own onDragStart in ScheduleTechnicianGrid) —
+    // checked first so dropping it reschedules the SAME visit rather than
+    // falling through and creating a new one. Deliberately ignores
+    // `technicianId` (which row/day it was dropped on) for this path — the
+    // visit's own assigned technician is left exactly as it was, per the
+    // reschedule requirement; only the date changes.
+    const visitId = e.dataTransfer.getData('application/x-visit-id');
+    if (visitId) {
+      handleRescheduleVisit(visitId, dateISO);
+      return;
+    }
     const jobId = e.dataTransfer.getData('text/plain');
     if (!jobId) return;
     bookMutation.mutate({ jobId, technicianId, date: dateISO });
@@ -234,288 +382,155 @@ export default function ThisWeekPage() {
 
   return (
     <div className="flex min-h-0 flex-1">
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex flex-none items-end gap-3.5 px-5 pt-4 pb-3">
-        <div>
-          <h1 className="font-heading text-[26px] leading-none font-semibold">Schedule</h1>
-          <div className="mt-1 flex items-center gap-2 text-xs text-neutral-600 tabular-nums">
-            {mode === 'week' ? (
-              <>
-                <button onClick={() => setWeekOffset((w) => w - 1)} className="cursor-pointer px-1 text-neutral-500 hover:text-ink">
-                  ‹
-                </button>
-                {RANGE_FORMAT.format(days[0])} – {RANGE_FORMAT.format(days[days.length - 1])}
-                <button onClick={() => setWeekOffset((w) => w + 1)} className="cursor-pointer px-1 text-neutral-500 hover:text-ink">
-                  ›
-                </button>
-                {weekOffset !== 0 && (
-                  <button onClick={() => setWeekOffset(0)} className="cursor-pointer text-teal-700 hover:underline">
-                    Today
-                  </button>
-                )}
-              </>
-            ) : mode === 'month' ? (
-              <>
-                <button onClick={() => setMonthOffset((m) => m - 1)} className="cursor-pointer px-1 text-neutral-500 hover:text-ink">
-                  ‹
-                </button>
-                {MONTH_LABEL_FORMAT.format(monthAnchorDate)}
-                <button onClick={() => setMonthOffset((m) => m + 1)} className="cursor-pointer px-1 text-neutral-500 hover:text-ink">
-                  ›
-                </button>
-                {monthOffset !== 0 && (
-                  <button onClick={() => setMonthOffset(0)} className="cursor-pointer text-teal-700 hover:underline">
-                    This month
-                  </button>
-                )}
-              </>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <ScheduleHeader onAddBooking={() => openDay(todayISO)} />
+
+        <ScheduleToolbar
+          mode={mode}
+          onModeChange={setMode}
+          dateRangeLabel={dateRangeLabel}
+          onPrev={handlePrev}
+          onNext={handleNext}
+          onToday={handleToday}
+          isAtToday={isAtToday}
+          datePickerValue={datePickerValue}
+          onDatePick={handleDatePick}
+          q={q}
+          onQueryChange={setQuery}
+          overdueJobs={overdueJobs}
+          needsBookingJobs={needsBookingJobs}
+        />
+
+        {isLoading ? (
+          <div className="p-5">
+            <div className="font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">
+              Loading schedule…
+            </div>
+          </div>
+        ) : isError ? (
+          <div className="p-5">
+            <div className="border border-missed bg-missed/10 p-4">
+              <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-missed-fg uppercase">
+                Couldn't load schedule
+              </div>
+              <div className="mt-1.5 text-[13px] text-ink">
+                {errorObj instanceof Error ? errorObj.message : 'Something went wrong.'}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-auto p-5">
+            {bookingError && (
+              <div className="mb-3 border border-missed bg-missed/10 px-3 py-1.5 text-[12px] text-missed-fg">{bookingError}</div>
+            )}
+
+            {mode === 'month' ? (
+              <MonthGrid
+                days={monthDays}
+                visits={displayVisits}
+                jobById={jobById}
+                technicianById={technicianById}
+                visitStatusStyle={VISIT_STATUS_STYLE}
+                activeTechnicians={activeTechnicians}
+                pendingDrop={pendingDrop}
+                pendingTechnicianId={pendingTechnicianId}
+                onPendingTechnicianChange={setPendingTechnicianId}
+                onDropJob={handleDropJob}
+                onRescheduleVisit={handleRescheduleVisit}
+                onConfirmBooking={handleConfirmBooking}
+                onCancelBooking={handleCancelBooking}
+                bookingPending={bookMutation.isPending}
+                onSelectVisit={openJob}
+                onSelectDay={openDay}
+                todayISO={todayISO}
+                selectedDateISO={selectedDate}
+              />
             ) : (
               <>
-                <button onClick={() => setDayOffset((d) => d - 1)} className="cursor-pointer px-1 text-neutral-500 hover:text-ink">
-                  ‹
-                </button>
-                {DAY_LABEL.format(dayViewDate)} {RANGE_FORMAT.format(dayViewDate)}
-                <button onClick={() => setDayOffset((d) => d + 1)} className="cursor-pointer px-1 text-neutral-500 hover:text-ink">
-                  ›
-                </button>
-                {dayOffset !== 0 && (
-                  <button onClick={() => setDayOffset(0)} className="cursor-pointer text-teal-700 hover:underline">
-                    Today
+                <div className="mb-2.5 flex items-center gap-3">
+                  <span className="text-[12px] text-neutral-600">
+                    {technicians.length} technician{technicians.length === 1 ? '' : 's'}
+                  </span>
+                  <button
+                    onClick={() => setManageTechniciansOpen((o) => !o)}
+                    className="cursor-pointer text-[12px] text-teal-700 hover:underline"
+                  >
+                    {manageTechniciansOpen ? 'Close' : 'Manage technicians'}
                   </button>
+                </div>
+
+                {manageTechniciansOpen && (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (newTechnicianName.trim()) createTechnicianMutation.mutate(newTechnicianName.trim());
+                    }}
+                    className="mb-2.5 flex items-center gap-1.5"
+                  >
+                    <input
+                      value={newTechnicianName}
+                      onChange={(e) => setNewTechnicianName(e.target.value)}
+                      placeholder="New technician name"
+                      className="border border-neutral-300 px-2 py-1.5 text-xs text-ink outline-none focus:border-teal"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!newTechnicianName.trim() || createTechnicianMutation.isPending}
+                      className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      + Add technician
+                    </button>
+                  </form>
                 )}
+
+                <ScheduleTechnicianGrid
+                  days={technicianDisplayDays}
+                  technicians={technicians}
+                  visits={visits}
+                  displayVisits={displayVisits}
+                  jobById={jobById}
+                  visitStatusStyle={VISIT_STATUS_STYLE}
+                  todayISO={todayISO}
+                  selectedDateISO={selectedDate}
+                  onSelectDay={openDay}
+                  onSelectVisit={openJob}
+                  onDrop={handleDrop}
+                  onToggleTechnicianActive={(id, isActive) => {
+                    const technician = technicians.find((t) => t.id === id);
+                    if (technician?.appUserId) {
+                      setLinkedUserActiveMutation.mutate({ appUserId: technician.appUserId, isActive });
+                    } else {
+                      toggleActiveMutation.mutate({ id, isActive });
+                    }
+                  }}
+                />
               </>
             )}
-            <span>· {technicians.length} technician{technicians.length === 1 ? '' : 's'}</span>
           </div>
-        </div>
-
-        <div className="ml-auto flex items-center gap-3">
-          <div className="flex border border-neutral-300">
-            <button
-              onClick={() => setMode('day')}
-              className={`px-3 py-1.5 text-xs cursor-pointer ${
-                mode === 'day' ? 'bg-teal font-semibold text-white' : 'text-neutral-700 hover:bg-neutral-100'
-              }`}
-            >
-              Day
-            </button>
-            <button
-              onClick={() => setMode('week')}
-              className={`border-l border-neutral-300 px-3 py-1.5 text-xs cursor-pointer ${
-                mode === 'week' ? 'bg-teal font-semibold text-white' : 'text-neutral-700 hover:bg-neutral-100'
-              }`}
-            >
-              Week
-            </button>
-            <button
-              onClick={() => setMode('month')}
-              className={`border-l border-neutral-300 px-3 py-1.5 text-xs cursor-pointer ${
-                mode === 'month' ? 'bg-teal font-semibold text-white' : 'text-neutral-700 hover:bg-neutral-100'
-              }`}
-            >
-              Month
-            </button>
-          </div>
-
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (newTechnicianName.trim()) createTechnicianMutation.mutate(newTechnicianName.trim());
-            }}
-            className="flex items-center gap-1.5"
-          >
-            <input
-              value={newTechnicianName}
-              onChange={(e) => setNewTechnicianName(e.target.value)}
-              placeholder="New technician name"
-              className="border border-neutral-300 px-2 py-1.5 text-xs text-ink outline-none focus:border-teal"
-            />
-            <button
-              type="submit"
-              disabled={!newTechnicianName.trim() || createTechnicianMutation.isPending}
-              className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              + Add technician
-            </button>
-          </form>
-        </div>
+        )}
       </div>
 
-      {isLoading ? (
-        <div className="p-5">
-          <div className="font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">
-            Loading schedule…
-          </div>
-        </div>
-      ) : isError ? (
-        <div className="p-5">
-          <div className="border border-missed bg-missed/10 p-4">
-            <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-missed-fg uppercase">
-              Couldn't load schedule
-            </div>
-            <div className="mt-1.5 text-[13px] text-ink">
-              {errorObj instanceof Error ? errorObj.message : 'Something went wrong.'}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="flex min-h-0 flex-1 gap-4 px-5 pb-5">
-        <div className="min-w-0 flex-1">
-          {bookingError && (
-            <div className="mb-2 border border-missed bg-missed/10 px-3 py-1.5 text-[12px] text-missed-fg">
-              {bookingError}
-            </div>
-          )}
-          {mode === 'month' ? (
-            <MonthGrid
-              days={monthDays}
-              visits={visits}
-              jobById={jobById}
-              visitStatusStyle={VISIT_STATUS_STYLE}
-              activeTechnicians={activeTechnicians}
-              pendingDrop={pendingDrop}
-              pendingTechnicianId={pendingTechnicianId}
-              onPendingTechnicianChange={setPendingTechnicianId}
-              onDropJob={handleDropJob}
-              onConfirmBooking={handleConfirmBooking}
-              onCancelBooking={handleCancelBooking}
-              bookingPending={bookMutation.isPending}
-              onSelectVisit={setSelectedJobId}
-            />
-          ) : (
-          <>
-          <div className={`grid border border-neutral-300 ${displayDays.length === 1 ? 'grid-cols-[160px_1fr]' : 'grid-cols-[160px_repeat(6,1fr)]'}`}>
-            <div className="border-b border-neutral-300 bg-neutral-200 px-3 py-2 font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-600 uppercase">
-              Technician
-            </div>
-            {displayDays.map((d) => (
-              <div
-                key={d.toISOString()}
-                className="border-b border-l border-neutral-300 bg-neutral-200 px-3 py-2 text-center font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-600 uppercase"
-              >
-                {DAY_LABEL.format(d)} <span className="tabular-nums normal-case">{DAY_NUM.format(d)}</span>
-              </div>
-            ))}
-
-            {technicians.map((technician) => {
-              const technicianVisits = visits.filter((v) => v.technicianId === technician.id);
-              return (
-                <Fragment key={technician.id}>
-                  <div
-                    className={`flex items-center gap-2 border-b border-neutral-300 px-3 py-2 text-[12.5px] ${
-                      technician.isActive ? '' : 'text-neutral-400'
-                    }`}
-                  >
-                    <span className="font-semibold">{technician.name}</span>
-                    <span className="ml-auto text-[10.5px] text-neutral-500 tabular-nums">{technicianVisits.length}</span>
-                    <button
-                      onClick={() => toggleActiveMutation.mutate({ id: technician.id, isActive: !technician.isActive })}
-                      className="cursor-pointer text-[10.5px] text-teal-700 hover:underline"
-                    >
-                      {technician.isActive ? 'Deactivate' : 'Reactivate'}
-                    </button>
-                  </div>
-                  {displayDays.map((d) => {
-                    const cellDateISO = toISODate(d);
-                    const dayVisits = technicianVisits.filter((v) => v.scheduledDate === cellDateISO);
-                    return (
-                      <div
-                        key={`${technician.id}-${cellDateISO}`}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={handleDrop(technician.id, cellDateISO)}
-                        className="border-b border-l border-neutral-300 px-2 py-2"
-                      >
-                        {dayVisits.length === 0 ? (
-                          <span className="text-[11px] text-neutral-400">free</span>
-                        ) : (
-                          <div className="flex flex-col gap-1">
-                            {dayVisits.map((v) => {
-                              const job = jobById.get(v.jobId);
-                              return (
-                                <div
-                                  key={v.id}
-                                  onClick={() => setSelectedJobId(v.jobId)}
-                                  className={`cursor-pointer truncate border px-1.5 py-0.5 text-[11px] ${VISIT_STATUS_STYLE[v.status]}`}
-                                  title={job ? `${job.jobSummary} · ${job.buildingName}` : v.jobId}
-                                >
-                                  {job ? job.buildingName : 'Job'}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </Fragment>
-              );
-            })}
-          </div>
-
-          {technicians.length === 0 && (
-            <div className="border border-t-0 border-neutral-300 bg-white px-5 py-10 text-center">
-              <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
-                No technicians have been set up yet
-              </div>
-              <div className="mt-1.5 text-[13px] text-neutral-600">
-                Add a technician above to start booking visits for {mode === 'day' ? 'today' : 'this week'}.
-              </div>
-            </div>
-          )}
-          </>
-          )}
-        </div>
-
-        <div className="flex w-[220px] flex-none flex-col overflow-y-auto border border-neutral-300 bg-white">
-          <div className="border-b border-neutral-300 bg-neutral-200 px-3 py-2 font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-600 uppercase">
-            Needs booking
-          </div>
-          <div className="flex-1 overflow-y-auto px-3 py-2.5">
-            {DUE_GROUPS.map(({ key, label, emptyLabel }) => {
-              const groupJobs = key === 'overdue' ? overdueJobs : needsBookingJobs;
-              return (
-                <div key={key} className="mb-3.5 last:mb-0">
-                  <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
-                    {label} <span className="text-neutral-400">({groupJobs.length})</span>
-                  </div>
-                  {groupJobs.length === 0 ? (
-                    <div className="text-[11px] text-neutral-400">{emptyLabel}</div>
-                  ) : (
-                    <div className="flex flex-col gap-1">
-                      {groupJobs.map((job) => (
-                        <div
-                          key={job.id}
-                          draggable
-                          onDragStart={(e) => e.dataTransfer.setData('text/plain', job.id)}
-                          title={`${job.jobSummary} · ${job.buildingName}`}
-                          className="cursor-grab border border-neutral-300 bg-white px-2 py-1.5 text-[11px] active:cursor-grabbing"
-                        >
-                          <div className="truncate font-semibold text-ink">{job.buildingName}</div>
-                          <div className="truncate text-neutral-600">{job.jobSummary}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <div className="border-t border-neutral-300 px-3 py-2 text-[10.5px] leading-normal text-neutral-500">
-            Drag a job onto a technician/day to book it.
-          </div>
-        </div>
-        </div>
+      {selectedJob && (
+        <JobInspectorDrawer
+          key={selectedJob.id}
+          job={selectedJob}
+          siblings={siblings}
+          onClose={() => setSelectedJobId(null)}
+          onSelectSibling={setSelectedJobId}
+        />
       )}
-    </div>
-    {selectedJob && (
-      <JobInspectorDrawer
-        key={selectedJob.id}
-        job={selectedJob}
-        siblings={siblings}
-        onClose={() => setSelectedJobId(null)}
-        onSelectSibling={setSelectedJobId}
-      />
-    )}
+      {selectedDate && (
+        <ScheduleDayDrawer
+          key={selectedDate}
+          dateISO={selectedDate}
+          visits={visits}
+          jobRows={jobRows}
+          technicians={technicians}
+          visitStatusStyle={VISIT_STATUS_STYLE}
+          onClose={() => setSelectedDate(null)}
+          onSelectVisit={openJob}
+        />
+      )}
     </div>
   );
 }

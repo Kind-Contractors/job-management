@@ -286,6 +286,8 @@ export interface Technician {
   name: string;
   isActive: boolean;
   notes: string | null;
+  /** `technicians.app_user_id` — non-null only when this technician is linked to a real login (created via the Users screen, or linked manually). See ThisWeekPage.tsx's technician-active toggle for why this matters: activating/deactivating a LINKED technician must go through the Users screen's admin-users Edge Function (the only path that can also touch that login's own app_users.is_active — a manager's client-side session has no write access to another user's app_users row at all), never the plain technicians-table update alone. */
+  appUserId: string | null;
 }
 
 /**
