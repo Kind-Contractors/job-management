@@ -65,6 +65,17 @@ export interface MonthCellPresentation {
   className: string;
   /** True for every schedule-derived "nothing booked" state — rendered as the same restrained hollow style, distinguished only by tooltip text (CLAUDE.md §4/§9: only 3-4 functional colors). */
   hollow: boolean;
+  /**
+   * A single small, neutral (no new color) character shown in place of the
+   * (always-zero) visit count for a hollow cell — the audit found the four
+   * hollow states hard to tell apart at a glance, hover-only. Only the two
+   * states that represent an administrative gap worth noticing get one
+   * ('no_schedule', 'schedule_not_determinable'); 'not_due' and 'ad_hoc'
+   * are both honest, structural "nothing to book here" cases and stay
+   * blank, matching the majority/expected case. The full hover tooltip
+   * (`MonthCellState.label`) is unchanged and still the authoritative text.
+   */
+  marker?: string;
 }
 
 /**
@@ -72,9 +83,10 @@ export interface MonthCellPresentation {
  * palette as `PRESENTATIONS` above (teal=normal/done, ochre/due=due,
  * brick/missed=missed/overdue), never a new hue per state. Every
  * schedule-derived "nothing booked" state (not due / no schedule / ad-hoc
- * / undeterminable) renders identically (hollow, neutral) — the
- * difference is only ever in the hover tooltip (`MonthCellState.label`),
- * never a new color.
+ * / undeterminable) renders with the same restrained hollow style — the
+ * primary difference is still the hover tooltip (`MonthCellState.label`),
+ * with a small marker character added for the two states worth noticing
+ * at a glance (see `MonthCellPresentation.marker`). Never a new color.
  */
 const MONTH_CELL_PRESENTATIONS: Record<MonthCellStateKind, MonthCellPresentation> = {
   done_approved: { className: 'border-teal-700 bg-teal-700', hollow: false },
@@ -84,8 +96,8 @@ const MONTH_CELL_PRESENTATIONS: Record<MonthCellStateKind, MonthCellPresentation
   missed: { className: 'border-missed bg-missed/10', hollow: false },
   due_no_date: { className: 'border-due bg-due/10', hollow: false },
   not_due: { className: 'border-neutral-300 bg-transparent', hollow: true },
-  schedule_not_determinable: { className: 'border-neutral-300 bg-transparent', hollow: true },
-  no_schedule: { className: 'border-neutral-300 bg-transparent', hollow: true },
+  schedule_not_determinable: { className: 'border-neutral-300 bg-transparent', hollow: true, marker: '?' },
+  no_schedule: { className: 'border-neutral-300 bg-transparent', hollow: true, marker: '–' },
   ad_hoc: { className: 'border-neutral-300 bg-transparent', hollow: true },
 };
 

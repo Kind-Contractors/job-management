@@ -67,7 +67,7 @@ export default function MonthMatrixGrid({ blocks, year, todayISO, onSelectCell }
                     presentation.hollow ? 'text-neutral-400' : 'text-ink'
                   }`}
                 >
-                  {cell.visitCount > 1 ? cell.visitCount : ''}
+                  {cell.visitCount > 1 ? cell.visitCount : presentation.marker ?? ''}
                 </button>
               );
             })}

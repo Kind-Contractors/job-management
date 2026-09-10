@@ -151,6 +151,7 @@ export default function JobCreator({ buildingId, onCreated, onCancel }: JobCreat
                 value={buildingQuery}
                 onChange={(e) => setBuildingQuery(e.target.value)}
                 placeholder="Search buildings, clients, postcodes…"
+                autoComplete="off"
                 className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
               />
               {buildingMatches.length > 0 && (
@@ -158,7 +159,14 @@ export default function JobCreator({ buildingId, onCreated, onCancel }: JobCreat
                   {buildingMatches.map((b) => (
                     <div
                       key={b.id}
-                      onClick={() => {
+                      onMouseDown={(e) => {
+                        // mousedown, not click: fires before any focus/blur
+                        // side effect the browser or a parent might trigger
+                        // between press and release, so the selection can
+                        // never be lost to a race with that. preventDefault
+                        // stops the browser from shifting focus away from
+                        // this element first.
+                        e.preventDefault();
                         setForm({ ...form, buildingId: b.id });
                         setBuildingQuery('');
                       }}

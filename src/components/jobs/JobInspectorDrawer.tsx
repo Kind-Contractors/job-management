@@ -75,6 +75,15 @@ export default function JobInspectorDrawer({
       queryClient.invalidateQueries({ queryKey: ['jobRows'] });
       queryClient.invalidateQueries({ queryKey: ['visits'] });
       setBookingMessage(`Visit booked for ${new Date(visitDate).toLocaleDateString('en-GB')}.`);
+      // Reset the form's own inputs after a successful booking — matching
+      // ScheduleDayDrawer.tsx's own booking form, which resets its fields
+      // rather than closing after success. Blanking the date (rather than
+      // re-defaulting to today) also disables the "Book this visit" button
+      // (disabled={!visitDate || ...}) until a new date is deliberately
+      // chosen, so an accidental second click can't silently resubmit the
+      // same booking again.
+      setVisitDate('');
+      setVisitTechnicianId(job.defaultTechnicianId ?? '');
     },
     onError: (err) => setBookingMessage(err instanceof Error ? err.message : 'Failed to book visit.'),
   });

@@ -100,7 +100,15 @@ export default function AllLiveJobsPage() {
   const rows = useMemo(() => {
     return allRows.filter((job) => {
       if (division !== 'Both' && job.division !== division) return false;
-      if (status && job.status !== status) return false;
+      if (status) {
+        // 'needs_booking' (schedule says due this month, no visit yet) and
+        // 'unscheduled' (no visit history at all) both mean "this job needs
+        // a booking" — see mapJobRow.ts's deriveVisitState. The chip must
+        // match both, or it would miss every job with no schedule row set.
+        const matchesStatus =
+          status === 'needs_booking' ? job.status === 'needs_booking' || job.status === 'unscheduled' : job.status === status;
+        if (!matchesStatus) return false;
+      }
       if (readyForAccounts && !job.visits.some(isVisitReadyForAccounts)) return false;
       if (!q) return true;
       const haystack = `${job.buildingName} ${job.jobSummary} ${job.clientName} ${job.postcode} ${job.frequency} ${job.technician} ${job.schedulePattern} ${job.id}`.toLowerCase();

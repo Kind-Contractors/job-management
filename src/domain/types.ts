@@ -36,10 +36,20 @@ export type Frequency =
  * linked report is `awaiting_review`/`returned_for_correction` puts the whole
  * job into 'review', taking priority over every other state — a report
  * sitting unreviewed is actionable today regardless of what's scheduled next.
- * 'unscheduled' means no visit rows exist at all for the job. 'overdue' is a
- * purely calendar-derived observation (a booked/due visit's date has passed
+ * 'unscheduled' means no visit rows exist at all for the job, AND (no
+ * schedule is set, or the schedule doesn't say it's due this month) — see
+ * 'needs_booking' below for the other case. 'overdue' is a purely
+ * calendar-derived observation (a booked/due visit's date has passed
  * without being resolved) — never a claim that the visit was missed; only
  * the DB's own `visits.status = 'missed'` produces the 'missed' status.
+ * 'needs_booking' is genuinely produced two ways: an undated due/booked
+ * visit row (a real DB shape `createVisit()` never actually creates in
+ * practice, kept for forward-compatibility only), and — the actual real
+ * path — a job whose own `schedules` row says it's due in the current
+ * calendar month with no visit recorded for that month at all. The latter
+ * reuses `scheduleFormat.ts`'s `monthsDueInYear()`, the same function Month
+ * Matrix's own per-month cells use, so the two can never disagree about
+ * "is this due now."
  */
 export type JobStatus =
   | 'booked'

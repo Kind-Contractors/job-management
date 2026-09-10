@@ -7,6 +7,7 @@ import { buildGridBlocks, type GroupBy } from '../lib/grouping';
 import { suggestDateInMonth } from '../lib/scheduleFormat';
 import type { MonthCellState } from '../lib/monthMatrix';
 import MonthMatrixGrid from '../components/matrix/MonthMatrixGrid';
+import MonthMatrixLegend from '../components/matrix/MonthMatrixLegend';
 import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
 
 function toISODate(d: Date): string {
@@ -146,6 +147,7 @@ export default function MonthMatrixPage() {
           </div>
         ) : (
           <div className="flex-1 overflow-auto px-5 pb-5">
+            <MonthMatrixLegend />
             <MonthMatrixGrid blocks={blocks} year={year} todayISO={todayISO} onSelectCell={handleSelectCell} />
           </div>
         )}
@@ -153,7 +155,15 @@ export default function MonthMatrixPage() {
 
       {selectedJob && (
         <JobInspectorDrawer
-          key={selectedJob.id}
+          // Keyed by job id AND the preset date — not just job id. Clicking
+          // a different due-month cell for the SAME job changes
+          // presetVisitDate without changing selectedJob.id, and
+          // JobInspectorDrawer's visitDate state only reads its
+          // (presetVisitDate ?? today) initializer once, at mount. Without
+          // the preset date in the key, a second due-cell click for the
+          // same job would leave the drawer showing the first cell's
+          // stale date instead of the newly clicked month's.
+          key={`${selectedJob.id}:${presetVisitDate ?? 'none'}`}
           job={selectedJob}
           siblings={siblings}
           onClose={handleCloseDrawer}

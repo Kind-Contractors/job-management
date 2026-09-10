@@ -156,6 +156,7 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
                   value={clientQuery}
                   onChange={(e) => setClientQuery(e.target.value)}
                   placeholder="Search clients…"
+                  autoComplete="off"
                   className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
                 />
                 {clientMatches.length > 0 && (
@@ -163,7 +164,10 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
                     {clientMatches.map((c) => (
                       <div
                         key={c.id}
-                        onClick={() => {
+                        onMouseDown={(e) => {
+                          // See JobCreator.tsx's identical building-search
+                          // list for why this is onMouseDown, not onClick.
+                          e.preventDefault();
                           setForm({ ...form, clientId: c.id });
                           setClientQuery('');
                         }}

@@ -118,7 +118,12 @@ export default function NavRail() {
 
   const counts: Record<AttentionKey, number> = {
     review: divisionFiltered.filter((j) => j.status === 'review').length,
-    needs_booking: divisionFiltered.filter((j) => j.status === 'needs_booking').length,
+    // 'needs_booking' (a schedule says due this month, no visit yet) and
+    // 'unscheduled' (no visit history at all, whether or not a schedule
+    // exists) both represent "this job needs a booking from the manager" —
+    // see mapJobRow.ts's deriveVisitState. Counting only 'needs_booking'
+    // would miss the majority of real jobs today (no schedule row at all).
+    needs_booking: divisionFiltered.filter((j) => j.status === 'needs_booking' || j.status === 'unscheduled').length,
     overdue: divisionFiltered.filter((j) => j.status === 'overdue').length,
     missed: divisionFiltered.filter((j) => j.status === 'missed').length,
   };

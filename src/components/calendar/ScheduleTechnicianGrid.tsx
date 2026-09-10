@@ -168,13 +168,25 @@ export default function ScheduleTechnicianGrid({
         })}
       </div>
 
-      {technicians.length === 0 && (
+      {technicians.length === 0 ? (
         <div className="border-t border-neutral-300 bg-white px-5 py-10 text-center">
           <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
             No technicians have been set up yet
           </div>
           <div className="mt-1.5 text-[13px] text-neutral-600">Add a technician to start booking visits.</div>
         </div>
+      ) : (
+        !technicians.some((t) => t.isActive) && (
+          <div className="border-t border-due bg-due/10 px-5 py-3 text-center">
+            <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-due-fg uppercase">
+              No active technicians available
+            </div>
+            <div className="mt-1.5 text-[13px] text-neutral-700">
+              Every technician above is currently deactivated — reactivate one before assigning new visits. Existing
+              bookings are still shown above.
+            </div>
+          </div>
+        )
       )}
     </div>
   );
