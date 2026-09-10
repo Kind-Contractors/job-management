@@ -275,7 +275,18 @@ export default function JobInspectorDrawer({
 
       <ScheduleEditor jobId={job.id} schedule={job.schedule} />
 
-      {job.visits.length > 0 && (
+      {job.visits.length === 0 ? (
+        <div className="px-4 pb-1">
+          <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
+            Visits (0)
+          </div>
+          <div className="pb-2 text-[12.5px] text-neutral-500">
+            No visits scheduled for this job yet.
+            {(forceShowBooking || job.status === 'unscheduled' || job.status === 'needs_booking') &&
+              ' Use "Book a visit" above to schedule one.'}
+          </div>
+        </div>
+      ) : (
         <div className="px-4 pb-1">
           <div className="mb-1.5 flex items-center gap-2">
             <div className="font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">

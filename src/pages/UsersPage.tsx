@@ -303,6 +303,7 @@ export default function UsersPage() {
                   <th className="px-3 py-2">Name</th>
                   <th className="px-3 py-2">Email</th>
                   <th className="px-3 py-2">Role</th>
+                  <th className="px-3 py-2">App access</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Last login</th>
                   <th className="px-3 py-2">Actions</th>
@@ -314,6 +315,22 @@ export default function UsersPage() {
                     <td className="px-3 py-2 font-semibold text-ink">{u.displayName || '—'}</td>
                     <td className="px-3 py-2 text-neutral-600">{u.email ?? '—'}</td>
                     <td className="px-3 py-2 text-neutral-600">{roleLabel(u.role)}</td>
+                    <td className="px-3 py-2">
+                      {/* Whether this technician-role user is cross-linked to a real `technicians` row (technicianId) — the Schedule page's own technician list, not this login itself. Doesn't apply to administrators, so they get a plain dash rather than a misleading "Not linked". */}
+                      {u.role === 'technician' ? (
+                        <span
+                          className={`border px-1.5 py-0.5 text-[11px] ${
+                            u.technicianId
+                              ? 'border-teal bg-teal-100 text-teal-700'
+                              : 'border-neutral-300 bg-neutral-100 text-neutral-500'
+                          }`}
+                        >
+                          {u.technicianId ? 'Linked' : 'Not linked'}
+                        </span>
+                      ) : (
+                        <span className="text-neutral-400">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2">
                       <span
                         className={`border px-1.5 py-0.5 text-[11px] ${

@@ -307,7 +307,27 @@ function buildColumnDefs(
       valueGetter: (p) => jobOf(p)?.defaultTechnicianId ?? null,
       valueFormatter: (p) => technicianLabel(p.value, technicianById),
       cellEditor: SelectCellEditor,
-      cellEditorParams: { options: activeTechnicianOptions, blankLabel: 'Unassigned' },
+      // A function, not a fixed object: the option list must include THIS
+      // row's currently-assigned technician even when they're inactive
+      // (and so excluded from activeTechnicianOptions) — otherwise
+      // SelectCellEditor's <select> would have no <option> matching the
+      // current value, and the browser silently falls back to displaying
+      // the first option ("Unassigned") the moment the editor opens, even
+      // though the job's default_technician_id hasn't actually changed.
+      // Only ever adds this ONE extra option (the job's own current
+      // technician, if inactive) — a manager can still only ever pick an
+      // active technician (or Unassigned) for an actual new assignment.
+      cellEditorParams: (p: { data?: GridBlock }) => {
+        const currentId = jobOf(p)?.defaultTechnicianId ?? null;
+        const currentIsInactive = currentId != null && !activeTechnicianOptions.some((o) => o.value === currentId);
+        const currentInactiveTechnician = currentIsInactive ? technicianById.get(currentId) : undefined;
+        return {
+          options: currentInactiveTechnician
+            ? [{ value: currentInactiveTechnician.id, label: `${currentInactiveTechnician.name} (inactive)` }, ...activeTechnicianOptions]
+            : activeTechnicianOptions,
+          blankLabel: 'Unassigned',
+        };
+      },
       valueSetter: (p) => {
         const job = jobOf(p);
         if (!job) return false;

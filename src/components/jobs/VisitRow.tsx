@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { JobRow, JobVisitSummary, Technician } from '../../domain/types';
 import { completeVisit, createReport, markVisitCancelled, markVisitMissed } from '../../repository/reportsRepository';
-import { assignVisitTechnician } from '../../repository/techniciansRepository';
+import { assignVisitTechnician, rescheduleVisit } from '../../repository/techniciansRepository';
 import { getVisitStatusPresentation, isVisitReadyForAccounts } from '../../lib/statusPresentation';
 import ReportPanel from './ReportPanel';
 import StatusPill from './StatusPill';
@@ -63,6 +63,25 @@ export default function VisitRow({
   const [completedAt, setCompletedAt] = useState(nowLocalDateTime());
   const [error, setError] = useState<string | null>(null);
   const [assignError, setAssignError] = useState<string | null>(null);
+  const [dateError, setDateError] = useState<string | null>(null);
+
+  /**
+   * Manually moves THIS visit to a specific date — the exact same
+   * rescheduleVisit() drag-and-drop already uses in Day/Week/Month
+   * (touches only scheduled_date, never technician_id/job_id/status), so a
+   * visit can be moved to a date outside whatever range is currently
+   * visible on the calendar without needing to drag it there. Never
+   * touches jobs/schedules — the job's own recurrence definition is
+   * completely unaffected by moving one of its visits.
+   */
+  const rescheduleMutation = useMutation({
+    mutationFn: (date: string) => rescheduleVisit(visit.id, date),
+    onSuccess: () => {
+      invalidateAfterVisitChange(queryClient);
+      setDateError(null);
+    },
+    onError: (err) => setDateError(err instanceof Error ? err.message : 'Failed to reschedule visit.'),
+  });
 
   /**
    * Assigns/reassigns/clears THIS visit's own technician_id only — never
@@ -137,7 +156,24 @@ export default function VisitRow({
       </div>
 
       {(visit.status === 'due' || visit.status === 'booked') && mode === 'summary' && (
-        <div className="mt-1 flex items-center gap-1.5">
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <label className="flex items-center gap-1.5 text-[11px] text-neutral-600">
+            Date
+            <input
+              type="date"
+              value={visit.scheduledDate ?? ''}
+              onChange={(e) => {
+                if (!e.target.value) return; // cleared, not a valid date to save
+                setDateError(null);
+                rescheduleMutation.mutate(e.target.value);
+              }}
+              disabled={rescheduleMutation.isPending}
+              className="cursor-pointer border border-neutral-300 px-1.5 py-0.5 text-[11px] text-ink outline-none focus:border-teal disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400"
+            />
+          </label>
+          {rescheduleMutation.isPending && <span className="text-[11px] text-neutral-500">Saving…</span>}
+          {dateError && <span className="text-[11px] text-missed-fg">{dateError}</span>}
+
           <label className="flex items-center gap-1.5 text-[11px] text-neutral-600">
             Technician
             <select

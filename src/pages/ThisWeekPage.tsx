@@ -527,6 +527,24 @@ export default function ThisWeekPage() {
               <div className="mb-3 border border-missed bg-missed/10 px-3 py-1.5 text-[12px] text-missed-fg">{bookingError}</div>
             )}
 
+            {/*
+              A genuinely empty date range (no visits at all — common today,
+              since live visit data is still sparse) previously looked
+              identical to "everything's fine, nothing's due" — Day/Week
+              show a grid of "Free" cells and Month shows bare date numbers,
+              neither explains itself. One shared message here, driven by
+              `mode`, covers all three rather than three bespoke designs.
+              Deliberately separate from the "Needs booking" panel (an
+              existing, different concept — jobs due regardless of what's
+              currently on screen) — this is only about the visible range.
+            */}
+            {visits.length === 0 && (
+              <div className="mb-3 border border-neutral-300 bg-neutral-100 px-3 py-2 text-[12px] text-neutral-600">
+                No visits scheduled for {mode === 'day' ? 'this day' : mode === 'week' ? 'this week' : 'this month'} —
+                use "+ Add booking" above, or drag a job onto a day, to schedule one.
+              </div>
+            )}
+
             {mode === 'month' && activeTechnicians.length === 0 && (
               <div className="mb-3 border border-due bg-due/10 px-3 py-2 text-[12px] text-due-fg">
                 No active technicians available for assignment.{' '}
