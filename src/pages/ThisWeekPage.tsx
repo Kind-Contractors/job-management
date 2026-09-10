@@ -336,10 +336,15 @@ export default function ThisWeekPage() {
         .sort((a, b) => earliestOverdueDate(a, todayISO).localeCompare(earliestOverdueDate(b, todayISO))),
     [divisionFilteredJobs, todayISO],
   );
+  // 'unscheduled' (no visit history at all) and 'needs_booking' (a schedule
+  // says due this month, no visit yet — see mapJobRow.ts's deriveVisitState)
+  // both mean "this job needs a booking" — matching NavRail's and All Live
+  // Jobs' own "Needs booking" surfaces, so this panel never disagrees with
+  // them about which jobs belong here.
   const needsBookingJobs = useMemo(
     () =>
       divisionFilteredJobs
-        .filter((j) => j.status === 'unscheduled')
+        .filter((j) => j.status === 'unscheduled' || j.status === 'needs_booking')
         .sort((a, b) => a.buildingName.localeCompare(b.buildingName)),
     [divisionFilteredJobs],
   );
@@ -370,6 +375,17 @@ export default function ThisWeekPage() {
     }
     const jobId = e.dataTransfer.getData('text/plain');
     if (!jobId) return;
+    // ScheduleTechnicianGrid renders every technician's row as a drop
+    // target, not just active ones (unlike every <select>-based assignment
+    // path, which already lists active technicians only) — reject here
+    // before even attempting the mutation, rather than relying solely on
+    // the server-side guard (prevent_visit_assignment_to_inactive_technician
+    // trigger on visits) to surface a bare error after the fact.
+    const technician = technicianById.get(technicianId);
+    if (!technician?.isActive) {
+      setBookingError(`${technician?.name ?? 'This technician'} is deactivated and can't be assigned new visits.`);
+      return;
+    }
     bookMutation.mutate({ jobId, technicianId, date: dateISO });
   };
 
@@ -422,6 +438,14 @@ export default function ThisWeekPage() {
           <div className="min-h-0 flex-1 overflow-auto p-5">
             {bookingError && (
               <div className="mb-3 border border-missed bg-missed/10 px-3 py-1.5 text-[12px] text-missed-fg">{bookingError}</div>
+            )}
+
+            {mode === 'month' && activeTechnicians.length === 0 && (
+              <div className="mb-3 border border-due bg-due/10 px-3 py-2 text-[12px] text-due-fg">
+                No active technicians available for assignment.{' '}
+                {technicians.length === 0 ? 'Add a technician' : 'Reactivate a technician'} using "Manage technicians" in
+                Day or Week view before booking new visits — existing bookings are still shown below.
+              </div>
             )}
 
             {mode === 'month' ? (

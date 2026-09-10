@@ -25,7 +25,7 @@ import type {
   VisitStatus,
 } from '../domain/types';
 import { DEFAULT_ACCESS_NOTE } from '../lib/constants';
-import { describeScheduleShort } from '../lib/scheduleFormat';
+import { describeScheduleShort, monthsDueInYear } from '../lib/scheduleFormat';
 
 export const FREQUENCY_TYPE_LABEL: Record<FrequencyType, Frequency> = {
   weekly: 'Weekly',
@@ -205,8 +205,21 @@ interface VisitState {
  * report is still `awaiting_review`/`returned_for_correction` takes priority
  * over everything else below — it's actionable today regardless of what's
  * scheduled next (see the "reports to review" plan).
+ *
+ * The final `needs_booking` check (just before the `unscheduled` fallback)
+ * is schedule-derived: `createVisit()` has never had a way to create a
+ * visit row with no date, so an *undated* due/booked visit (the check just
+ * above it) essentially never occurs in practice — without this, a job
+ * whose schedule genuinely says "due this month" but has no visit at all
+ * recorded for it would fall all the way through to the same 'unscheduled'
+ * bucket as a job with no schedule and no history whatsoever, which is
+ * exactly the "Month Matrix knows it's due, everything else disagrees"
+ * inconsistency this fixes. It reuses `monthsDueInYear()` — the identical
+ * function Month Matrix's own per-month derivation already uses — so the
+ * two can never disagree about "is this due now." It only ever *reads*
+ * schedules + visits; it never creates a visit row.
  */
-export function deriveVisitState(visits: SupabaseVisit[], todayISO: string): VisitState {
+export function deriveVisitState(visits: SupabaseVisit[], todayISO: string, schedule: Schedule | null): VisitState {
   const active = visits.filter((v) => v.status !== 'cancelled');
 
   const needsReview = active
@@ -253,6 +266,15 @@ export function deriveVisitState(visits: SupabaseVisit[], todayISO: string): Vis
     return { status: 'missed', nextDueLabel: date ? `Missed · ${formatPastDate(date)}` : 'Missed' };
   }
 
+  if (schedule && schedule.scheduleType !== 'ad_hoc') {
+    const currentMonthPrefix = todayISO.slice(0, 7); // 'YYYY-MM'
+    const currentMonth = Number(todayISO.slice(5, 7));
+    const hasVisitThisMonth = active.some((v) => v.scheduled_date?.startsWith(currentMonthPrefix));
+    if (!hasVisitThisMonth && monthsDueInYear(schedule)?.has(currentMonth)) {
+      return { status: 'needs_booking', nextDueLabel: 'Due this month — no date set yet' };
+    }
+  }
+
   return { status: 'unscheduled', nextDueLabel: 'Not yet scheduled' };
 }
 
@@ -294,7 +316,7 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
 
   const todayISO = new Date().toISOString().slice(0, 10);
   const rawVisits = row.visits ?? [];
-  const { status, nextDueLabel } = deriveVisitState(rawVisits, todayISO);
+  const { status, nextDueLabel } = deriveVisitState(rawVisits, todayISO, schedule);
 
   const visits: JobVisitSummary[] = [...rawVisits]
     .sort((a, b) => (a.scheduled_date ?? '').localeCompare(b.scheduled_date ?? ''))
