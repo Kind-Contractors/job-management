@@ -112,6 +112,7 @@ export default function NavRail() {
   const onThisWeek = pathname === '/this-week';
   const onMonthMatrix = pathname === '/month-matrix';
   const onReportReview = pathname === '/report-review';
+  const onReadyForAccounts = pathname === '/ready-for-accounts';
   const onUsers = pathname === '/users';
 
   const divisionFiltered = jobRows.filter((j) => division === 'Both' || j.division === division);
@@ -138,15 +139,7 @@ export default function NavRail() {
     (n, j) => n + j.visits.filter(isVisitReadyForAccounts).length,
     0,
   );
-  const readyForAccounts = searchParams.get('readyForAccounts') === '1';
-
-  const goToReadyForAccounts = () => {
-    const next = new URLSearchParams(searchParams);
-    next.set('readyForAccounts', '1');
-    next.delete('status');
-    next.delete('group');
-    navigate(`/jobs?${next.toString()}`);
-  };
+  const goToReadyForAccounts = () => navigate('/ready-for-accounts');
 
   const goToFilteredJobs = (key: AttentionKey) => {
     const next = new URLSearchParams(searchParams);
@@ -212,7 +205,7 @@ export default function NavRail() {
         />
       ))}
       <NavItem
-        active={onJobs && readyForAccounts}
+        active={onReadyForAccounts}
         onClick={goToReadyForAccounts}
         dotClass="bg-teal"
         icon={HiOutlineBanknotes}
