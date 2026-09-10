@@ -15,6 +15,11 @@ function toISODate(d: Date): string {
   return `${d.getFullYear()}-${month}-${day}`;
 }
 
+/** Built directly from the year/month numbers, never via `new Date(...).toISOString()` — no timezone shift possible. */
+function firstOfMonthISO(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, '0')}-01`;
+}
+
 export default function MonthMatrixPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [yearOffset, setYearOffset] = useState(0);
@@ -53,7 +58,17 @@ export default function MonthMatrixPage() {
     setSelectedJobId(job.id);
     if (cell.kind === 'due_no_date' && cell.visitCount === 0) {
       setForceShowBooking(true);
-      setPresetVisitDate((job.schedule ? suggestDateInMonth(job.schedule, year, month) : null) ?? undefined);
+      // suggestDateInMonth only ever returns a real day for a literally-
+      // monthly fixed_date/fixed_weekday schedule — every other case (in
+      // particular due_month, which never stores a specific day) returns
+      // null. That null used to fall through to JobInspectorDrawer's own
+      // default of *today's real date*, so clicking e.g. a July due cell
+      // while today happens to fall in April silently pre-filled April's
+      // date. Falling back to the 1st of the CLICKED month instead keeps
+      // the pre-fill inside the month actually clicked, without fabricating
+      // a specific day this schedule never claimed to know.
+      const suggested = job.schedule ? suggestDateInMonth(job.schedule, year, month) : null;
+      setPresetVisitDate(suggested ?? firstOfMonthISO(year, month));
     } else {
       setForceShowBooking(false);
       setPresetVisitDate(undefined);

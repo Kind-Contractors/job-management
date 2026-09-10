@@ -227,6 +227,12 @@ export default function ScheduleEditor({ jobId, schedule }: ScheduleEditorProps)
             </select>
           </label>
 
+          <div className="text-[11px] leading-snug text-neutral-500">
+            "Due month" is the right choice when a job is due sometime in a particular month but the exact day is
+            picked when booking — including recurring multi-month patterns like "every 3 months, starting April"
+            (due month = April, every = 3 months).
+          </div>
+
           {(form.scheduleType === 'fixed_weekday' || form.scheduleType === 'fixed_date' || form.scheduleType === 'due_month') && (
             <div className="flex gap-2">
               <label className="flex flex-1 flex-col gap-1 text-[11px] text-neutral-600">
