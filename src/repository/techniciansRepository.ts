@@ -116,3 +116,21 @@ export async function rescheduleVisit(visitId: string, scheduledDate: string): P
     throw new Error(`Failed to reschedule visit: ${error.message}`);
   }
 }
+
+/**
+ * Assigns (or clears, if technicianId is null) an EXISTING visit's own
+ * technician — a plain update by id, touching only technician_id. Distinct
+ * from jobsRepository.ts's assignJobTechnician(), which sets the job's
+ * default/prefill for FUTURE bookings only: this is the one function that
+ * changes who is actually doing an already-booked visit, and never writes
+ * jobs.default_technician_id. technicianId stays nullable so a visit can
+ * always be set back to Unassigned if plans change (Luke: flexible,
+ * changeable person assignment — reference/Luke_manager_app_version_1.txt).
+ */
+export async function assignVisitTechnician(visitId: string, technicianId: string | null): Promise<void> {
+  const { error } = await supabase.from('visits').update({ technician_id: technicianId }).eq('id', visitId);
+
+  if (error) {
+    throw new Error(`Failed to assign technician: ${error.message}`);
+  }
+}

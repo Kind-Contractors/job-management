@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Division, FrequencyType, JobRow } from '../../domain/types';
 import { updateJob, type JobEditInput } from '../../repository/jobsRepository';
-import { FREQUENCY_TYPE_LABEL } from '../../repository/mapJobRow';
+import { FREQUENCY_TYPE_LABEL, computeDerivedPricing } from '../../repository/mapJobRow';
 
 const DIVISIONS: Division[] = ['General', 'Specialist'];
 const FREQUENCY_TYPES = Object.keys(FREQUENCY_TYPE_LABEL) as FrequencyType[];
@@ -27,16 +27,38 @@ function formFromJob(job: JobRow): FormState {
   };
 }
 
+/**
+ * The one place "is this job summary valid" is decided — returns the
+ * trimmed value, or null if it's empty/whitespace-only. Reused by JobsGrid's
+ * inline cell edit so the spreadsheet workflow can never accept a value the
+ * full editor would reject, or vice versa.
+ */
+export function parseJobSummary(raw: string): string | null {
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * The one place "is this a valid fixed price-per-visit" is decided —
+ * returns the parsed number, or null if it's missing/non-finite/not
+ * positive. Reused by JobsGrid's inline cell edit for the exact same reason
+ * as parseJobSummary above.
+ */
+export function parsePricePerVisit(raw: string): number | null {
+  const parsed = Number(raw);
+  if (!raw || !Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
 /** Builds a validated JobEditInput, or null while the form is incomplete/invalid. Never transforms a value to fit — a 'fixed' job with no valid price simply can't be saved. */
 function toInput(form: FormState): JobEditInput | null {
-  const jobSummary = form.jobSummary.trim();
+  const jobSummary = parseJobSummary(form.jobSummary);
   if (!jobSummary) return null;
 
   let pricePerVisit: number | null = null;
   if (form.pricingType === 'fixed') {
-    const parsed = Number(form.pricePerVisit);
-    if (!form.pricePerVisit || !Number.isFinite(parsed) || parsed <= 0) return null;
-    pricePerVisit = parsed;
+    pricePerVisit = parsePricePerVisit(form.pricePerVisit);
+    if (pricePerVisit == null) return null;
   }
 
   return {
@@ -69,6 +91,12 @@ export default function JobEditor({ job, onDone }: JobEditorProps) {
   });
 
   const input = toInput(form);
+
+  const parsedPricePerVisit =
+    form.pricingType === 'fixed' && form.pricePerVisit !== '' && Number.isFinite(Number(form.pricePerVisit))
+      ? Number(form.pricePerVisit)
+      : null;
+  const pricingPreview = computeDerivedPricing(form.pricingType, form.frequencyType || null, parsedPricePerVisit);
 
   return (
     <div className="m-3.5 border border-neutral-300 p-3">
@@ -153,6 +181,14 @@ export default function JobEditor({ job, onDone }: JobEditorProps) {
               />
             </label>
           )}
+        </div>
+
+        <div className="text-[11px] text-neutral-500">
+          {pricingPreview.yearlyValue != null
+            ? `≈ £${pricingPreview.monthlyValue!.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/month · £${pricingPreview.yearlyValue.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/year`
+            : form.pricingType === 'variable'
+              ? 'Variable pricing — no fixed monthly/yearly total.'
+              : 'Set a frequency to calculate monthly/yearly totals.'}
         </div>
 
         {error && <div className="text-[11.5px] text-missed-fg">{error}</div>}

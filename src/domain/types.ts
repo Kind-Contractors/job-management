@@ -99,6 +99,15 @@ export interface Job {
    * number. See CLAUDE.md section 14.2.
    */
   yearlyValue: number | null;
+  /**
+   * yearlyValue / 12 — averaged over 12 months rather than a second,
+   * independently-tunable rate, so it can never drift from the yearly figure.
+   * null exactly when yearlyValue is null (variable pricing, unknown
+   * frequency, or ask/ad-hoc/one-off) — never a fabricated number. See
+   * `computeDerivedPricing()` in mapJobRow.ts, the one place both figures are
+   * derived.
+   */
+  monthlyValue: number | null;
   /** Derived from real `visits` rows — see `mapJobRow.ts`'s `deriveVisitState`. */
   nextDueLabel: string;
   /** Derived from real `visits` rows — see `mapJobRow.ts`'s `deriveVisitState`. */
@@ -151,6 +160,8 @@ export interface JobVisitSummary {
   id: string;
   scheduledDate: string | null;
   status: VisitStatus;
+  /** `visits.technician_id` — the real id backing `technicianName`, needed to drive an assignment select. Independent of `job.defaultTechnicianId`: reassigning one visit never touches the job's default. */
+  technicianId: string | null;
   technicianName: string | null;
   /** Set once the visit is marked completed — see CLAUDE.md section 14.2/the visit-completion plan. */
   priceCharged: number | null;

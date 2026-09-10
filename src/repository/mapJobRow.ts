@@ -50,6 +50,40 @@ const VISITS_PER_YEAR_BY_TYPE: Record<FrequencyType, number> = {
   one_off: 0,
 };
 
+export interface DerivedPricing {
+  yearlyValue: number | null;
+  monthlyValue: number | null;
+}
+
+/**
+ * The one place price-per-month/price-per-year are derived from
+ * price-per-visit + frequency — used by mapJobRow() below for real jobs, and
+ * reused as-is by JobCreator/JobEditor for their live create/edit preview, so
+ * there is never a second calculation to keep in sync. Both values are null
+ * together whenever a meaningful recurring total can't be honestly computed
+ * (variable pricing, no frequency set, ask/ad-hoc, or one-off) — never a
+ * fabricated number. monthlyValue is simply yearlyValue / 12 (the same
+ * visits-per-year model, just averaged over 12 months) rather than a second,
+ * independently-tunable rate. See CLAUDE.md section 14.2.
+ */
+export function computeDerivedPricing(
+  pricingType: 'fixed' | 'variable',
+  frequencyType: FrequencyType | null,
+  pricePerVisit: number | null,
+): DerivedPricing {
+  const canCompute =
+    pricingType === 'fixed' &&
+    frequencyType != null &&
+    frequencyType !== 'ask_adhoc' &&
+    frequencyType !== 'one_off' &&
+    pricePerVisit != null;
+
+  if (!canCompute) return { yearlyValue: null, monthlyValue: null };
+
+  const yearlyValue = pricePerVisit! * VISITS_PER_YEAR_BY_TYPE[frequencyType!];
+  return { yearlyValue, monthlyValue: yearlyValue / 12 };
+}
+
 interface SupabaseBuildingAccess {
   access_notes: string | null;
 }
@@ -232,15 +266,7 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
   const frequency: Frequency = frequencyType ? FREQUENCY_TYPE_LABEL[frequencyType] : 'Unknown';
   const frequencyRaw = frequencyType ? FREQUENCY_TYPE_LABEL[frequencyType] : (row.frequency_raw ?? 'Unknown');
 
-  const canComputeYearly =
-    row.pricing_type === 'fixed' &&
-    frequencyType != null &&
-    frequencyType !== 'ask_adhoc' &&
-    frequencyType !== 'one_off' &&
-    row.price_per_visit != null;
-  const yearlyValue = canComputeYearly
-    ? row.price_per_visit! * VISITS_PER_YEAR_BY_TYPE[frequencyType!]
-    : null;
+  const { yearlyValue, monthlyValue } = computeDerivedPricing(row.pricing_type, frequencyType, row.price_per_visit);
 
   const supabaseSchedule = one(row.schedules);
   const schedule: Schedule | null = supabaseSchedule
@@ -280,6 +306,7 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
         id: v.id,
         scheduledDate: v.scheduled_date,
         status: v.status,
+        technicianId: v.technician_id,
         technicianName: one(v.technicians)?.name ?? null,
         priceCharged: v.price_charged,
         completedAt: v.completed_at,
@@ -303,6 +330,7 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
     frequencyType,
     pricePerVisit: row.price_per_visit,
     yearlyValue,
+    monthlyValue,
     nextDueLabel,
     status,
     technician,

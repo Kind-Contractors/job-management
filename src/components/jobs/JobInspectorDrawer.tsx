@@ -116,6 +116,10 @@ export default function JobInspectorDrawer({
     ['Client', job.clientName],
     ['Invoice address', job.clientInvoiceAddress ? job.clientInvoiceAddress.split(',')[0] : '—'],
     ['Price per visit', job.pricePerVisit == null ? 'Variable' : `£${job.pricePerVisit.toLocaleString('en-GB')}.00`],
+    [
+      'Price per month',
+      job.monthlyValue ? `£${job.monthlyValue.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'On request',
+    ],
     ['Contract per year', job.yearlyValue ? `£${job.yearlyValue.toLocaleString('en-GB')}.00` : 'On request'],
     ['Next visit', job.nextDueLabel],
   ];
@@ -291,6 +295,7 @@ export default function JobInspectorDrawer({
                 job={job}
                 visit={v}
                 actor={actor}
+                technicians={activeTechnicians}
                 selectableForInvoice={selectableForInvoice}
                 selectedForInvoice={selectedVisitIds.has(v.id)}
                 onToggleSelectForInvoice={() => toggleVisitSelected(v.id)}

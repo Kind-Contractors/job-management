@@ -4,7 +4,8 @@ import type { Division, FrequencyType } from '../../domain/types';
 import { createJob, type JobCreateInput } from '../../repository/jobsRepository';
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import { listTechnicians } from '../../repository/techniciansRepository';
-import { FREQUENCY_TYPE_LABEL } from '../../repository/mapJobRow';
+import { FREQUENCY_TYPE_LABEL, computeDerivedPricing } from '../../repository/mapJobRow';
+import { parseJobSummary, parsePricePerVisit } from './JobEditor';
 
 const DIVISIONS: Division[] = ['General', 'Specialist'];
 const FREQUENCY_TYPES = Object.keys(FREQUENCY_TYPE_LABEL) as FrequencyType[];
@@ -37,14 +38,13 @@ function blankForm(presetBuildingId?: string): FormState {
 function toInput(form: FormState): JobCreateInput | null {
   if (!form.buildingId) return null;
 
-  const jobSummary = form.jobSummary.trim();
+  const jobSummary = parseJobSummary(form.jobSummary);
   if (!jobSummary) return null;
 
   let pricePerVisit: number | null = null;
   if (form.pricingType === 'fixed') {
-    const parsed = Number(form.pricePerVisit);
-    if (!form.pricePerVisit || !Number.isFinite(parsed) || parsed <= 0) return null;
-    pricePerVisit = parsed;
+    pricePerVisit = parsePricePerVisit(form.pricePerVisit);
+    if (pricePerVisit == null) return null;
   }
 
   return {
@@ -106,6 +106,12 @@ export default function JobCreator({ buildingId, onCreated, onCancel }: JobCreat
   });
 
   const input = toInput(form);
+
+  const parsedPricePerVisit =
+    form.pricingType === 'fixed' && form.pricePerVisit !== '' && Number.isFinite(Number(form.pricePerVisit))
+      ? Number(form.pricePerVisit)
+      : null;
+  const pricingPreview = computeDerivedPricing(form.pricingType, form.frequencyType || null, parsedPricePerVisit);
 
   return (
     <aside className="hidden w-[344px] flex-none flex-col overflow-y-auto border-l border-divider bg-white lg:flex">
@@ -249,6 +255,14 @@ export default function JobCreator({ buildingId, onCreated, onCancel }: JobCreat
               />
             </label>
           )}
+        </div>
+
+        <div className="text-[11px] text-neutral-500">
+          {pricingPreview.yearlyValue != null
+            ? `≈ £${pricingPreview.monthlyValue!.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/month · £${pricingPreview.yearlyValue.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/year`
+            : form.pricingType === 'variable'
+              ? 'Variable pricing — no fixed monthly/yearly total.'
+              : 'Set a frequency to calculate monthly/yearly totals.'}
         </div>
 
         <label className="flex flex-col gap-1 text-[11px] text-neutral-600">

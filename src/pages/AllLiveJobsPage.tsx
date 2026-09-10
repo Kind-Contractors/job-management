@@ -42,7 +42,7 @@ function buildJobsCsv(rows: JobRow[], groupBy: GroupBy): string {
   const orderedJobs = buildGridBlocks(rows, groupBy)
     .filter((b): b is Extract<GridBlock, { kind: 'row' }> => b.kind === 'row')
     .map((b) => b.job);
-  const header = ['Job ID', 'Building', 'Postcode', 'Client', 'Job', 'Frequency', 'Price per visit', 'Per year', 'Next due', 'Status', 'Technician'];
+  const header = ['Job ID', 'Building', 'Postcode', 'Client', 'Job', 'Frequency', 'Price per visit', 'Per month', 'Per year', 'Next due', 'Status', 'Technician'];
   const lines = orderedJobs.map((job) =>
     [
       job.id,
@@ -52,6 +52,7 @@ function buildJobsCsv(rows: JobRow[], groupBy: GroupBy): string {
       job.jobSummary,
       job.frequencyRaw,
       job.pricePerVisit == null ? '' : job.pricePerVisit.toFixed(2),
+      job.monthlyValue == null ? '' : job.monthlyValue.toFixed(2),
       job.yearlyValue == null ? '' : job.yearlyValue.toFixed(2),
       job.nextDueLabel,
       getStatusPresentation(job.status).label,

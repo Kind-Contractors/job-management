@@ -129,6 +129,7 @@ export const jobs: Job[] = RAW.map((r) => ({
   frequencyType: null,
   pricePerVisit: r.pricePerVisit,
   yearlyValue: r.yearlyValue,
+  monthlyValue: r.yearlyValue / 12,
   nextDueLabel: r.nextDueLabel,
   status: r.status,
   technician: r.technician,

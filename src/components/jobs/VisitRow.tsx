@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { JobRow, JobVisitSummary } from '../../domain/types';
+import type { JobRow, JobVisitSummary, Technician } from '../../domain/types';
 import { completeVisit, createReport, markVisitCancelled, markVisitMissed } from '../../repository/reportsRepository';
+import { assignVisitTechnician } from '../../repository/techniciansRepository';
 import { getVisitStatusPresentation, isVisitReadyForAccounts } from '../../lib/statusPresentation';
 import ReportPanel from './ReportPanel';
 import StatusPill from './StatusPill';
@@ -36,6 +37,8 @@ interface VisitRowProps {
   job: JobRow;
   visit: JobVisitSummary;
   actor: string;
+  /** Active technicians selectable for (re)assignment — the same list callers already fetch via listTechnicians()/['technicians']. */
+  technicians: Technician[];
   /** True once this visit is approved and not yet linked to any invoice — see isVisitReadyForAccounts + JobVisitSummary.invoiceId. */
   selectableForInvoice?: boolean;
   selectedForInvoice?: boolean;
@@ -48,6 +51,7 @@ export default function VisitRow({
   job,
   visit,
   actor,
+  technicians,
   selectableForInvoice = false,
   selectedForInvoice = false,
   onToggleSelectForInvoice,
@@ -58,6 +62,23 @@ export default function VisitRow({
   const [price, setPrice] = useState(job.pricePerVisit != null ? String(job.pricePerVisit) : '');
   const [completedAt, setCompletedAt] = useState(nowLocalDateTime());
   const [error, setError] = useState<string | null>(null);
+  const [assignError, setAssignError] = useState<string | null>(null);
+
+  /**
+   * Assigns/reassigns/clears THIS visit's own technician_id only — never
+   * jobs.default_technician_id (see assignVisitTechnician's own doc comment).
+   * Reuses the same invalidation pair every other visit mutation in this
+   * file already uses, so Day/Week/Month/All Live Jobs all pick up the new
+   * technician the same way they already pick up a reschedule.
+   */
+  const assignTechnicianMutation = useMutation({
+    mutationFn: (technicianId: string | null) => assignVisitTechnician(visit.id, technicianId),
+    onSuccess: () => {
+      invalidateAfterVisitChange(queryClient);
+      setAssignError(null);
+    },
+    onError: (err) => setAssignError(err instanceof Error ? err.message : 'Failed to assign technician.'),
+  });
 
   const completeMutation = useMutation({
     mutationFn: () => completeVisit(visit.id, Number(price), new Date(completedAt).toISOString(), actor),
@@ -96,7 +117,7 @@ export default function VisitRow({
             />
           )}
           <StatusPill presentation={getVisitStatusPresentation(visit.status)} />
-          {visit.technicianName && <span className="text-neutral-500"> · {visit.technicianName}</span>}
+          <span className="text-neutral-500"> · {visit.technicianName ?? 'Unassigned'}</span>
           {visit.priceCharged != null && (
             <span className="text-neutral-500"> · £{visit.priceCharged.toLocaleString('en-GB')}</span>
           )}
@@ -114,6 +135,29 @@ export default function VisitRow({
         </span>
         <span className="tabular-nums text-neutral-600">{dateLabel}</span>
       </div>
+
+      {(visit.status === 'due' || visit.status === 'booked') && mode === 'summary' && (
+        <div className="mt-1 flex items-center gap-1.5">
+          <label className="flex items-center gap-1.5 text-[11px] text-neutral-600">
+            Technician
+            <select
+              value={visit.technicianId ?? ''}
+              onChange={(e) => assignTechnicianMutation.mutate(e.target.value || null)}
+              disabled={assignTechnicianMutation.isPending}
+              className="cursor-pointer border border-neutral-300 px-1.5 py-0.5 text-[11px] text-ink outline-none focus:border-teal"
+            >
+              <option value="">Unassigned</option>
+              {technicians.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {assignTechnicianMutation.isPending && <span className="text-[11px] text-neutral-500">Saving…</span>}
+          {assignError && <span className="text-[11px] text-missed-fg">{assignError}</span>}
+        </div>
+      )}
 
       {(visit.status === 'due' || visit.status === 'booked') && mode === 'summary' && (
         <div className="mt-1 flex gap-2">

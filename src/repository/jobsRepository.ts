@@ -109,6 +109,34 @@ export async function updateJob(jobId: string, input: JobEditInput): Promise<voi
   }
 }
 
+export type JobPatchInput = Partial<JobEditInput>;
+
+/**
+ * Patches only the given fields of a job — used by JobsGrid's inline cell
+ * edits, where a single Tab-committed cell should touch only its own
+ * column rather than resending the whole job (avoids clobbering a change
+ * made to a different field in the same moment). Mirrors
+ * reportsRepository.ts's updateReport() partial-patch pattern exactly.
+ * updateJob() above is unchanged and still used by the full JobEditor form.
+ * Never includes default_technician_id — that's assignJobTechnician()'s
+ * job alone, reused as-is by the grid's Technician column.
+ */
+export async function patchJob(jobId: string, input: JobPatchInput): Promise<void> {
+  const patch: Record<string, unknown> = {};
+  if ('jobSummary' in input) patch.job_summary = input.jobSummary;
+  if ('jobNotes' in input) patch.job_notes = input.jobNotes;
+  if ('division' in input) patch.job_type = input.division === 'Specialist' ? 'specialist' : 'general';
+  if ('pricingType' in input) patch.pricing_type = input.pricingType;
+  if ('pricePerVisit' in input) patch.price_per_visit = input.pricePerVisit;
+  if ('frequencyType' in input) patch.frequency_type = input.frequencyType;
+
+  const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
+
+  if (error) {
+    throw new Error(`Failed to update job: ${error.message}`);
+  }
+}
+
 export interface JobCreateInput {
   buildingId: string;
   division: Division;
