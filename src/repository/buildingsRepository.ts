@@ -66,6 +66,72 @@ export async function createBuilding(clientId: string, input: BuildingCreateFiel
   return data.id;
 }
 
+export interface BuildingEditFields {
+  name: string | null;
+  address: string;
+  postcode: string | null;
+  invoiceDetails: string | null;
+  siteInstructions: string | null;
+}
+
+/**
+ * Edits a building's own general details — never client_id (no reassignment
+ * workflow exists, and none is being added here) and never building_access
+ * (a separate table/function below, kept behind its own reveal-gated UI).
+ * Plain update by id, same manager_full_access RLS as createBuilding().
+ */
+export async function updateBuilding(buildingId: string, fields: BuildingEditFields): Promise<void> {
+  const { error } = await supabase
+    .from('buildings')
+    .update({
+      name: fields.name,
+      address: fields.address,
+      postcode: fields.postcode,
+      invoice_details: fields.invoiceDetails,
+      extra_requirements: fields.siteInstructions,
+    })
+    .eq('id', buildingId);
+
+  if (error) {
+    throw new Error(`Failed to update building: ${error.message}`);
+  }
+}
+
+export interface BuildingAccessEditFields {
+  keySafeCode: string | null;
+  keyholderName: string | null;
+  keyholderPhone: string | null;
+  parkingNotes: string | null;
+  accessNotes: string | null;
+}
+
+/**
+ * Upserts building_access, keyed on building_id (its primary key) — most
+ * buildings (~325/342) have no row here yet, so a plain UPDATE would
+ * silently touch zero rows the first time a manager records access details
+ * for one. Internal-only data: never read by anything client-facing, and
+ * this function is only ever called from the Building File's already
+ * reveal-gated access panel. updated_by is deliberately left unset this
+ * pass (not required yet).
+ */
+export async function upsertBuildingAccess(buildingId: string, fields: BuildingAccessEditFields): Promise<void> {
+  const { error } = await supabase.from('building_access').upsert(
+    {
+      building_id: buildingId,
+      key_safe_code: fields.keySafeCode,
+      keyholder_name: fields.keyholderName,
+      keyholder_phone: fields.keyholderPhone,
+      parking_notes: fields.parkingNotes,
+      access_notes: fields.accessNotes,
+    },
+    { onConflict: 'building_id' },
+  );
+
+  if (error) {
+    throw new Error(`Failed to update access details: ${error.message}`);
+  }
+}
+
 export interface NewClientBuildingInput extends BuildingCreateFields {
   companyName: string;
 }

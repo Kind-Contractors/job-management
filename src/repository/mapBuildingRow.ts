@@ -55,6 +55,7 @@ export function mapBuildingRow(row: SupabaseBuildingRecord): BuildingRow {
     clientId: row.client_id,
     clientName: client?.company_name ?? '',
     address: row.address,
+    name: row.name,
     buildingName,
     postcode: row.postcode ?? '',
     invoiceDetails: row.invoice_details ?? '',

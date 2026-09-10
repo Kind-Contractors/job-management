@@ -6,6 +6,8 @@ import { listJobRows } from '../repository/jobsRepository';
 import { listContactsForClient } from '../repository/contactsRepository';
 import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
 import JobCreator from '../components/jobs/JobCreator';
+import BuildingEditor from '../components/jobs/BuildingEditor';
+import BuildingAccessEditor from '../components/jobs/BuildingAccessEditor';
 
 const NOT_BUILT_TITLE = 'Not built yet — this pass only covers the Buildings view and Building File basics';
 
@@ -20,6 +22,8 @@ export default function BuildingFilePage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('site');
   const [revealed, setRevealed] = useState(false);
+  const [editingBuilding, setEditingBuilding] = useState(false);
+  const [editingAccess, setEditingAccess] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [creatingJob, setCreatingJob] = useState(false);
 
@@ -131,6 +135,12 @@ export default function BuildingFilePage() {
           </div>
         </div>
         <div className="flex gap-1.5">
+          <button
+            onClick={() => setEditingBuilding((e) => !e)}
+            className="cursor-pointer border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+          >
+            {editingBuilding ? 'Close editor' : 'Edit'}
+          </button>
           <div title={NOT_BUILT_TITLE} className="cursor-not-allowed border border-neutral-300 px-3 py-1.5 text-xs text-neutral-500">
             Print site sheet
           </div>
@@ -145,6 +155,12 @@ export default function BuildingFilePage() {
           </button>
         </div>
       </div>
+
+      {editingBuilding && (
+        <div className="mb-4">
+          <BuildingEditor building={building} onDone={() => setEditingBuilding(false)} />
+        </div>
+      )}
 
       <div className="mb-4 flex gap-1 border-b border-divider">
         {(['site', 'history'] as Tab[]).map((t) => (
@@ -246,23 +262,42 @@ export default function BuildingFilePage() {
                   Internal only · access
                 </div>
                 <button
-                  onClick={() => setRevealed((r) => !r)}
+                  onClick={() => {
+                    setRevealed((r) => !r);
+                    setEditingAccess(false);
+                  }}
                   className="ml-auto cursor-pointer text-[11.5px] text-teal-700 hover:underline"
                 >
                   {revealed ? 'Hide' : 'Reveal'}
                 </button>
               </div>
               {revealed ? (
-                building.access ? (
-                  <div className="mt-2 flex flex-col gap-1">
-                    {accessFields.map(([label, value]) => (
-                      <Fact key={label} label={label} value={value || 'Not recorded'} />
-                    ))}
-                  </div>
+                editingAccess ? (
+                  <BuildingAccessEditor
+                    buildingId={building.id}
+                    access={building.access}
+                    onDone={() => setEditingAccess(false)}
+                  />
                 ) : (
-                  <div className="mt-1.5 text-[12.5px] leading-relaxed text-neutral-700">
-                    Access details not yet recorded for this building.
-                  </div>
+                  <>
+                    {building.access ? (
+                      <div className="mt-2 flex flex-col gap-1">
+                        {accessFields.map(([label, value]) => (
+                          <Fact key={label} label={label} value={value || 'Not recorded'} />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-1.5 text-[12.5px] leading-relaxed text-neutral-700">
+                        Access details not yet recorded for this building.
+                      </div>
+                    )}
+                    <button
+                      onClick={() => setEditingAccess(true)}
+                      className="mt-2 cursor-pointer text-[11.5px] text-teal-700 hover:underline"
+                    >
+                      Edit access details
+                    </button>
+                  </>
                 )
               ) : (
                 <div className="mt-1.5 text-[12.5px] leading-relaxed text-neutral-700">

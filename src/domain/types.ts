@@ -247,6 +247,8 @@ export interface BuildingRow {
   clientId: string;
   clientName: string;
   address: string;
+  /** The real, raw `buildings.name` column — null when never set. Unlike `buildingName`, never falls back to the address; an editor must read/write this, not the fallback-applied display value. */
+  name: string | null;
   /** Falls back to `address`'s first segment — `buildings.name` is 0% populated today. */
   buildingName: string;
   /** '' — `buildings.postcode` is 0% populated today. */
