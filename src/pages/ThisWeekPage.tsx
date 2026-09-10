@@ -2,6 +2,7 @@ import { useMemo, useState, type DragEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import {
+  assignVisitTechnician,
   createTechnician,
   createVisit,
   listTechnicians,
@@ -286,7 +287,59 @@ export default function ThisWeekPage() {
     onError: (err) => setBookingError(err instanceof Error ? err.message : 'Failed to reschedule visit.'),
   });
 
+  /**
+   * Reassigns an existing visit's technician (drag-and-drop onto a
+   * different technician's row) — the exact same assignVisitTechnician()
+   * VisitRow.tsx already uses for its own dropdown, just wired to a
+   * useMutation instance here since hooks are component-scoped. Never
+   * creates a visit; never touches job_id/status/price_charged. The
+   * server-side prevent_technician_reassignment_after_report and
+   * prevent_visit_assignment_to_inactive_technician triggers are the final
+   * backstop regardless of what this component checks beforehand.
+   */
+  const assignTechnicianMutation = useMutation({
+    mutationFn: ({ visitId, technicianId }: { visitId: string; technicianId: string | null }) =>
+      assignVisitTechnician(visitId, technicianId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['jobRows'] });
+      queryClient.invalidateQueries({ queryKey: ['visits'] });
+    },
+  });
+
   const activeTechnicians = useMemo(() => technicians.filter((t) => t.isActive), [technicians]);
+
+  /**
+   * Reassigns a visit to a different technician and, only if the day also
+   * changed, reschedules it too — in that order, sequentially, so a failed
+   * reassignment never leaves the date changed on its own (an outcome the
+   * manager never asked for by dropping on a different technician's row).
+   * Both steps reuse the exact same mutations (and the same ['jobRows']/
+   * ['visits'] invalidation) as every other booking action already uses;
+   * this is orchestration, not a new mutation. If the second step fails
+   * after the first already succeeded, the message says so explicitly
+   * rather than reporting a single generic failure — the reassignment is
+   * NOT rolled back (no combined DB transaction exists for this), so the
+   * visit is left in a real, valid state (new technician, old date) with a
+   * clear explanation of what did and didn't happen.
+   */
+  const handleReassignVisit = async (visitId: string, technicianId: string, newDateISO: string | null) => {
+    setBookingError(null);
+    try {
+      await assignTechnicianMutation.mutateAsync({ visitId, technicianId });
+    } catch (err) {
+      setBookingError(err instanceof Error ? err.message : 'Failed to reassign technician.');
+      return;
+    }
+    if (newDateISO) {
+      try {
+        await rescheduleMutation.mutateAsync({ visitId, date: newDateISO });
+      } catch (err) {
+        setBookingError(
+          `Technician reassigned, but moving it to the new date failed: ${err instanceof Error ? err.message : 'unknown error'}.`,
+        );
+      }
+    }
+  };
 
   const handleDropJob = (jobId: string, date: string) => {
     setBookingError(null);
@@ -362,15 +415,49 @@ export default function ThisWeekPage() {
   const handleDrop = (technicianId: string, dateISO: string) => (e: DragEvent) => {
     e.preventDefault();
     // An already-booked chip carries its visit id under this dedicated mime
-    // type (set by the chip's own onDragStart in ScheduleTechnicianGrid) —
-    // checked first so dropping it reschedules the SAME visit rather than
-    // falling through and creating a new one. Deliberately ignores
-    // `technicianId` (which row/day it was dropped on) for this path — the
-    // visit's own assigned technician is left exactly as it was, per the
-    // reschedule requirement; only the date changes.
+    // type (set by the chip's own onDragStart in ScheduleTechnicianGrid).
     const visitId = e.dataTransfer.getData('application/x-visit-id');
     if (visitId) {
-      handleRescheduleVisit(visitId, dateISO);
+      const visit = visits.find((v) => v.id === visitId);
+      if (!visit) return; // stale drag payload (e.g. visit removed mid-drag) — nothing to act on
+      const dateChanged = visit.scheduledDate !== dateISO;
+      const technicianChanged = visit.technicianId !== technicianId;
+
+      if (!technicianChanged) {
+        // Dropped back onto its own current technician's row — same as
+        // before: only ever a date change, and only if the date actually
+        // changed (dropping onto the exact same cell is a no-op).
+        if (dateChanged) handleRescheduleVisit(visitId, dateISO);
+        return;
+      }
+
+      // Dropped onto a DIFFERENT technician's row — a reassignment request.
+      // ScheduleTechnicianGrid renders every technician's row as a drop
+      // target, not just active ones, so reject an inactive target here
+      // (same check/message already used for new bookings below) rather
+      // than relying solely on the server-side guard to surface a bare
+      // error after the fact.
+      const targetTechnician = technicianById.get(technicianId);
+      if (!targetTechnician?.isActive) {
+        setBookingError(`${targetTechnician?.name ?? 'This technician'} is deactivated and can't be assigned new visits.`);
+        return;
+      }
+
+      // A submitted report blocks reassignment (server-enforced by the
+      // prevent_technician_reassignment_after_report trigger) — checked
+      // here too so the whole drop is rejected up front with a clear
+      // reason, rather than silently doing nothing or partially applying a
+      // date change the manager didn't ask for via this gesture. Read from
+      // the already-loaded jobRows (JobVisitSummary.reportId), not a new
+      // query — WeekVisit itself doesn't carry report state.
+      const job = jobById.get(visit.jobId);
+      const reportId = job?.visits.find((v) => v.id === visitId)?.reportId ?? null;
+      if (reportId) {
+        setBookingError("This visit already has a submitted report and can't be reassigned to a different technician.");
+        return;
+      }
+
+      void handleReassignVisit(visitId, technicianId, dateChanged ? dateISO : null);
       return;
     }
     const jobId = e.dataTransfer.getData('text/plain');
