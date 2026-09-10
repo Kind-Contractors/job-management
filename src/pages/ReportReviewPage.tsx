@@ -117,6 +117,11 @@ export default function ReportReviewPage() {
             </div>
 
             <ReportPanel
+              // Forces a full remount whenever Prev/Next selects a
+              // different report — ReportPanel holds report-specific local
+              // state (expanded/return-form/edit-in-progress text) that
+              // must never survive onto a different report's reportId.
+              key={selected.visit.reportId}
               reportId={selected.visit.reportId!}
               reviewStatus={selected.visit.reportReviewStatus!}
               actor={actor}

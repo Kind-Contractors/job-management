@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import type { ColDef, GetRowIdParams, GridApi, RowClassParams, TabToNextCellParams } from 'ag-grid-community';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { Division, FrequencyType, JobRow, Technician } from '../../domain/types';
 import type { GridBlock, GroupBy } from '../../lib/grouping';
 import { buildGridBlocks } from '../../lib/grouping';
@@ -29,6 +29,28 @@ function moneyPrecise(n: number): string {
 
 function jobOf(params: { data?: GridBlock }): JobRow | undefined {
   return params.data?.kind === 'row' ? params.data.job : undefined;
+}
+
+/** The write-back half of the jobOf() abstraction — points this row's GridBlock at a new JobRow object, never mutating the old one's fields. No-ops for a band row (defensive; every caller already knows it has a 'row' block via a prior jobOf() call). */
+function setJobOf(params: { data?: GridBlock }, updated: JobRow): void {
+  if (params.data?.kind === 'row') {
+    params.data.job = updated;
+  }
+}
+
+/**
+ * Patches one job in the shared ['jobRows'] cache by id — the single place
+ * every editable column's valueSetter below writes an edit back, instead of
+ * mutating the existing JobRow in place (which never reached React: the
+ * page's own filtering/totals, lib/grouping.ts's band totals, and an open
+ * JobInspectorDrawer all read this same cache, but none of them re-render
+ * from an in-place field mutation). Replaces only the matching entry —
+ * every other job keeps its exact existing reference, so unrelated rows
+ * never re-render. The existing onSettled invalidateQueries(['jobRows'])
+ * on each mutation (below) still runs as the reconciliation safety net.
+ */
+function patchJobRowInCache(queryClient: QueryClient, updated: JobRow): void {
+  queryClient.setQueryData<JobRow[]>(['jobRows'], (old) => old?.map((j) => (j.id === updated.id ? updated : j)) ?? old);
 }
 
 /** Mirrors mapJobRow.ts's own default-technician display string exactly, computed here from the same technicians list already fetched for the cell editor's options. */
@@ -67,7 +89,11 @@ export const COLUMN_LABELS: Record<JobsGridColumnId, string> = {
   technician: 'Default technician',
 };
 
-function buildColumnDefs(hiddenColumns: ReadonlySet<JobsGridColumnId>, technicians: Technician[]): ColDef<GridBlock>[] {
+function buildColumnDefs(
+  hiddenColumns: ReadonlySet<JobsGridColumnId>,
+  technicians: Technician[],
+  queryClient: QueryClient,
+): ColDef<GridBlock>[] {
   const hide = (id: JobsGridColumnId) => hiddenColumns.has(id);
   const technicianById = new Map(technicians.map((t) => [t.id, t]));
   const activeTechnicianOptions = technicians.filter((t) => t.isActive).map((t) => ({ value: t.id, label: t.name }));
@@ -103,7 +129,9 @@ function buildColumnDefs(hiddenColumns: ReadonlySet<JobsGridColumnId>, technicia
         if (!job) return false;
         const next = parseJobSummary(String(p.newValue ?? ''));
         if (next == null || next === job.jobSummary) return false;
-        job.jobSummary = next;
+        const updated: JobRow = { ...job, jobSummary: next };
+        setJobOf(p, updated);
+        patchJobRowInCache(queryClient, updated);
         return true;
       },
     },
@@ -122,7 +150,9 @@ function buildColumnDefs(hiddenColumns: ReadonlySet<JobsGridColumnId>, technicia
         if (!job) return false;
         const next = p.newValue as Division;
         if (next === job.division) return false;
-        job.division = next;
+        const updated: JobRow = { ...job, division: next };
+        setJobOf(p, updated);
+        patchJobRowInCache(queryClient, updated);
         return true;
       },
     },
@@ -153,16 +183,21 @@ function buildColumnDefs(hiddenColumns: ReadonlySet<JobsGridColumnId>, technicia
         if (!job) return false;
         const next = (p.newValue || null) as FrequencyType | null;
         if (next === job.frequencyType) return false;
-        job.frequencyType = next;
-        job.frequency = next ? FREQUENCY_TYPE_LABEL[next] : 'Unknown';
-        // Only overwrite the display fallback when we have a real new label
-        // to show — clearing back to "not set" has no legacy raw text to
-        // restore locally (that lives server-side); the next jobRows
-        // refetch (triggered right after this commits) settles it exactly.
-        if (next) job.frequencyRaw = FREQUENCY_TYPE_LABEL[next];
         const derived = computeDerivedPricing(job.pricePerVisit == null ? 'variable' : 'fixed', next, job.pricePerVisit);
-        job.yearlyValue = derived.yearlyValue;
-        job.monthlyValue = derived.monthlyValue;
+        const updated: JobRow = {
+          ...job,
+          frequencyType: next,
+          frequency: next ? FREQUENCY_TYPE_LABEL[next] : 'Unknown',
+          // Only overwrite the display fallback when we have a real new label
+          // to show — clearing back to "not set" has no legacy raw text to
+          // restore locally (that lives server-side); the next jobRows
+          // refetch (triggered right after this commits) settles it exactly.
+          frequencyRaw: next ? FREQUENCY_TYPE_LABEL[next] : job.frequencyRaw,
+          yearlyValue: derived.yearlyValue,
+          monthlyValue: derived.monthlyValue,
+        };
+        setJobOf(p, updated);
+        patchJobRowInCache(queryClient, updated);
         return true;
       },
     },
@@ -188,10 +223,10 @@ function buildColumnDefs(hiddenColumns: ReadonlySet<JobsGridColumnId>, technicia
         if (!job || job.pricePerVisit == null) return false;
         const next = parsePricePerVisit(String(p.newValue ?? ''));
         if (next == null || next === job.pricePerVisit) return false;
-        job.pricePerVisit = next;
         const derived = computeDerivedPricing('fixed', job.frequencyType, next);
-        job.yearlyValue = derived.yearlyValue;
-        job.monthlyValue = derived.monthlyValue;
+        const updated: JobRow = { ...job, pricePerVisit: next, yearlyValue: derived.yearlyValue, monthlyValue: derived.monthlyValue };
+        setJobOf(p, updated);
+        patchJobRowInCache(queryClient, updated);
         return true;
       },
       cellClass: 'tabular-nums',
@@ -278,7 +313,9 @@ function buildColumnDefs(hiddenColumns: ReadonlySet<JobsGridColumnId>, technicia
         if (!job) return false;
         const next = (p.newValue || null) as string | null;
         if (next === job.defaultTechnicianId) return false;
-        job.defaultTechnicianId = next;
+        const updated: JobRow = { ...job, defaultTechnicianId: next };
+        setJobOf(p, updated);
+        patchJobRowInCache(queryClient, updated);
         return true;
       },
     },
@@ -301,7 +338,10 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
   const { data: technicians = [] } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
 
   const blocks = useMemo(() => buildGridBlocks(rows, groupBy), [rows, groupBy]);
-  const columnDefs = useMemo(() => buildColumnDefs(hiddenColumns, technicians), [hiddenColumns, technicians]);
+  const columnDefs = useMemo(
+    () => buildColumnDefs(hiddenColumns, technicians, queryClient),
+    [hiddenColumns, technicians, queryClient],
+  );
   const gridApiRef = useRef<GridApi<GridBlock> | null>(null);
 
   // getRowClass is only re-evaluated by AG Grid when it decides to (new
@@ -421,21 +461,46 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
             }
           }}
           tabToNextCell={(params: TabToNextCellParams<GridBlock>) => {
-            // Client/Frequency grouping interleaves full-width band rows
-            // between job rows (see lib/grouping.ts) — without this, Tab
-            // would land focus on a band row's non-editable full-width
-            // cell instead of continuing across real job rows. AG Grid
-            // already computed the normal next position (including
-            // column wrap at row boundaries); we only need to keep
-            // stepping past consecutive band rows in the same direction.
+            // Two things must be skipped so Tab only ever lands on an
+            // editable cell: (1) full-width band (group header) rows from
+            // lib/grouping.ts — skipped a whole row at a time, exactly as
+            // before, since they have no per-column concept; (2) read-only
+            // columns on a real job row (Building/Per month/Per year/Next
+            // due/Status) — skipped one column at a time, using AG Grid
+            // Community's own column-order APIs, wrapping to the next/
+            // previous row's first/last column when a row runs out of
+            // columns in this direction.
             let candidate = params.nextCellPosition;
-            if (!candidate) return false;
             const step = params.backwards ? -1 : 1;
+
             while (candidate) {
               const rowNode = params.api.getDisplayedRowAtIndex(candidate.rowIndex);
-              if (!rowNode) return false;
-              if (rowNode.data?.kind !== 'band') return candidate;
-              candidate = { ...candidate, rowIndex: candidate.rowIndex + step };
+              if (!rowNode) return false; // ran off the grid — stop
+
+              if (rowNode.data?.kind === 'band') {
+                candidate = { ...candidate, rowIndex: candidate.rowIndex + step };
+                continue;
+              }
+
+              const editableFn = candidate.column.getColDef().editable;
+              const isEditable =
+                typeof editableFn === 'function'
+                  ? (editableFn as (p: { data?: GridBlock }) => boolean)({ data: rowNode.data })
+                  : !!editableFn;
+              if (isEditable) return candidate;
+
+              const nextCol =
+                step === 1
+                  ? params.api.getDisplayedColAfter(candidate.column)
+                  : params.api.getDisplayedColBefore(candidate.column);
+              if (nextCol) {
+                candidate = { ...candidate, column: nextCol };
+              } else {
+                const allCols = params.api.getAllDisplayedColumns();
+                const wrapCol = step === 1 ? allCols[0] : allCols[allCols.length - 1];
+                if (!wrapCol) return false;
+                candidate = { ...candidate, rowIndex: candidate.rowIndex + step, column: wrapCol };
+              }
             }
             return false;
           }}

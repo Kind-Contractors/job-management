@@ -143,8 +143,13 @@ export default function VisitRow({
             <select
               value={visit.technicianId ?? ''}
               onChange={(e) => assignTechnicianMutation.mutate(e.target.value || null)}
-              disabled={assignTechnicianMutation.isPending}
-              className="cursor-pointer border border-neutral-300 px-1.5 py-0.5 text-[11px] text-ink outline-none focus:border-teal"
+              disabled={assignTechnicianMutation.isPending || visit.reportId != null}
+              title={
+                visit.reportId != null
+                  ? "Can't be changed — a report has already been submitted for this visit."
+                  : undefined
+              }
+              className="cursor-pointer border border-neutral-300 px-1.5 py-0.5 text-[11px] text-ink outline-none focus:border-teal disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400"
             >
               <option value="">Unassigned</option>
               {technicians.map((t) => (
@@ -156,6 +161,19 @@ export default function VisitRow({
           </label>
           {assignTechnicianMutation.isPending && <span className="text-[11px] text-neutral-500">Saving…</span>}
           {assignError && <span className="text-[11px] text-missed-fg">{assignError}</span>}
+          {/*
+            visit.reportId is non-null once a report has been submitted for
+            this visit (reports.visit_id is UNIQUE) — every technician-facing
+            RPC/Storage ownership check is CURRENT technician_id only, with
+            no reassignment history, so changing it after that point would
+            let a newly assigned technician read the previous technician's
+            already-submitted report/photos. Also enforced at the database
+            level (prevent_technician_reassignment_after_report trigger on
+            visits) so this can't be bypassed by calling the update directly.
+          */}
+          {visit.reportId != null && (
+            <span className="text-[11px] text-neutral-500">A report has been submitted — technician can't be changed.</span>
+          )}
         </div>
       )}
 

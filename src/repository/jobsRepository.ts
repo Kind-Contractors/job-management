@@ -50,7 +50,20 @@ const JOB_SELECT = `
  * not this one.
  */
 export async function listJobRows(): Promise<JobRow[]> {
-  const { data, error } = await supabase.from('jobs').select(JOB_SELECT).eq('lifecycle_status', 'active');
+  const { data, error } = await supabase
+    .from('jobs')
+    .select(JOB_SELECT)
+    .eq('lifecycle_status', 'active')
+    // Deterministic order — without one, Postgres/PostgREST give no
+    // ordering guarantee at all, and since every inline grid edit now
+    // triggers a reconciling refetch of this exact query (see JobsGrid.tsx),
+    // an unordered result could visibly reshuffle rows/groups moments after
+    // every edit even though nothing about the data actually changed.
+    // created_at is a genuine, meaningful "oldest/imported first" order;
+    // id is a pure tiebreaker for rows sharing an identical timestamp
+    // (common for bulk-migrated legacy jobs).
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true });
 
   if (error) {
     throw new Error(`Failed to load jobs: ${error.message}`);

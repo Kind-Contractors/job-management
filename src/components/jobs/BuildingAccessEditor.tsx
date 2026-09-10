@@ -53,6 +53,10 @@ export default function BuildingAccessEditor({ buildingId, access, onDone }: Bui
     mutationFn: () => upsertBuildingAccess(buildingId, toInput(form)),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['buildingRows'] });
+      // access_notes is also denormalized onto every JobRow at this
+      // building (buildingInternalAccessNote in mapJobRow.ts) — same
+      // staleness reasoning as BuildingEditor.tsx's general-fields save.
+      queryClient.invalidateQueries({ queryKey: ['jobRows'] });
       onDone();
     },
     onError: (err) => setError(err instanceof Error ? err.message : 'Failed to save access details.'),

@@ -53,6 +53,12 @@ export default function BuildingEditor({ building, onDone }: BuildingEditorProps
     mutationFn: (input: BuildingEditFields) => updateBuilding(building.id, input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['buildingRows'] });
+      // Name/address/postcode/invoice details are also denormalized onto
+      // every JobRow at this building (buildingName/postcode/
+      // clientInvoiceAddress in mapJobRow.ts) — without this, All Live
+      // Jobs/Schedule/Job Inspector would keep showing the old values until
+      // something unrelated happened to refetch jobs.
+      queryClient.invalidateQueries({ queryKey: ['jobRows'] });
       onDone();
     },
     onError: (err) => setError(err instanceof Error ? err.message : 'Failed to save building.'),

@@ -197,7 +197,14 @@ export default function BuildingFilePage() {
                 <div className="px-4 py-3 text-[12.5px] text-neutral-500">No jobs recorded at this building.</div>
               ) : (
                 buildingJobs.map((job) => (
-                  <div key={job.id} className="flex justify-between border-b border-divider px-4 py-2 text-[12.5px] last:border-b-0">
+                  <div
+                    key={job.id}
+                    onClick={() => {
+                      setCreatingJob(false);
+                      setSelectedJobId(job.id);
+                    }}
+                    className="flex cursor-pointer justify-between border-b border-divider px-4 py-2 text-[12.5px] last:border-b-0 hover:bg-neutral-100"
+                  >
                     <span>
                       {job.jobSummary} <span className="text-neutral-500">· {job.frequencyRaw}</span>
                     </span>
