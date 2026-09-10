@@ -1,7 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getVisitDetail, resubmitReport, submitReport, uploadVisitPhoto, type PhotoPhase, type UploadedPhoto } from './api';
+import { getVisitDetail, type PhotoPhase } from './api';
+import {
+  enqueuePhoto,
+  getOrInitDraft,
+  getVisitPhotos,
+  markReadyToSubmit,
+  retryPhoto,
+  subscribeSyncEngine,
+  trySubmitIfReady,
+  updateDraftFields,
+} from './offline/syncEngine';
+import type { PendingPhoto } from './offline/db';
 
 const PHASES: { key: PhotoPhase; label: string }[] = [
   { key: 'before', label: 'Before' },
@@ -11,38 +22,34 @@ const PHASES: { key: PhotoPhase; label: string }[] = [
 
 const ISSUE_CHIPS = ['Lighting fault', 'Fly-tipping', 'No access'];
 
-function onSiteStartKey(visitId: string): string {
-  return `technician:onSiteStart:${visitId}`;
-}
+const PHOTO_STATUS_LABEL: Record<PendingPhoto['status'], string> = {
+  pending: 'Saved locally',
+  uploading: 'Uploading…',
+  uploaded: 'Uploaded',
+  failed: 'Failed — tap to retry',
+};
+
+const PHOTO_STATUS_STYLE: Record<PendingPhoto['status'], string> = {
+  pending: 'border-neutral-400 text-neutral-600',
+  uploading: 'border-due text-due-fg',
+  uploaded: 'border-teal text-teal-700',
+  failed: 'border-missed text-missed-fg',
+};
 
 /**
- * Reads the persisted arrival time for this visit, recording it now if this
- * is the first time the report screen has been opened for it — never a
- * typed value. Falls back to an unpersisted timestamp if localStorage
- * itself is unavailable (private browsing, blocked storage, etc.) — arrival
- * must still be established even then, just without surviving a reload.
+ * Photo capture/report submission now goes entirely through the offline
+ * sync engine (src/technician/offline/) — see that module's own header
+ * for the full rationale. This page's job is just: rehydrate whatever's
+ * already queued for this visit on mount, persist every edit to the
+ * durable draft as it happens, and let "Complete job" be an immediate
+ * local action (mark ready, navigate) rather than something that waits on
+ * the network. The one localStorage-based onSiteStart mechanism this page
+ * used to own is gone — the draft record (in IndexedDB) is now the single
+ * source of truth for on-site timing too, seeded once when the draft is
+ * first created and left untouched on every later rehydration.
  */
-function ensureOnSiteStart(visitId: string): string {
-  try {
-    const key = onSiteStartKey(visitId);
-    const existing = localStorage.getItem(key);
-    if (existing) return existing;
-    const now = new Date().toISOString();
-    localStorage.setItem(key, now);
-    return now;
-  } catch {
-    return new Date().toISOString();
-  }
-}
-
-interface LocalPhoto extends UploadedPhoto {
-  id: string;
-  previewUrl: string;
-}
-
 export default function JobReportPage() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const { visitId } = useParams<{ visitId: string }>();
 
   const { data: visit, isLoading, isError, error } = useQuery({
@@ -54,108 +61,147 @@ export default function JobReportPage() {
   const isResubmitMode = !!visit?.reportId && visit.reportReviewStatus === 'returned_for_correction';
   const isLocked = !!visit?.reportId && visit.reportReviewStatus !== 'returned_for_correction';
 
-  // Established synchronously on the very first render — before any user
-  // interaction (including uploading a photo) is even possible — so there
-  // is no race between opening the report and the arrival time being set.
-  // Harmless to compute even in resubmit/locked mode (submitMutation is the
-  // only place this value is ever used, and that path is unreachable in
-  // those modes); a correction never re-captures on-site timing, per
-  // technician_flow.pdf/CLAUDE.md section 7: a return is corrected, not
-  // re-visited.
-  const [onSiteStart] = useState<string>(() => ensureOnSiteStart(visitId ?? 'unknown-visit'));
-
+  const [photos, setPhotos] = useState<PendingPhoto[]>([]);
+  const [draftReady, setDraftReady] = useState(false);
   const [workCarriedOut, setWorkCarriedOut] = useState<string | null>(null);
   const [technicianNotes, setTechnicianNotes] = useState<string | null>(null);
   const [issues, setIssues] = useState<string | null>(null);
-  const [photos, setPhotos] = useState<LocalPhoto[]>([]);
-  const [pendingUploads, setPendingUploads] = useState(0);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [specMet, setSpecMet] = useState(true);
+  const [isCompleting, setIsCompleting] = useState(false);
   const fileInputRefs = useRef<Record<PhotoPhase, HTMLInputElement | null>>({ before: null, during: null, after: null });
-
-  // Free the object URLs created for photo previews when the screen unmounts.
-  useEffect(() => {
-    return () => {
-      for (const p of photos) URL.revokeObjectURL(p.previewUrl);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const previewUrlsRef = useRef<Map<string, string>>(new Map());
+  const workCarriedOutRef = useRef<HTMLTextAreaElement | null>(null);
 
   const defaultWorkCarriedOut = visit ? (isResubmitMode ? (visit.reportWorkCarriedOut ?? '') : visit.jobSummary) : '';
   const defaultTechnicianNotes = isResubmitMode ? (visit?.reportTechnicianNotes ?? '') : '';
   const defaultIssues = isResubmitMode ? (visit?.reportIssues ?? '') : '';
 
-  const submitMutation = useMutation({
-    mutationFn: () =>
-      submitReport({
-        visitId: visitId!,
-        workCarriedOut: workCarriedOut ?? visit?.jobSummary ?? null,
-        technicianNotes: technicianNotes ?? null,
-        issues: issues ?? null,
-        onSiteStart,
-        onSiteEnd: new Date().toISOString(),
-        photos: photos.map((p) => ({ storagePath: p.storagePath, phase: p.phase })),
-      }),
-    onSuccess: () => {
-      localStorage.removeItem(onSiteStartKey(visitId!));
-      queryClient.invalidateQueries({ queryKey: ['technician', 'todayVisits'] });
-      queryClient.invalidateQueries({ queryKey: ['technician', 'visitDetail', visitId] });
-      navigate(`/technician/visits/${visitId}/completed`, {
-        state: { photoCount: photos.length, onSiteStart, onSiteEnd: new Date().toISOString() },
-      });
-    },
-    onError: (err) => setSubmitError(err instanceof Error ? err.message : 'Failed to submit report.'),
-  });
+  // Rehydrate (or create) the draft for this visit the moment we know its
+  // real mode/reportId — runs once per visit, not on every render.
+  useEffect(() => {
+    if (!visit || !visitId) return;
+    let cancelled = false;
 
-  const resubmitMutation = useMutation({
-    mutationFn: () =>
-      resubmitReport({
-        reportId: visit!.reportId!,
-        workCarriedOut: workCarriedOut ?? defaultWorkCarriedOut,
-        technicianNotes: technicianNotes ?? defaultTechnicianNotes ?? null,
-        issues: issues ?? defaultIssues ?? null,
-        additionalPhotos: photos.map((p) => ({ storagePath: p.storagePath, phase: p.phase })),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['technician', 'todayVisits'] });
-      queryClient.invalidateQueries({ queryKey: ['technician', 'needsCorrection'] });
-      queryClient.invalidateQueries({ queryKey: ['technician', 'visitDetail', visitId] });
-      navigate(`/technician/visits/${visitId}/completed`);
-    },
-    onError: (err) => setSubmitError(err instanceof Error ? err.message : 'Failed to resubmit report.'),
-  });
+    (async () => {
+      const initialized = await getOrInitDraft(visitId, {
+        mode: isResubmitMode ? 'resubmit' : 'submit',
+        reportId: isResubmitMode ? visit.reportId : null,
+        onSiteStart: isResubmitMode ? null : new Date().toISOString(),
+        specMet: isResubmitMode ? (visit.reportSpecMet ?? true) : true,
+      });
+      const existingPhotos = await getVisitPhotos(visitId);
+      if (cancelled) return;
+
+      // Already completed locally and just waiting on background sync —
+      // this screen has nothing further for the technician to do; send
+      // them straight to Completed, which shows the live sync state.
+      if (initialized.readyToSubmit) {
+        navigate(`/technician/visits/${visitId}/completed`, { replace: true });
+        return;
+      }
+
+      setPhotos(existingPhotos);
+      setWorkCarriedOut(initialized.workCarriedOut);
+      setTechnicianNotes(initialized.technicianNotes);
+      setIssues(initialized.issues);
+      setSpecMet(initialized.specMet);
+      setDraftReady(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visit, visitId]);
+
+  // Live status updates (upload progress, retries) — refetch this visit's
+  // queued photos whenever the sync engine reports a change anywhere.
+  useEffect(() => {
+    if (!visitId) return;
+    return subscribeSyncEngine(() => {
+      void getVisitPhotos(visitId).then(setPhotos);
+    });
+  }, [visitId]);
+
+  useEffect(() => {
+    const urls = previewUrlsRef.current;
+    return () => {
+      for (const url of urls.values()) URL.revokeObjectURL(url);
+    };
+  }, []);
+
+  const previewUrlFor = (photo: PendingPhoto): string => {
+    const existing = previewUrlsRef.current.get(photo.id);
+    if (existing) return existing;
+    const url = URL.createObjectURL(photo.blob);
+    previewUrlsRef.current.set(photo.id, url);
+    return url;
+  };
 
   const handleFilesSelected = async (phase: PhotoPhase, files: FileList | null) => {
     if (!files || files.length === 0 || !visitId) return;
-    setUploadError(null);
-    setPendingUploads((n) => n + files.length);
     for (const file of Array.from(files)) {
-      try {
-        const uploaded = await uploadVisitPhoto(visitId, phase, file);
-        setPhotos((prev) => [...prev, { ...uploaded, id: uploaded.storagePath, previewUrl: URL.createObjectURL(file) }]);
-      } catch (err) {
-        setUploadError(err instanceof Error ? err.message : 'Failed to upload photo.');
-      } finally {
-        setPendingUploads((n) => n - 1);
-      }
+      const photo = await enqueuePhoto(visitId, phase, file);
+      setPhotos((prev) => [...prev, photo]);
     }
   };
 
   const addIssueChip = (phrase: string) => {
     setIssues((prev) => {
       const base = (prev ?? defaultIssues ?? '').trim();
-      return base ? `${base}; ${phrase}` : phrase;
+      const next = base ? `${base}; ${phrase}` : phrase;
+      if (visitId) void updateDraftFields(visitId, { issues: next });
+      return next;
     });
   };
 
-  // A first submission requires at least one photo; a resubmission never
-  // does — the report already has photos from its original submission, so
-  // zero additional photos is a valid, complete correction (e.g. a
-  // text-only fix). onSiteStart no longer appears here — it's established
-  // synchronously above and is always a real string by the time this runs.
-  const canSubmit = isResubmitMode
-    ? pendingUploads === 0 && !resubmitMutation.isPending
-    : photos.length > 0 && pendingUploads === 0 && !submitMutation.isPending;
+  /**
+   * "Add to this" — makes room to append additional work detail without
+   * ever overwriting what's already there. Purely additive: appends a
+   * newline (only if the existing text doesn't already end in one) and
+   * moves focus/cursor to the end so the technician keeps typing in the
+   * same field — same "one tap, then keep typing" pattern as the issue
+   * chips above, generalized from a fixed phrase to "make space to type."
+   */
+  const handleAddToThis = () => {
+    const current = (workCarriedOut ?? defaultWorkCarriedOut ?? '').replace(/\s+$/, '');
+    const next = current ? `${current}\n` : current;
+    setWorkCarriedOut(next);
+    if (visitId) void updateDraftFields(visitId, { workCarriedOut: next });
+    requestAnimationFrame(() => {
+      const el = workCarriedOutRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  };
+
+  /** "Something not done" — a real structured field (reports.spec_met), not text. Freely toggleable right up until submission; never itself blocks submitting/resubmitting either way. */
+  const handleSpecMetChange = (value: boolean) => {
+    setSpecMet(value);
+    if (visitId) void updateDraftFields(visitId, { specMet: value });
+  };
+
+  const canSubmit = draftReady && !isCompleting && (isResubmitMode || photos.length > 0);
+
+  const handleComplete = async () => {
+    if (!visitId || isCompleting) return;
+    setIsCompleting(true);
+    try {
+      // Persist whatever's currently typed one last time before marking
+      // ready, in case a field changed since its own last onChange fired.
+      await updateDraftFields(visitId, { workCarriedOut, technicianNotes, issues });
+      const readyDraft = await markReadyToSubmit(visitId);
+      void trySubmitIfReady(visitId); // fire immediately in case we're already online — never awaited, navigation doesn't wait on it
+      navigate(`/technician/visits/${visitId}/completed`, {
+        state: { photoCount: photos.length, onSiteStart: readyDraft.onSiteStart, onSiteEnd: readyDraft.onSiteEnd },
+      });
+    } catch (err) {
+      setIsCompleting(false);
+      // eslint-disable-next-line no-console
+      console.error('Failed to complete job locally:', err);
+    }
+  };
 
   const photoSection = visit && (
     <div className="border-b border-divider px-4 py-3">
@@ -176,7 +222,18 @@ export default function JobReportPage() {
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {phasePhotos.map((p) => (
-                  <img key={p.id} src={p.previewUrl} alt="" className="h-14 w-14 flex-none border border-neutral-300 object-cover" />
+                  <div key={p.id} className="flex flex-col items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => p.status === 'failed' && void retryPhoto(p)}
+                      title={p.lastError ?? PHOTO_STATUS_LABEL[p.status]}
+                      className={`h-14 w-14 flex-none border object-cover ${p.status === 'failed' ? 'cursor-pointer' : 'cursor-default'} ${PHOTO_STATUS_STYLE[p.status]}`}
+                      style={{ backgroundImage: `url(${previewUrlFor(p)})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
+                    />
+                    <span className={`text-center text-[8.5px] leading-tight ${PHOTO_STATUS_STYLE[p.status].split(' ')[1]}`}>
+                      {PHOTO_STATUS_LABEL[p.status]}
+                    </span>
+                  </div>
                 ))}
                 <button
                   type="button"
@@ -204,8 +261,11 @@ export default function JobReportPage() {
           );
         })}
       </div>
-      {uploadError && <div className="mt-2 text-[11.5px] text-missed-fg">{uploadError}</div>}
       {!isResubmitMode && <div className="mt-2 text-[11.5px] text-due-fg">At least one photo is required to complete the job.</div>}
+      <div className="mt-1 text-[10.5px] leading-snug text-neutral-500">
+        Photos are saved on this device the instant you take them, even with no signal — they'll upload automatically
+        once you're back online.
+      </div>
     </div>
   );
 
@@ -229,9 +289,6 @@ export default function JobReportPage() {
           </div>
         </div>
       ) : isLocked ? (
-        // A report already exists and isn't awaiting correction — never
-        // render the editable form or allow further photo uploads, on
-        // direct navigation/reload as much as normal in-app navigation.
         <div className="p-4">
           <div className="border border-neutral-300 bg-neutral-100 px-5 py-10 text-center">
             <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">Report submitted</div>
@@ -243,6 +300,10 @@ export default function JobReportPage() {
               Back to job file
             </button>
           </div>
+        </div>
+      ) : !draftReady ? (
+        <div className="p-4">
+          <div className="font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">Loading…</div>
         </div>
       ) : (
         <div className="flex flex-1 flex-col overflow-y-auto bg-white">
@@ -261,15 +322,60 @@ export default function JobReportPage() {
           )}
 
           <div className="border-b border-divider px-4 py-3">
-            <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
-              Works carried out
+            <div className="mb-1.5 flex items-center justify-between">
+              <div className="font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
+                Works carried out
+              </div>
+              <button
+                type="button"
+                onClick={handleAddToThis}
+                className="cursor-pointer border border-neutral-300 px-2 py-1 text-[11px] text-neutral-700 hover:bg-neutral-100"
+              >
+                + Add to this
+              </button>
             </div>
             <textarea
+              ref={workCarriedOutRef}
               value={workCarriedOut ?? defaultWorkCarriedOut}
-              onChange={(e) => setWorkCarriedOut(e.target.value)}
+              onChange={(e) => {
+                setWorkCarriedOut(e.target.value);
+                if (visitId) void updateDraftFields(visitId, { workCarriedOut: e.target.value });
+              }}
               rows={4}
               className="w-full border border-neutral-300 px-2 py-1.5 text-[13.5px] text-ink outline-none focus:border-teal"
             />
+          </div>
+
+          <div className="border-b border-divider px-4 py-3">
+            <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
+              Specification
+            </div>
+            <div className="flex border border-neutral-300">
+              <button
+                type="button"
+                onClick={() => handleSpecMetChange(true)}
+                className={`flex-1 cursor-pointer px-2 py-1.5 text-[12.5px] ${
+                  specMet ? 'bg-teal font-semibold text-white' : 'text-neutral-700 hover:bg-neutral-100'
+                }`}
+              >
+                Everything as specified
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSpecMetChange(false)}
+                className={`flex-1 cursor-pointer border-l border-neutral-300 px-2 py-1.5 text-[12.5px] ${
+                  !specMet ? 'bg-due font-semibold text-white' : 'text-neutral-700 hover:bg-neutral-100'
+                }`}
+              >
+                Something not done
+              </button>
+            </div>
+            {!specMet && (
+              <div className="mt-1.5 text-[11.5px] leading-snug text-due-fg">
+                The office will see that part of the specification wasn't completed. You can still add details in
+                Notes/issues below, and change this before you submit.
+              </div>
+            )}
           </div>
 
           {photoSection}
@@ -280,7 +386,10 @@ export default function JobReportPage() {
             </div>
             <textarea
               value={issues ?? defaultIssues}
-              onChange={(e) => setIssues(e.target.value)}
+              onChange={(e) => {
+                setIssues(e.target.value);
+                if (visitId) void updateDraftFields(visitId, { issues: e.target.value });
+              }}
               rows={3}
               placeholder="Anything to flag…"
               className="w-full border border-neutral-300 px-2 py-1.5 text-[13.5px] text-ink outline-none focus:border-teal"
@@ -299,48 +408,29 @@ export default function JobReportPage() {
             </div>
             <textarea
               value={technicianNotes ?? defaultTechnicianNotes}
-              onChange={(e) => setTechnicianNotes(e.target.value)}
+              onChange={(e) => {
+                setTechnicianNotes(e.target.value);
+                if (visitId) void updateDraftFields(visitId, { technicianNotes: e.target.value });
+              }}
               rows={2}
               placeholder="Any other notes (optional)…"
               className="mt-2 w-full border border-neutral-300 px-2 py-1.5 text-[13.5px] text-ink outline-none focus:border-teal"
             />
           </div>
 
-          {submitError && (
-            <div className="border-b border-divider px-4 py-2">
-              <div className="text-[12px] text-missed-fg">{submitError}</div>
-            </div>
-          )}
-
           <div className="mt-auto p-4">
             <button
-              onClick={() => (isResubmitMode ? resubmitMutation.mutate() : submitMutation.mutate())}
+              onClick={() => void handleComplete()}
               disabled={!canSubmit}
-              title={
-                !isResubmitMode && photos.length === 0
-                  ? 'Add a photo first'
-                  : pendingUploads > 0
-                    ? 'Waiting for photo upload to finish'
-                    : undefined
-              }
+              title={!isResubmitMode && photos.length === 0 ? 'Add a photo first' : undefined}
               className={`w-full cursor-pointer px-3 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 ${
                 isResubmitMode ? 'bg-due' : 'bg-teal'
               }`}
             >
-              {isResubmitMode
-                ? resubmitMutation.isPending
-                  ? 'Resubmitting…'
-                  : 'Resubmit'
-                : submitMutation.isPending
-                  ? 'Submitting…'
-                  : 'Complete job'}
+              {isCompleting ? 'Completing…' : isResubmitMode ? 'Resubmit' : 'Complete job'}
             </button>
-            {!isResubmitMode && photos.length === 0 ? (
+            {!isResubmitMode && photos.length === 0 && (
               <div className="mt-1.5 text-center text-[11.5px] text-neutral-500">Add a photo first</div>
-            ) : (
-              pendingUploads > 0 && (
-                <div className="mt-1.5 text-center text-[11.5px] text-neutral-500">Waiting for photo upload to finish…</div>
-              )
             )}
           </div>
         </div>

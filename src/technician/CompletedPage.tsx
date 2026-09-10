@@ -1,6 +1,9 @@
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { getVisitDetail, listTodayVisits } from './api';
+import { getDraft, getVisitPhotos, subscribeSyncEngine, trySubmitIfReady } from './offline/syncEngine';
+import type { DraftReport, PendingPhoto } from './offline/db';
 
 interface CompletedNavState {
   photoCount?: number;
@@ -16,10 +19,7 @@ export default function CompletedPage() {
   const location = useLocation();
   const state = (location.state as CompletedNavState | null) ?? {};
 
-  // The actual source of truth for "was this really completed" — never just
-  // the presence of this route or the navigation state (which a direct
-  // reload/URL visit wouldn't have anyway). Reuses the same technician-safe
-  // RPC every other screen already calls; no new/broader data access.
+  // The server-confirmed source of truth — unchanged from before.
   const {
     data: visit,
     isLoading,
@@ -30,11 +30,44 @@ export default function CompletedPage() {
     enabled: !!visitId,
   });
 
+  // The LOCAL source of truth for "did I already complete this, even if
+  // the server hasn't confirmed it yet" — a report only reaches the
+  // server once every one of its photos has finished uploading (see
+  // offline/syncEngine.ts), which can be well after this screen is first
+  // shown. Without this, reopening/reloading this screen before sync
+  // finishes would wrongly show "hasn't been completed yet."
+  const [draft, setDraft] = useState<DraftReport | undefined>(undefined);
+  const [localPhotos, setLocalPhotos] = useState<PendingPhoto[]>([]);
+  const [draftLoaded, setDraftLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!visitId) return;
+    let cancelled = false;
+    const refresh = () => {
+      void Promise.all([getDraft(visitId), getVisitPhotos(visitId)]).then(([d, photos]) => {
+        if (cancelled) return;
+        setDraft(d);
+        setLocalPhotos(photos);
+        setDraftLoaded(true);
+      });
+    };
+    refresh();
+    void trySubmitIfReady(visitId); // in case we arrived here already online and nothing has kicked off a submit attempt yet
+    const unsubscribe = subscribeSyncEngine(refresh);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [visitId]);
+
   // Best-effort only, exactly like Job File's own "Stop N" — renders correctly with or without it.
   const { data: todayVisits } = useQuery({ queryKey: ['technician', 'todayVisits'], queryFn: listTodayVisits });
   const nextStop = todayVisits?.find((v) => v.visitId !== visitId && v.status !== 'completed' && !v.reportSubmitted);
 
-  if (isLoading) {
+  const isSyncedToServer = !!visit?.reportId;
+  const isWaitingToSync = !isSyncedToServer && !!draft?.readyToSubmit;
+
+  if (isLoading || !draftLoaded) {
     return (
       <div className="p-4">
         <div className="font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">Loading…</div>
@@ -42,10 +75,11 @@ export default function CompletedPage() {
     );
   }
 
-  if (isError || !visit || !visit.reportId) {
-    // Never shows a false "completed / sent to the office" confirmation —
-    // this is the honest state whenever no report actually exists for this
-    // visit yet, regardless of how this screen was reached.
+  if (isError || (!isSyncedToServer && !isWaitingToSync)) {
+    // Never shows a false "completed" confirmation — this is the honest
+    // state whenever there's neither a server-confirmed report NOR a
+    // locally-queued one waiting to sync, regardless of how this screen
+    // was reached.
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="p-4">
@@ -66,36 +100,73 @@ export default function CompletedPage() {
     );
   }
 
+  const uploadedCount = localPhotos.filter((p) => p.status === 'uploaded').length;
+  const totalLocalPhotos = localPhotos.length;
+  const photoCount = state.photoCount ?? totalLocalPhotos;
+  const onSiteStart = state.onSiteStart ?? draft?.onSiteStart ?? undefined;
+  const onSiteEnd = state.onSiteEnd ?? draft?.onSiteEnd ?? undefined;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex-none border-b border-teal-700/40 bg-teal-100 px-4 py-3">
-        <h1 className="font-heading text-lg font-semibold text-teal-700">Job completed</h1>
-        <div className="text-[12.5px] text-teal-700">Sent to the office</div>
-      </div>
+      {isSyncedToServer ? (
+        <div className="flex-none border-b border-teal-700/40 bg-teal-100 px-4 py-3">
+          <h1 className="font-heading text-lg font-semibold text-teal-700">Job completed</h1>
+          <div className="text-[12.5px] text-teal-700">Sent to the office</div>
+        </div>
+      ) : (
+        <div className="flex-none border-b border-due/40 bg-due/10 px-4 py-3">
+          <h1 className="font-heading text-lg font-semibold text-due-fg">Job completed</h1>
+          <div className="text-[12.5px] text-due-fg">
+            {draft?.submitError ? 'Sync failed — will retry automatically' : 'Waiting to sync — will send automatically'}
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 bg-white px-4 py-4">
-        {(state.photoCount != null || state.onSiteStart) && (
+        {(photoCount != null || onSiteStart) && (
           <div className="mb-4 grid grid-cols-2 gap-3 border border-neutral-300 p-3">
-            {state.photoCount != null && (
+            {photoCount != null && (
               <div>
                 <div className="font-heading text-[10px] font-semibold tracking-[0.1em] text-neutral-500 uppercase">Photos</div>
-                <div className="text-lg font-semibold text-ink tabular-nums">{state.photoCount}</div>
+                <div className="text-lg font-semibold text-ink tabular-nums">
+                  {photoCount}
+                  {!isSyncedToServer && totalLocalPhotos > 0 && (
+                    <span className="ml-1.5 text-[11px] font-normal text-neutral-500">({uploadedCount} uploaded)</span>
+                  )}
+                </div>
               </div>
             )}
-            {state.onSiteStart && state.onSiteEnd && (
+            {onSiteStart && onSiteEnd && (
               <div>
                 <div className="font-heading text-[10px] font-semibold tracking-[0.1em] text-neutral-500 uppercase">On site</div>
                 <div className="text-lg font-semibold text-ink tabular-nums">
-                  {timeFormatter.format(new Date(state.onSiteStart))} – {timeFormatter.format(new Date(state.onSiteEnd))}
+                  {timeFormatter.format(new Date(onSiteStart))} – {timeFormatter.format(new Date(onSiteEnd))}
                 </div>
               </div>
             )}
           </div>
         )}
 
-        <div className="text-[13.5px] leading-relaxed text-neutral-700">
-          The office will check this report before anything goes to the client. Nothing else for you to do here.
-        </div>
+        {isSyncedToServer ? (
+          <div className="text-[13.5px] leading-relaxed text-neutral-700">
+            The office will check this report before anything goes to the client. Nothing else for you to do here.
+          </div>
+        ) : (
+          <div className="text-[13.5px] leading-relaxed text-neutral-700">
+            {draft?.submitError ? (
+              <>
+                The last attempt to send this report failed: {draft.submitError}. It will keep retrying automatically —
+                nothing is lost, and there's nothing you need to do.
+              </>
+            ) : (
+              <>
+                This report is saved on your device and will be sent to the office automatically once every photo has
+                finished uploading and you're back online. You can move on to your next stop — nothing else for you to
+                do here.
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="p-4">

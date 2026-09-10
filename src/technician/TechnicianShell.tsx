@@ -1,5 +1,7 @@
+import { useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
+import { startSyncEngine, useSyncStatus } from './offline/syncEngine';
 import kindContractorsLogo from '../assets/kind_Contractors_logo.png';
 
 const dateFormatter = new Intl.DateTimeFormat('en-GB', {
@@ -16,6 +18,17 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
  */
 export default function TechnicianShell() {
   const { signOut } = useAuth();
+  const sync = useSyncStatus();
+
+  // Started once, here — every technician screen mounts under this shell,
+  // so this is the one place that's guaranteed to run for the life of the
+  // technician session. Wholly separate from AuthProvider.tsx's own
+  // visibilitychange handling; never touches auth/session state.
+  useEffect(() => {
+    startSyncEngine();
+  }, []);
+
+  const hasPending = sync.pendingPhotoCount > 0 || sync.failedDraftCount > 0;
 
   return (
     <div className="flex h-screen min-h-[640px] flex-col overflow-hidden bg-neutral-200">
@@ -24,6 +37,21 @@ export default function TechnicianShell() {
         <div className="border-l border-divider pl-2.5 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
           Technician
         </div>
+        {!sync.online ? (
+          <span className="border border-missed bg-missed/10 px-1.5 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.08em] text-missed-fg uppercase">
+            Offline
+          </span>
+        ) : sync.failedDraftCount > 0 ? (
+          <span className="border border-missed bg-missed/10 px-1.5 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.08em] text-missed-fg uppercase">
+            Sync failed
+          </span>
+        ) : (
+          hasPending && (
+            <span className="border border-due bg-due/10 px-1.5 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.08em] text-due-fg uppercase">
+              Syncing {sync.pendingPhotoCount}
+            </span>
+          )
+        )}
         <span className="ml-auto font-heading text-[11px] font-semibold tracking-[0.1em] text-neutral-600 uppercase">
           {dateFormatter.format(new Date())}
         </span>

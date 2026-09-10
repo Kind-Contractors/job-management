@@ -188,6 +188,8 @@ export interface ReportDetail {
   workCarriedOut: string | null;
   technicianNotes: string | null;
   issues: string | null;
+  /** true = specification completed (the normal/default state); false = the technician selected "Something not done" — must be visible to the Manager during review. Never a gate on approve/return/send. */
+  specMet: boolean;
   reviewStatus: ReportReviewStatus;
   reviewedBy: string | null;
   reviewedAt: string | null;

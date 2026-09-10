@@ -132,6 +132,8 @@ export interface TechnicianVisitDetail {
   reportIssues: string | null;
   /** Existing photos already attached to the report — 0 when no report exists yet. Lets the resubmission form show "N already added" without a separate photo-listing RPC. */
   reportPhotoCount: number;
+  /** true = specification completed (the normal case); false = the technician previously selected "Something not done". null only when no report exists yet for this visit — treated as the default (true) by the caller. */
+  reportSpecMet: boolean | null;
 }
 
 interface RpcVisitDetailRow {
@@ -158,6 +160,7 @@ interface RpcVisitDetailRow {
   report_technician_notes: string | null;
   report_issues: string | null;
   report_photo_count: number;
+  report_spec_met: boolean | null;
 }
 
 /**
@@ -198,6 +201,7 @@ export async function getVisitDetail(visitId: string): Promise<TechnicianVisitDe
     reportTechnicianNotes: row.report_technician_notes,
     reportIssues: row.report_issues,
     reportPhotoCount: row.report_photo_count,
+    reportSpecMet: row.report_spec_met,
   };
 }
 
@@ -256,21 +260,44 @@ export interface UploadedPhoto {
 const VISIT_PHOTOS_BUCKET = 'visit-photos';
 
 /**
- * Uploads one photo directly to the private `visit-photos` bucket, under
- * `{visitId}/{phase}/{uuid}.{ext}` — the same path convention the Storage
- * policy and technician_submit_report() both check against. Storage's own
- * RLS-equivalent policy is the actual gate here (a technician can only
- * write under a visit currently assigned to them); this function does not
- * itself verify ownership, it just uploads and reports the resulting path.
+ * Generates a photo's storage path — `{visitId}/{phase}/{uuid}.{ext}`, the
+ * same convention the Storage policy and technician_submit_report() both
+ * check against. Split out from the actual upload call (see
+ * uploadVisitPhotoToPath below) specifically so the offline sync queue can
+ * generate this ONCE at capture time and reuse the exact same path on
+ * every retry — the path itself is what makes a retried upload idempotent,
+ * not anything about the upload call.
  */
-export async function uploadVisitPhoto(visitId: string, phase: PhotoPhase, file: File): Promise<UploadedPhoto> {
-  const ext = file.name.includes('.') ? file.name.split('.').pop() : 'jpg';
-  const storagePath = `${visitId}/${phase}/${crypto.randomUUID()}.${ext}`;
+export function newVisitPhotoStoragePath(visitId: string, phase: PhotoPhase, filename: string): string {
+  const ext = filename.includes('.') ? filename.split('.').pop() : 'jpg';
+  return `${visitId}/${phase}/${crypto.randomUUID()}.${ext}`;
+}
+
+/**
+ * Uploads one photo to a specific, already-decided storage path, under the
+ * private `visit-photos` bucket — idempotent under retry, which is what
+ * makes it safe for the offline sync queue to call repeatedly on the same
+ * photo until it succeeds.
+ *
+ * The idempotency mechanism is a check-then-upload, NOT `upsert: true` —
+ * confirmed via a real, live test (not assumed) that upsert fails on a
+ * retry: technicians only ever have INSERT + SELECT policies on
+ * `storage.objects` (see 20260908090000_fix_technician_storage_policy_ownership.sql
+ * and its sibling SELECT policy), deliberately no UPDATE policy, and an
+ * upsert of an already-existing object is an UPDATE under the hood — RLS
+ * correctly rejects it. So: if a previous attempt already succeeded (e.g.
+ * the network dropped before its success response arrived), `.exists()`
+ * (covered by the existing SELECT policy) finds it and this returns
+ * immediately without re-uploading; only a genuinely new object goes
+ * through `.upload(..., { upsert: false })`. No RLS/schema change needed
+ * or made.
+ */
+export async function uploadVisitPhotoToPath(storagePath: string, file: Blob): Promise<void> {
+  const { data: alreadyExists } = await supabase.storage.from(VISIT_PHOTOS_BUCKET).exists(storagePath);
+  if (alreadyExists) return;
 
   const { error } = await supabase.storage.from(VISIT_PHOTOS_BUCKET).upload(storagePath, file, { upsert: false });
   if (error) throw new Error(`Failed to upload photo: ${error.message}`);
-
-  return { storagePath, phase };
 }
 
 export interface SubmitReportInput {
@@ -282,6 +309,8 @@ export interface SubmitReportInput {
   onSiteStart: string;
   onSiteEnd: string;
   photos: UploadedPhoto[];
+  /** true = specification completed (default); false = "Something not done" — never blocks submission either way. */
+  specMet: boolean;
 }
 
 /**
@@ -299,6 +328,7 @@ export async function submitReport(input: SubmitReportInput): Promise<string> {
     p_on_site_start: input.onSiteStart,
     p_on_site_end: input.onSiteEnd,
     p_photos: input.photos.map((p) => ({ storage_path: p.storagePath, phase: p.phase })),
+    p_spec_met: input.specMet,
   });
 
   if (error) throw new Error(error.message);
@@ -312,6 +342,8 @@ export interface ResubmitReportInput {
   issues: string | null;
   /** May be empty — zero additional photos is a valid resubmission (e.g. a text-only fix). Never re-collects on_site_start/on_site_end: a correction fixes the existing report, it is not a second visit. */
   additionalPhotos: UploadedPhoto[];
+  /** true = specification completed; false = "Something not done" — preserved from the original submission and freely correctable here, never blocks resubmission either way. */
+  specMet: boolean;
 }
 
 /**
@@ -328,6 +360,7 @@ export async function resubmitReport(input: ResubmitReportInput): Promise<void> 
     p_technician_notes: input.technicianNotes,
     p_issues: input.issues,
     p_additional_photos: input.additionalPhotos.map((p) => ({ storage_path: p.storagePath, phase: p.phase })),
+    p_spec_met: input.specMet,
   });
 
   if (error) throw new Error(error.message);

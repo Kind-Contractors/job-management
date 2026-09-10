@@ -155,6 +155,14 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
             Submitted by {report.submittedBy} · {new Date(report.submittedAt).toLocaleString('en-GB')}
           </div>
 
+          {report.specMet ? (
+            <div className="text-[11.5px] text-neutral-500">Specification: Completed</div>
+          ) : (
+            <div className="border border-due bg-due/10 px-2 py-1.5 text-[11.5px] font-semibold text-due-fg">
+              Specification: Not fully completed
+            </div>
+          )}
+
           {report.reviewStatus === 'returned_for_correction' && report.returnReason && (
             <div className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg">
               Returned: {report.returnReason}

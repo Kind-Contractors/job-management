@@ -20,6 +20,7 @@ interface SupabaseReportRow {
   work_carried_out: string | null;
   technician_notes: string | null;
   issues: string | null;
+  spec_met: boolean;
   review_status: ReportReviewStatus;
   reviewed_by: string | null;
   reviewed_at: string | null;
@@ -45,6 +46,7 @@ function mapReport(row: SupabaseReportRow): ReportDetail {
     workCarriedOut: row.work_carried_out,
     technicianNotes: row.technician_notes,
     issues: row.issues,
+    specMet: row.spec_met,
     reviewStatus: row.review_status,
     reviewedBy: row.reviewed_by,
     reviewedAt: row.reviewed_at,
@@ -61,7 +63,7 @@ function mapReport(row: SupabaseReportRow): ReportDetail {
 }
 
 const REPORT_SELECT =
-  'id, visit_id, submitted_by, submitted_at, on_site_start, on_site_end, work_carried_out, technician_notes, issues, review_status, reviewed_by, reviewed_at, return_reason, include_photos, include_notes, include_issues, include_price, sent_to_client_at, sent_to_client_by, sent_to_accounts_at, sent_to_accounts_by';
+  'id, visit_id, submitted_by, submitted_at, on_site_start, on_site_end, work_carried_out, technician_notes, issues, spec_met, review_status, reviewed_by, reviewed_at, return_reason, include_photos, include_notes, include_issues, include_price, sent_to_client_at, sent_to_client_by, sent_to_accounts_at, sent_to_accounts_by';
 
 /**
  * Marks a visit completed. `priceCharged` must already reflect the rule the
