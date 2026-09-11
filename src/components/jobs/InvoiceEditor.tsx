@@ -111,7 +111,7 @@ export default function InvoiceEditor({ invoiceId, onClose }: InvoiceEditorProps
   const estimatedVat = subtotal * 0.2;
 
   return (
-    <div className="m-3.5 border border-neutral-300 p-3">
+    <div className="mt-3 border border-neutral-300 bg-white p-3">
       <div className="flex items-center gap-2">
         <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
           Invoice · {invoiceStatusLabel(invoice.status)}
@@ -156,27 +156,30 @@ export default function InvoiceEditor({ invoiceId, onClose }: InvoiceEditorProps
           />
         </label>
 
-        <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-          Works order number
-          <input
-            value={worksOrderNumber}
-            onChange={(e) => setWorksOrderNumber(e.target.value)}
-            disabled={!editable}
-            placeholder="Not provided yet — can be added later, before sending"
-            className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-100 disabled:text-neutral-500"
-          />
-        </label>
+        {/* Side by side — both are short fields; stacked full-width (like Description) left a lot of empty space to the right of each one. */}
+        <div className="flex gap-2">
+          <label className="flex flex-1 flex-col gap-1 text-[11px] text-neutral-600">
+            Works order number
+            <input
+              value={worksOrderNumber}
+              onChange={(e) => setWorksOrderNumber(e.target.value)}
+              disabled={!editable}
+              placeholder="Not provided yet — can be added later, before sending"
+              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-100 disabled:text-neutral-500"
+            />
+          </label>
 
-        <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-          Due date
-          <input
-            type="date"
-            value={dueDate}
-            onChange={(e) => setDueDate(e.target.value)}
-            disabled={!editable}
-            className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-100 disabled:text-neutral-500"
-          />
-        </label>
+          <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
+            Due date
+            <input
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              disabled={!editable}
+              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-100 disabled:text-neutral-500"
+            />
+          </label>
+        </div>
 
         <div className="text-[11px] text-neutral-600">Line items ({lines.length})</div>
         {lines.map((line, i) => (

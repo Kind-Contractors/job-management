@@ -286,8 +286,8 @@ export default function ReadyForAccountsPage() {
             </div>
           </div>
         ) : (
-          <div className="max-w-[560px] p-5">
-            <div className="border-b border-divider pb-3">
+          <div className="max-w-[760px] p-5">
+            <div className="pb-3">
               <h2 className="font-heading text-xl font-semibold">{selected.job.buildingName}</h2>
               <div className="mt-0.5 text-[13px] text-neutral-600">
                 {selected.job.clientName} · {selected.job.jobSummary}
@@ -305,8 +305,9 @@ export default function ReadyForAccountsPage() {
             {openInvoiceId ? (
               <InvoiceEditor invoiceId={openInvoiceId} onClose={() => setOpenInvoiceId(null)} />
             ) : selected.visit.invoiceId ? (
-              <div className="m-3.5 border border-neutral-300 p-3">
-                <div className="text-[12.5px] text-neutral-600">
+              <div className="mt-3 border border-neutral-300 bg-white p-3">
+                <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">Invoice</div>
+                <div className="mt-1.5 text-[12.5px] text-neutral-600">
                   This visit already has an invoice ({accountsRowPresentation(selected).label.toLowerCase()}).
                 </div>
                 <button
@@ -317,7 +318,7 @@ export default function ReadyForAccountsPage() {
                 </button>
               </div>
             ) : (
-              <div className="m-3.5 border border-neutral-300 p-3">
+              <div className="mt-3 border border-neutral-300 bg-white p-3">
                 <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
                   No invoice yet
                 </div>
