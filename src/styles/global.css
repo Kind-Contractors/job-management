@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 /*
@@ -7,10 +7,15 @@
  * "Steel" (the design canvas's generic blue-grey accent) is replaced here by
  * brand Dark Teal; the restrained "only a few colors carry meaning" rule
  * from the design is kept as-is. See CLAUDE.md section 4/10.
+ *
+ * Typeface changed 2026-09-11: Barlow/Barlow Condensed → Inter everywhere
+ * (headings and body use the same family now), per explicit user feedback
+ * that the previous condensed-heading pairing wasn't clear/legible. See
+ * CLAUDE.md section 10.
  */
 @theme {
-  --font-heading: "Barlow Condensed", system-ui, sans-serif;
-  --font-body: "Barlow", system-ui, sans-serif;
+  --font-heading: "Inter", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
 
   /* Brand palette */
   --color-teal: #1e544b;
@@ -86,9 +91,9 @@ textarea {
  * "heading-style" micro-label in the app (band-row group titles, footer
  * bar text), which are all uppercase + letter-spaced per CLAUDE.md
  * section 4. Verified against a side-by-side rendered mock at the real
- * 10px/Barlow-Condensed/600-weight header size: sentence case reads as
- * thin/accidental at that size, uppercase + spacing reads as a deliberate
- * column heading. Scoped by AG Grid's own class, not a page selector —
+ * 10px/600-weight header size: sentence case reads as thin/accidental at
+ * that size, uppercase + spacing reads as a deliberate column heading.
+ * Scoped by AG Grid's own class, not a page selector —
  * applies identically to every AG Grid instance in the app (currently
  * All Live Jobs and Buildings, the only two), so both stay in sync
  * automatically.
