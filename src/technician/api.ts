@@ -164,6 +164,21 @@ interface RpcVisitDetailRow {
 }
 
 /**
+ * A `useQuery({ retry: ... })` policy shared by JobFilePage.tsx/
+ * JobReportPage.tsx's visit-detail query: at most one retry, and none at
+ * all while `navigator.onLine` is false. Without this, TanStack Query's
+ * default (`retry: 3`, no online-awareness) spends several seconds
+ * hammering a request that cannot succeed offline before finally
+ * surfacing a raw network error to the technician. `navigator.onLine` can
+ * itself be wrong (true while genuinely unreachable, e.g. mobile data
+ * specifically turned off) — this doesn't fix that, it only avoids
+ * compounding it with pointless automatic retries.
+ */
+export function retryUnlessOffline(failureCount: number): boolean {
+  return navigator.onLine && failureCount < 1;
+}
+
+/**
  * A single visit's operational detail — technician-safe columns only (no
  * price, no client identity, no invoice/Xero data, no manager-only report
  * fields). Returns null when the visit doesn't exist, isn't scheduled to

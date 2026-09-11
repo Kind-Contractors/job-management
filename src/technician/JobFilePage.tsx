@@ -1,6 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getVisitDetail, jobTypeLabel, listTodayVisits } from './api';
+import { getVisitDetail, jobTypeLabel, listTodayVisits, retryUnlessOffline } from './api';
+import { useSyncStatus } from './offline/syncEngine';
+
+/**
+ * Reusing the exact same query key JobReportPage.tsx uses for the same
+ * visit — see JobReportPage.tsx's own comment on this staleTime. Kept
+ * identical in both places: they share one cache entry, so divergent
+ * staleTime values here would just make the *other* page's mount win.
+ */
+const VISIT_DETAIL_STALE_TIME_MS = 5 * 60 * 1000;
 
 export default function JobFilePage() {
   const navigate = useNavigate();
@@ -11,11 +20,22 @@ export default function JobFilePage() {
     isLoading,
     isError,
     error,
+    refetch,
   } = useQuery({
     queryKey: ['technician', 'visitDetail', visitId],
     queryFn: () => getVisitDetail(visitId!),
     enabled: !!visitId,
+    staleTime: VISIT_DETAIL_STALE_TIME_MS,
+    retry: retryUnlessOffline,
   });
+  const { online } = useSyncStatus();
+  // No cached data at all, and genuinely offline (or navigator.onLine
+  // wrongly says so) — the one case neither the existing "Couldn't load"
+  // nor "isn't available" messaging was ever written to describe
+  // honestly. TechnicianShell's header already shows a persistent
+  // "Offline" badge, so this is only for the specific empty-state case,
+  // not a second offline indicator layered on top of working content.
+  const offlineWithNoData = !visit && !online;
 
   // Best-effort only — the page must render correctly even if this hasn't
   // loaded, has never been fetched (direct navigation to this URL), or
@@ -31,7 +51,22 @@ export default function JobFilePage() {
         </button>
       </div>
 
-      {isLoading ? (
+      {offlineWithNoData ? (
+        <div className="p-4">
+          <div className="border border-neutral-300 bg-neutral-100 p-4">
+            <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-600 uppercase">You're offline</div>
+            <div className="mt-1.5 text-[13px] text-ink">
+              This job hasn't been saved on this device yet, so it can't be shown without a connection.
+            </div>
+            <button
+              onClick={() => void refetch()}
+              className="mt-3 cursor-pointer border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      ) : isLoading ? (
         <div className="p-4">
           <div className="grid gap-1.5">
             {[1, 0.8, 0.6].map((o, i) => (
@@ -144,7 +179,7 @@ export default function JobFilePage() {
                 onClick={() => navigate(`/technician/visits/${visit.visitId}/report`)}
                 className="w-full cursor-pointer bg-teal px-3 py-2.5 text-sm font-semibold text-white hover:opacity-90"
               >
-                Job completed
+                Add report
               </button>
             )}
           </div>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getVisitDetail, type PhotoPhase } from './api';
+import { getVisitDetail, retryUnlessOffline, type PhotoPhase } from './api';
 import {
   enqueuePhoto,
   getOrInitDraft,
@@ -11,8 +11,12 @@ import {
   subscribeSyncEngine,
   trySubmitIfReady,
   updateDraftFields,
+  useSyncStatus,
 } from './offline/syncEngine';
 import type { PendingPhoto } from './offline/db';
+
+/** See JobFilePage.tsx's identical constant — same query key, same value, so the two screens never disagree about how long this visit stays fresh-enough-to-skip-a-refetch. */
+const VISIT_DETAIL_STALE_TIME_MS = 5 * 60 * 1000;
 
 const PHASES: { key: PhotoPhase; label: string }[] = [
   { key: 'before', label: 'Before' },
@@ -52,11 +56,26 @@ export default function JobReportPage() {
   const navigate = useNavigate();
   const { visitId } = useParams<{ visitId: string }>();
 
-  const { data: visit, isLoading, isError, error } = useQuery({
+  const {
+    data: visit,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ['technician', 'visitDetail', visitId],
     queryFn: () => getVisitDetail(visitId!),
     enabled: !!visitId,
+    staleTime: VISIT_DETAIL_STALE_TIME_MS,
+    retry: retryUnlessOffline,
   });
+  const { online } = useSyncStatus();
+  // Same reasoning as JobFilePage.tsx's identical check — this page is
+  // reached almost immediately after that one already loaded the same
+  // visit, so this should be rare in practice; it's the one case where a
+  // technician landing here with nothing cached deserves an honest
+  // "offline" message instead of a raw fetch error or an infinite spinner.
+  const offlineWithNoData = !visit && !online;
 
   const isResubmitMode = !!visit?.reportId && visit.reportReviewStatus === 'returned_for_correction';
   const isLocked = !!visit?.reportId && visit.reportReviewStatus !== 'returned_for_correction';
@@ -277,7 +296,22 @@ export default function JobReportPage() {
         </button>
       </div>
 
-      {isLoading ? (
+      {offlineWithNoData ? (
+        <div className="p-4">
+          <div className="border border-neutral-300 bg-neutral-100 p-4">
+            <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-600 uppercase">You're offline</div>
+            <div className="mt-1.5 text-[13px] text-ink">
+              This job hasn't been saved on this device yet, so it can't be shown without a connection.
+            </div>
+            <button
+              onClick={() => void refetch()}
+              className="mt-3 cursor-pointer border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      ) : isLoading ? (
         <div className="p-4">
           <div className="font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">Loading…</div>
         </div>

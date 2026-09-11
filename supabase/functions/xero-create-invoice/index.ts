@@ -18,6 +18,20 @@
 // Demo Company), sending correctly and honestly fails rather than
 // guessing a TaxType.
 //
+// KNOWN ENVIRONMENT LIMITATION (confirmed 2026-09-11 — see CLAUDE.md's
+// "Known operational limitations" section for the full write-up): the
+// currently-connected organisation is Xero's own "Demo Company (Global)".
+// Demo Company organisations have a documented invoice-email limit of
+// ZERO — invoice creation (POST /Invoices, AUTHORISED) succeeds normally,
+// but POST /Invoices/{id}/Email always fails with a generic HTTP 500
+// ("An error occurred in Xero..."), confirmed via Xero's own UI showing
+// "Email limit reached" for an invoice that was otherwise correctly
+// authorised with a valid contact/email. This is NOT a bug in this
+// integration, NOT a missing/invalid contact email, and NOT fixable by
+// retrying — see emailInvoiceOrExplain() below, which explains this
+// clearly rather than guessing/retrying. Resolved only by connecting a
+// real Xero trial or paid organisation instead of the Demo Company.
+//
 // Never logs or returns XERO_CLIENT_ID, XERO_CLIENT_SECRET, or the raw
 // access token.
 
@@ -125,6 +139,32 @@ async function assertXeroContactHasEmail(accessToken: string, xeroContactId: str
   }
 }
 
+/**
+ * Wraps emailInvoice() only to turn a failure AT THIS SPECIFIC STEP into a
+ * clear explanation — never to change the request itself, guess Xero's
+ * exact cause from its error text, or retry automatically. By the time
+ * this runs (both the fresh-create and the retry-of-an-existing-invoice
+ * path), the invoice already exists and is AUTHORISED in Xero — so a
+ * failure here means "created fine, only the email step failed", which is
+ * worth explaining as a distinct outcome rather than a generic invoice
+ * failure. Demo Company's own zero invoice-email limit (see this file's
+ * header comment) is the confirmed, common cause of exactly this failure
+ * shape, so it's named as the likely explanation — alongside Xero's own
+ * raw error text, never hiding it — rather than asserted as the only
+ * possible cause.
+ */
+async function emailInvoiceOrExplain(accessToken: string, xeroInvoiceId: string): Promise<void> {
+  try {
+    await emailInvoice(accessToken, xeroInvoiceId);
+  } catch (err) {
+    throw new Error(
+      `The invoice was created and authorised in Xero, but Xero could not send the email (${errorMessage(err)}). ` +
+        "A confirmed common cause is Xero's own Demo Company organisation, which has a zero invoice-email limit and can never send real emails — connect a Xero trial or paid organisation to test actual email delivery. " +
+        "If this is a live (non-demo) organisation and the problem persists, check status.developer.xero.com or this organisation's email/branding settings in Xero.",
+    );
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -204,7 +244,7 @@ Deno.serve(async (req: Request) => {
         );
       }
       await assertXeroContactHasEmail(accessToken, client.xero_contact_id);
-      await emailInvoice(accessToken, row.xero_invoice_id);
+      await emailInvoiceOrExplain(accessToken, row.xero_invoice_id);
 
       await updateInvoiceRow(
         callerClient,
@@ -288,7 +328,7 @@ Deno.serve(async (req: Request) => {
     );
 
     await assertXeroContactHasEmail(accessToken, xeroContactId);
-    await emailInvoice(accessToken, createdInvoice.InvoiceID);
+    await emailInvoiceOrExplain(accessToken, createdInvoice.InvoiceID);
 
     await updateInvoiceRow(
       callerClient,
