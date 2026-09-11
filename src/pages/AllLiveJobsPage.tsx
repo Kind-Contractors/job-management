@@ -7,7 +7,7 @@ import { buildGridBlocks, type GridBlock, type GroupBy } from '../lib/grouping';
 import JobsGrid, { COLUMN_IDS, COLUMN_LABELS, type JobsGridColumnId } from '../components/jobs/JobsGrid';
 import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
 import JobCreator from '../components/jobs/JobCreator';
-import { getStatusPresentation, isVisitReadyForAccounts } from '../lib/statusPresentation';
+import { getStatusPresentation } from '../lib/statusPresentation';
 
 // 'ask' is a mock-only JobStatus value that the real mapping path never
 // produces (no ad-hoc-tracking data exists) — omitted here so this list only
@@ -92,7 +92,6 @@ export default function AllLiveJobsPage() {
   } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
 
   const status = (searchParams.get('status') as JobStatus | null) ?? null;
-  const readyForAccounts = searchParams.get('readyForAccounts') === '1';
   const group: GroupBy = searchParams.get('group') === 'frequency' ? 'frequency' : 'client';
   const division = searchParams.get('division') ?? 'Both';
   const q = (searchParams.get('q') ?? '').trim().toLowerCase();
@@ -109,17 +108,15 @@ export default function AllLiveJobsPage() {
           status === 'needs_booking' ? job.status === 'needs_booking' || job.status === 'unscheduled' : job.status === status;
         if (!matchesStatus) return false;
       }
-      if (readyForAccounts && !job.visits.some(isVisitReadyForAccounts)) return false;
       if (!q) return true;
       const haystack = `${job.buildingName} ${job.jobSummary} ${job.clientName} ${job.postcode} ${job.frequency} ${job.technician} ${job.schedulePattern} ${job.id}`.toLowerCase();
       return haystack.includes(q);
     });
-  }, [allRows, division, status, readyForAccounts, q]);
+  }, [allRows, division, status, q]);
 
   const clearFilters = () => {
     const params = new URLSearchParams(searchParams);
     params.delete('status');
-    params.delete('readyForAccounts');
     params.delete('q');
     params.delete('division');
     setSearchParams(params, { replace: true });
@@ -129,15 +126,6 @@ export default function AllLiveJobsPage() {
     const params = new URLSearchParams(searchParams);
     if (next) params.set('status', next);
     else params.delete('status');
-    params.delete('readyForAccounts');
-    setSearchParams(params, { replace: true });
-  };
-
-  const toggleReadyForAccounts = () => {
-    const params = new URLSearchParams(searchParams);
-    if (readyForAccounts) params.delete('readyForAccounts');
-    else params.set('readyForAccounts', '1');
-    params.delete('status');
     setSearchParams(params, { replace: true });
   };
 
@@ -151,13 +139,11 @@ export default function AllLiveJobsPage() {
   const selectedJob: JobRow | undefined = allRows.find((j) => j.id === selectedJobId);
   const siblings = selectedJob ? allRows.filter((j) => j.buildingId === selectedJob.buildingId && j.id !== selectedJob.id) : [];
 
-  const title = readyForAccounts
-    ? 'Ready for accounts'
-    : status
-      ? STATUS_CHIPS.find((c) => c.key === status)?.label
-      : group === 'frequency'
-        ? 'Jobs by frequency'
-        : 'All live jobs';
+  const title = status
+    ? STATUS_CHIPS.find((c) => c.key === status)?.label
+    : group === 'frequency'
+      ? 'Jobs by frequency'
+      : 'All live jobs';
   const clientCount = new Set(rows.map((j) => j.clientId)).size;
   const buildingCount = new Set(rows.map((j) => j.buildingId)).size;
   const totalValue = rows.reduce((a, b) => a + (b.yearlyValue ?? 0), 0);
@@ -255,15 +241,6 @@ export default function AllLiveJobsPage() {
               {chip.label}
             </button>
           ))}
-          <button
-            onClick={toggleReadyForAccounts}
-            className={[
-              'cursor-pointer border px-2.5 py-1 text-xs',
-              readyForAccounts ? 'border-teal bg-teal-100 text-teal-700' : 'border-neutral-300 text-neutral-700',
-            ].join(' ')}
-          >
-            Ready for accounts
-          </button>
           <button onClick={toggleGroup} className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-xs text-neutral-700">
             Group: {group === 'client' ? 'Client' : 'Frequency'} ⇄
           </button>

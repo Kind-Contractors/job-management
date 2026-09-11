@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Division, FrequencyType, JobRow } from '../../domain/types';
-import { updateJob, type JobEditInput } from '../../repository/jobsRepository';
+import { assignJobTechnician, updateJob, type JobEditInput } from '../../repository/jobsRepository';
+import { listTechnicians } from '../../repository/techniciansRepository';
 import { FREQUENCY_TYPE_LABEL, computeDerivedPricing } from '../../repository/mapJobRow';
 
 const DIVISIONS: Division[] = ['General', 'Specialist'];
@@ -80,6 +81,10 @@ export default function JobEditor({ job, onDone }: JobEditorProps) {
   const queryClient = useQueryClient();
   const [form, setForm] = useState<FormState>(formFromJob(job));
   const [error, setError] = useState<string | null>(null);
+  const [technicianError, setTechnicianError] = useState<string | null>(null);
+
+  const { data: technicians = [] } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
+  const activeTechnicians = technicians.filter((t) => t.isActive);
 
   const saveMutation = useMutation({
     mutationFn: (input: JobEditInput) => updateJob(job.id, input),
@@ -88,6 +93,22 @@ export default function JobEditor({ job, onDone }: JobEditorProps) {
       onDone();
     },
     onError: (err) => setError(err instanceof Error ? err.message : 'Failed to save job.'),
+  });
+
+  /**
+   * Saves immediately on change, same as every other place this field is
+   * edited (JobsGrid's inline column, JobInspectorDrawer's own "Assigned"
+   * row) — reuses assignJobTechnician() unchanged, never folded into
+   * updateJob()/JobEditInput (a separate, already-established field/save
+   * path, not part of this form's own batched Save button).
+   */
+  const assignTechnicianMutation = useMutation({
+    mutationFn: (technicianId: string | null) => assignJobTechnician(job.id, technicianId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['jobRows'] });
+      setTechnicianError(null);
+    },
+    onError: (err) => setTechnicianError(err instanceof Error ? err.message : 'Failed to assign technician.'),
   });
 
   const input = toInput(form);
@@ -190,6 +211,25 @@ export default function JobEditor({ job, onDone }: JobEditorProps) {
               ? 'Variable pricing — no fixed monthly/yearly total.'
               : 'Set a frequency to calculate monthly/yearly totals.'}
         </div>
+
+        <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
+          Default technician (optional)
+          <select
+            value={job.defaultTechnicianId ?? ''}
+            onChange={(e) => assignTechnicianMutation.mutate(e.target.value || null)}
+            disabled={assignTechnicianMutation.isPending}
+            className="cursor-pointer border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400"
+          >
+            <option value="">Unassigned</option>
+            {activeTechnicians.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+          {assignTechnicianMutation.isPending && <span className="text-[11px] text-neutral-500">Saving…</span>}
+          {technicianError && <span className="text-[11px] text-missed-fg">{technicianError}</span>}
+        </label>
 
         {error && <div className="text-[11.5px] text-missed-fg">{error}</div>}
 

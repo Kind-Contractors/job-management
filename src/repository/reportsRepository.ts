@@ -109,6 +109,8 @@ export interface ReportPhoto {
   phase: 'before' | 'during' | 'after';
   storagePath: string;
   uploadStatus: 'pending' | 'uploaded' | 'failed';
+  /** Whether this photo is included in the client-facing report (ReadyForClientPage.tsx) — never affects technician-facing review. Defaults true; see the `photos_client_report_inclusion` migration. */
+  includeInClientReport: boolean;
 }
 
 /**
@@ -121,7 +123,7 @@ export interface ReportPhoto {
 export async function listPhotosForReport(reportId: string): Promise<ReportPhoto[]> {
   const { data, error } = await supabase
     .from('photos')
-    .select('id, phase, storage_path, upload_status')
+    .select('id, phase, storage_path, upload_status, include_in_client_report')
     .eq('report_id', reportId)
     .order('phase');
 
@@ -132,7 +134,30 @@ export async function listPhotosForReport(reportId: string): Promise<ReportPhoto
     phase: row.phase,
     storagePath: row.storage_path,
     uploadStatus: row.upload_status,
+    includeInClientReport: row.include_in_client_report,
   }));
+}
+
+/** Toggles one photo's inclusion in the client-facing report — a single-column update, independent of the report-level include_photos toggle (that one hides the whole photos section; this one hides just this photo within it). */
+export async function updatePhotoClientInclusion(photoId: string, included: boolean): Promise<void> {
+  const { error } = await supabase.from('photos').update({ include_in_client_report: included }).eq('id', photoId);
+  if (error) throw new Error(`Failed to update photo: ${error.message}`);
+}
+
+/**
+ * Signed URLs for a private bucket — one per photo, 1 hour expiry.
+ * Moved here (from ReportPanel.tsx, which now imports this instead of its
+ * own copy) so ReadyForClientPage.tsx can reuse the exact same signing
+ * logic rather than a second copy — no behavior change.
+ */
+export async function signReportPhotoUrls(photos: ReportPhoto[]): Promise<Record<string, string>> {
+  const entries = await Promise.all(
+    photos.map(async (p) => {
+      const { data } = await supabase.storage.from('visit-photos').createSignedUrl(p.storagePath, 3600);
+      return [p.id, data?.signedUrl ?? ''] as const;
+    }),
+  );
+  return Object.fromEntries(entries);
 }
 
 export interface CreateReportInput {
@@ -228,6 +253,66 @@ export async function resubmitReport(reportId: string, actor: string): Promise<v
 }
 
 /** Send to client and send to accounts are fully independent — see CLAUDE.md section 7. No real email/document is generated (section 15) — this only records the handoff. */
+export interface SendClientReportInput {
+  reportId: string;
+  contactId: string;
+  /** Generated in the browser by src/lib/clientReportPdf.ts — see that function and the Edge Function's own header comment for why the PDF is never regenerated server-side. */
+  pdfBase64: string;
+}
+
+export interface SendClientReportResult {
+  status: 'sent' | 'failed';
+  error?: string;
+}
+
+/**
+ * Invokes the send-client-report Edge Function — the ONLY place this app
+ * actually emails a report to a client (Phase 2B). Mirrors
+ * invoicesRepository.ts's sendInvoice() exactly: a thin invoke wrapper,
+ * with the real detailed error surfaced separately via
+ * getLatestClientSend() below (report_client_sends.error_message) rather
+ * than parsed out of this call's own thrown Error — same reason
+ * InvoiceEditor.tsx reads invoice.lastError rather than sendInvoice()'s
+ * own error message.
+ */
+export async function sendClientReport(input: SendClientReportInput): Promise<SendClientReportResult> {
+  const { data, error } = await supabase.functions.invoke<SendClientReportResult>('send-client-report', { body: input });
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error('No response from send-client-report.');
+  return data;
+}
+
+export interface ClientSendRecord {
+  id: string;
+  status: 'sending' | 'sent' | 'failed';
+  recipientEmail: string;
+  sentBy: string;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+/** The most recent send attempt for a report, if any — lets the UI show "last attempt failed: ..." without a full send-history page. */
+export async function getLatestClientSend(reportId: string): Promise<ClientSendRecord | null> {
+  const { data, error } = await supabase
+    .from('report_client_sends')
+    .select('id, status, recipient_email, sent_by, error_message, created_at')
+    .eq('report_id', reportId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw new Error(`Failed to load send history: ${error.message}`);
+  if (!data) return null;
+  return {
+    id: data.id,
+    status: data.status,
+    recipientEmail: data.recipient_email,
+    sentBy: data.sent_by,
+    errorMessage: data.error_message,
+    createdAt: data.created_at,
+  };
+}
+
 export async function sendReportToClient(reportId: string, actor: string): Promise<void> {
   const now = new Date().toISOString();
   const { error } = await supabase

@@ -4,14 +4,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { JobRow } from '../../domain/types';
 import { listTechnicians, createVisit } from '../../repository/techniciansRepository';
 import { assignJobTechnician } from '../../repository/jobsRepository';
-import { createInvoiceDraft } from '../../repository/invoicesRepository';
 import { useAuth } from '../../auth/AuthProvider';
 import VisitRow from './VisitRow';
 import ScheduleEditor from './ScheduleEditor';
 import JobEditor from './JobEditor';
-import InvoiceEditor from './InvoiceEditor';
 import { describeSchedule, suggestNextDate } from '../../lib/scheduleFormat';
-import { getStatusPresentation, isVisitReadyForAccounts } from '../../lib/statusPresentation';
+import { getStatusPresentation } from '../../lib/statusPresentation';
 import StatusPill from './StatusPill';
 
 interface JobInspectorDrawerProps {
@@ -29,8 +27,6 @@ interface JobInspectorDrawerProps {
   /** Pre-fills the booking date input — never fabricated by this component itself, only ever passed in by a caller that computed a real, honest date (or left it undefined for the normal today-default). */
   presetVisitDate?: string;
 }
-
-const NOT_BUILT_TITLE = 'Not built yet';
 
 /** Formats today's own LOCAL calendar day — never `.toISOString()` here, which converts to UTC and would shift the date in any timezone ahead of UTC (same fix as scheduleFormat.ts/ThisWeekPage.tsx's toISODate). */
 function todayISO(): string {
@@ -56,9 +52,6 @@ export default function JobInspectorDrawer({
   const [visitDate, setVisitDate] = useState(presetVisitDate ?? todayISO());
   const [visitTechnicianId, setVisitTechnicianId] = useState<string>(job.defaultTechnicianId ?? '');
   const [bookingMessage, setBookingMessage] = useState<string | null>(null);
-  const [selectedVisitIds, setSelectedVisitIds] = useState<Set<string>>(new Set());
-  const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null);
-  const [invoiceError, setInvoiceError] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
   const { data: technicians = [] } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
@@ -87,37 +80,6 @@ export default function JobInspectorDrawer({
     },
     onError: (err) => setBookingMessage(err instanceof Error ? err.message : 'Failed to book visit.'),
   });
-
-  const createInvoiceMutation = useMutation({
-    mutationFn: (visitIds: string[]) => {
-      const lines = visitIds.map((visitId) => {
-        const visit = job.visits.find((v) => v.id === visitId)!;
-        return {
-          visitId,
-          description: job.jobSummary,
-          quantity: 1,
-          unitAmount: visit.priceCharged ?? job.pricePerVisit ?? 0,
-        };
-      });
-      return createInvoiceDraft({ jobId: job.id, createdBy: actor, description: job.jobSummary, worksOrderNumber: null, lines });
-    },
-    onSuccess: (invoiceId) => {
-      queryClient.invalidateQueries({ queryKey: ['jobRows'] });
-      setSelectedVisitIds(new Set());
-      setOpenInvoiceId(invoiceId);
-      setInvoiceError(null);
-    },
-    onError: (err) => setInvoiceError(err instanceof Error ? err.message : 'Failed to create invoice.'),
-  });
-
-  const toggleVisitSelected = (visitId: string) => {
-    setSelectedVisitIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(visitId)) next.delete(visitId);
-      else next.add(visitId);
-      return next;
-    });
-  };
 
   const suggestedDate = job.schedule ? suggestNextDate(job.schedule, todayISO()) : null;
 
@@ -172,9 +134,13 @@ export default function JobInspectorDrawer({
           <div className="font-heading text-[11px] font-semibold tracking-[0.11em] text-teal-700 uppercase">
             Report waiting on you
           </div>
-          <div className="mt-1 text-[12.5px] leading-snug text-teal-700">
-            {job.nextDueLabel} — open below to approve, return, or send it.
-          </div>
+          <div className="mt-1 text-[12.5px] leading-snug text-teal-700">{job.nextDueLabel}.</div>
+          <button
+            onClick={() => navigate('/report-review')}
+            className="mt-1.5 cursor-pointer text-[11.5px] font-semibold text-teal-700 hover:underline"
+          >
+            Review it in Report Review →
+          </button>
         </div>
       )}
       {(forceShowBooking || job.status === 'unscheduled' || job.status === 'needs_booking' || job.status === 'overdue') && (
@@ -288,45 +254,14 @@ export default function JobInspectorDrawer({
         </div>
       ) : (
         <div className="px-4 pb-1">
-          <div className="mb-1.5 flex items-center gap-2">
-            <div className="font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
-              Visits ({job.visits.length})
-            </div>
-            {selectedVisitIds.size > 0 && (
-              <button
-                onClick={() => createInvoiceMutation.mutate([...selectedVisitIds])}
-                disabled={createInvoiceMutation.isPending}
-                className="ml-auto cursor-pointer bg-teal px-2 py-0.5 text-[10.5px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {createInvoiceMutation.isPending
-                  ? 'Creating…'
-                  : selectedVisitIds.size === 1
-                    ? 'Create invoice'
-                    : `Create combined invoice (${selectedVisitIds.size})`}
-              </button>
-            )}
+          <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
+            Visits ({job.visits.length})
           </div>
-          {invoiceError && <div className="mb-1.5 text-[11.5px] text-missed-fg">{invoiceError}</div>}
-          {job.visits.map((v) => {
-            const selectableForInvoice = isVisitReadyForAccounts(v) && !v.invoiceId;
-            return (
-              <VisitRow
-                key={v.id}
-                job={job}
-                visit={v}
-                actor={actor}
-                technicians={activeTechnicians}
-                selectableForInvoice={selectableForInvoice}
-                selectedForInvoice={selectedVisitIds.has(v.id)}
-                onToggleSelectForInvoice={() => toggleVisitSelected(v.id)}
-                onOpenInvoice={(invoiceId) => setOpenInvoiceId(invoiceId)}
-              />
-            );
-          })}
+          {job.visits.map((v) => (
+            <VisitRow key={v.id} job={job} visit={v} actor={actor} technicians={activeTechnicians} />
+          ))}
         </div>
       )}
-
-      {openInvoiceId && <InvoiceEditor invoiceId={openInvoiceId} onClose={() => setOpenInvoiceId(null)} />}
 
       <div className="m-3.5 border border-dashed border-neutral-400 bg-neutral-100 p-3">
         <div className="flex items-center gap-2">
@@ -378,9 +313,6 @@ export default function JobInspectorDrawer({
         >
           Edit job
         </button>
-        <div title={NOT_BUILT_TITLE} className="cursor-not-allowed border border-neutral-300 px-3 py-1.5 text-xs text-neutral-500">
-          See the year
-        </div>
       </div>
     </aside>
   );

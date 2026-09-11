@@ -11,7 +11,7 @@ import {
   HiOutlineClock,
   HiOutlineDocumentText,
   HiOutlineExclamationTriangle,
-  HiOutlinePhoto,
+  HiOutlinePaperAirplane,
   HiOutlineTableCells,
   HiOutlineUsers,
   HiOutlineXCircle,
@@ -20,7 +20,7 @@ import { listJobRows } from '../../repository/jobsRepository';
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import { listTechnicians } from '../../repository/techniciansRepository';
 import { listUsers } from '../../repository/usersRepository';
-import { isVisitReadyForAccounts } from '../../lib/statusPresentation';
+import { isReportReadyForClient, isVisitReadyForAccounts } from '../../lib/statusPresentation';
 
 type AttentionKey = 'review' | 'needs_booking' | 'overdue' | 'missed';
 
@@ -113,6 +113,7 @@ export default function NavRail() {
   const onMonthMatrix = pathname === '/month-matrix';
   const onReportReview = pathname === '/report-review';
   const onReadyForAccounts = pathname === '/ready-for-accounts';
+  const onReadyForClient = pathname === '/ready-for-client';
   const onUsers = pathname === '/users';
 
   const divisionFiltered = jobRows.filter((j) => division === 'Both' || j.division === division);
@@ -140,6 +141,15 @@ export default function NavRail() {
     0,
   );
   const goToReadyForAccounts = () => navigate('/ready-for-accounts');
+
+  // Same shape as readyForAccountsCount above, keyed on the sibling
+  // isReportReadyForClient predicate — a report awaiting client-send, not
+  // an invoicing concern.
+  const readyForClientCount = divisionFiltered.reduce(
+    (n, j) => n + j.visits.filter(isReportReadyForClient).length,
+    0,
+  );
+  const goToReadyForClient = () => navigate('/ready-for-client');
 
   const goToFilteredJobs = (key: AttentionKey) => {
     const next = new URLSearchParams(searchParams);
@@ -213,27 +223,15 @@ export default function NavRail() {
         count={readyForAccountsCount}
         collapsed={collapsed}
       />
-      <div
-        title="Photos uploading — not built yet, no photo-upload mechanism exists in this pass"
-        className={
-          collapsed
-            ? 'flex cursor-default flex-col items-center gap-0.5 border-l-2 border-transparent py-2'
-            : 'flex cursor-default items-center gap-2.5 border-l-2 border-transparent px-4 py-1.5 text-[13px] text-neutral-500'
-        }
-      >
-        {collapsed ? (
-          <span className="flex h-6 w-6 items-center justify-center text-neutral-400">
-            <HiOutlinePhoto size={16} />
-          </span>
-        ) : (
-          <>
-            <i className="block h-[7px] w-[7px] flex-none bg-neutral-300" />
-            Photos uploading
-            <b className="ml-auto font-body text-xs text-neutral-400">—</b>
-          </>
-        )}
-      </div>
-
+      <NavItem
+        active={onReadyForClient}
+        onClick={goToReadyForClient}
+        dotClass="bg-teal"
+        icon={HiOutlinePaperAirplane}
+        label="Ready for client"
+        count={readyForClientCount}
+        collapsed={collapsed}
+      />
       <div className="mx-4 my-4 h-px bg-divider" />
 
       {!collapsed && (

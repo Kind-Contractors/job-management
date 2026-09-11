@@ -3,24 +3,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { JobRow, JobVisitSummary, Technician } from '../../domain/types';
 import { completeVisit, createReport, markVisitCancelled, markVisitMissed } from '../../repository/reportsRepository';
 import { assignVisitTechnician, rescheduleVisit } from '../../repository/techniciansRepository';
-import { getVisitStatusPresentation, isVisitReadyForAccounts } from '../../lib/statusPresentation';
-import ReportPanel from './ReportPanel';
+import { getReportReviewStatusPresentation, getVisitStatusPresentation } from '../../lib/statusPresentation';
 import StatusPill from './StatusPill';
-
-function invoiceStatusLabel(status: JobVisitSummary['invoiceStatus']): string {
-  switch (status) {
-    case 'draft':
-      return 'drafted';
-    case 'sending':
-      return 'sending…';
-    case 'sent':
-      return 'sent';
-    case 'failed':
-      return 'failed';
-    default:
-      return '';
-  }
-}
 
 function nowLocalDateTime(): string {
   const d = new Date();
@@ -39,24 +23,9 @@ interface VisitRowProps {
   actor: string;
   /** Active technicians selectable for (re)assignment — the same list callers already fetch via listTechnicians()/['technicians']. */
   technicians: Technician[];
-  /** True once this visit is approved and not yet linked to any invoice — see isVisitReadyForAccounts + JobVisitSummary.invoiceId. */
-  selectableForInvoice?: boolean;
-  selectedForInvoice?: boolean;
-  onToggleSelectForInvoice?: () => void;
-  /** Reopens the existing invoice's editor — never creates a new one. */
-  onOpenInvoice?: (invoiceId: string) => void;
 }
 
-export default function VisitRow({
-  job,
-  visit,
-  actor,
-  technicians,
-  selectableForInvoice = false,
-  selectedForInvoice = false,
-  onToggleSelectForInvoice,
-  onOpenInvoice,
-}: VisitRowProps) {
+export default function VisitRow({ job, visit, actor, technicians }: VisitRowProps) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<'summary' | 'complete' | 'report'>('summary');
   const [price, setPrice] = useState(job.pricePerVisit != null ? String(job.pricePerVisit) : '');
@@ -120,36 +89,15 @@ export default function VisitRow({
   });
 
   const dateLabel = visit.scheduledDate ? new Date(visit.scheduledDate).toLocaleDateString('en-GB') : 'No date set';
-  const readyForAccounts = isVisitReadyForAccounts(visit);
 
   return (
     <div className="border-b border-divider py-1.5 text-[12.5px]">
       <div className="flex items-center justify-between gap-3">
         <span className="flex items-center gap-1.5">
-          {selectableForInvoice && (
-            <input
-              type="checkbox"
-              checked={selectedForInvoice}
-              onChange={onToggleSelectForInvoice}
-              title="Select for invoicing"
-              className="cursor-pointer"
-            />
-          )}
           <StatusPill presentation={getVisitStatusPresentation(visit.status)} />
           <span className="text-neutral-500"> · {visit.technicianName ?? 'Unassigned'}</span>
           {visit.priceCharged != null && (
             <span className="text-neutral-500"> · £{visit.priceCharged.toLocaleString('en-GB')}</span>
-          )}
-          {readyForAccounts && <span className="font-semibold text-teal-700"> · Ready for accounts</span>}
-          {visit.invoiceId && (
-            <button
-              onClick={() => onOpenInvoice?.(visit.invoiceId!)}
-              title="Reopen this invoice"
-              className="cursor-pointer font-semibold text-neutral-500 hover:text-teal-700 hover:underline"
-            >
-              {' '}
-              · Invoice {invoiceStatusLabel(visit.invoiceStatus)}
-            </button>
           )}
         </span>
         <span className="tabular-nums text-neutral-600">{dateLabel}</span>
@@ -297,13 +245,19 @@ export default function VisitRow({
         />
       )}
 
+      {/*
+        A lightweight status line only — no photos, work-carried-out,
+        notes, or approve/return actions here. Full report inspection and
+        approval now lives exclusively in Report Review
+        (ReportReviewPage.tsx/ReportPanel.tsx); invoicing/sending live in
+        Ready for Accounts/Ready for Client. This drawer stays a job/visit
+        management panel, not a second place to review or act on a report.
+      */}
       {visit.reportId && visit.reportReviewStatus && (
-        <ReportPanel
-          reportId={visit.reportId}
-          reviewStatus={visit.reportReviewStatus}
-          actor={actor}
-          readyForAccounts={readyForAccounts}
-        />
+        <div className="mt-1 flex items-center gap-1.5 text-[11px] text-neutral-600">
+          Report:
+          <StatusPill presentation={getReportReviewStatusPresentation(visit.reportReviewStatus)} />
+        </div>
       )}
     </div>
   );

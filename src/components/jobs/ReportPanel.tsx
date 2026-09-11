@@ -8,31 +8,20 @@ import {
   returnReportForCorrection,
   sendReportToAccounts,
   sendReportToClient,
+  signReportPhotoUrls,
   updateReport,
   type ReportPhoto,
 } from '../../repository/reportsRepository';
-import { supabase } from '../../lib/supabaseClient';
 import { getReportReviewStatusPresentation } from '../../lib/statusPresentation';
 import StatusPill from './StatusPill';
 
 const PHOTO_PHASE_LABEL: Record<ReportPhoto['phase'], string> = { before: 'Before', during: 'During', after: 'After' };
 
-/** Signed URLs for a private bucket — one per photo, 1 hour expiry, refetched whenever the photo list changes. */
-async function signPhotoUrls(photos: ReportPhoto[]): Promise<Record<string, string>> {
-  const entries = await Promise.all(
-    photos.map(async (p) => {
-      const { data } = await supabase.storage.from('visit-photos').createSignedUrl(p.storagePath, 3600);
-      return [p.id, data?.signedUrl ?? ''] as const;
-    }),
-  );
-  return Object.fromEntries(entries);
-}
-
 function ReportPhotos({ reportId }: { reportId: string }) {
   const { data: photos = [] } = useQuery({ queryKey: ['reportPhotos', reportId], queryFn: () => listPhotosForReport(reportId) });
   const { data: urls = {} } = useQuery({
     queryKey: ['reportPhotoUrls', reportId, photos.map((p) => p.id).join(',')],
-    queryFn: () => signPhotoUrls(photos),
+    queryFn: () => signReportPhotoUrls(photos),
     enabled: photos.length > 0,
   });
 
@@ -84,20 +73,17 @@ export const REVIEW_LABEL: Record<ReportPanelProps['reviewStatus'], string> = {
 
 /**
  * The one report-review/approve/return/resubmit/send surface in the app —
- * used by VisitRow.tsx inline in the Job Inspector, and by
- * ReportReviewPage.tsx's dedicated queue. Deliberately decoupled from both
- * callers' surrounding markup (only these four primitive props), so there is
- * exactly one implementation of this workflow to keep correct, not two.
+ * used exclusively by ReportReviewPage.tsx's dedicated queue (the Job
+ * Inspector drawer shows only a compact status line via VisitRow.tsx, not
+ * this component — full report inspection/approval/sending belongs only
+ * here, in Report Review, to keep exactly one place that does it).
  */
 export default function ReportPanel({ reportId, reviewStatus, actor, readyForAccounts }: ReportPanelProps) {
   const queryClient = useQueryClient();
   // Auto-open whenever this report is actually actionable — this is what
-  // makes the Job Inspector's "review" banner (see JobInspectorDrawer.tsx)
-  // land the manager straight on the thing they need to act on, with no
-  // extra click and no separate expand/scroll plumbing between components.
-  // Approved-but-unsent (readyForAccounts) is equally actionable — a manager
-  // arriving via the "Ready for accounts" rail item should see the Send to
-  // accounts button already open, not one more click away.
+  // lands the manager straight on the thing they need to act on. Approved-
+  // but-unsent (readyForAccounts) is equally actionable — a manager should
+  // see the Send to accounts button already open, not one more click away.
   const [expanded, setExpanded] = useState(reviewStatus !== 'approved' || readyForAccounts);
   const [returnReason, setReturnReason] = useState('');
   const [returnError, setReturnError] = useState<string | null>(null);

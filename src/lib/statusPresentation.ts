@@ -60,6 +60,17 @@ export function isVisitReadyForAccounts(visit: JobVisitSummary): boolean {
   return visit.reportReviewStatus === 'approved' && !visit.sentToAccountsAt;
 }
 
+/**
+ * A report is "ready for client" once approved and not yet sent to the
+ * client — the same shape as isVisitReadyForAccounts above, just keyed on
+ * sentToClientAt instead of sentToAccountsAt. The one shared source of
+ * truth for this predicate — reused by NavRail's count and
+ * ReadyForClientPage.tsx's own filter.
+ */
+export function isReportReadyForClient(visit: JobVisitSummary): boolean {
+  return visit.reportReviewStatus === 'approved' && !visit.sentToClientAt;
+}
+
 export interface MonthCellPresentation {
   /** Background/border classes for a solid (real-visit-derived) cell. */
   className: string;

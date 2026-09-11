@@ -11,6 +11,7 @@ import ThisWeekPage from './pages/ThisWeekPage';
 import MonthMatrixPage from './pages/MonthMatrixPage';
 import ReportReviewPage from './pages/ReportReviewPage';
 import ReadyForAccountsPage from './pages/ReadyForAccountsPage';
+import ReadyForClientPage from './pages/ReadyForClientPage';
 import UsersPage from './pages/UsersPage';
 import TechnicianShell from './technician/TechnicianShell';
 import DayViewPage from './technician/DayViewPage';
@@ -62,6 +63,7 @@ export default function App() {
         <Route path="/month-matrix" element={<MonthMatrixPage />} />
         <Route path="/report-review" element={<ReportReviewPage />} />
         <Route path="/ready-for-accounts" element={<ReadyForAccountsPage />} />
+        <Route path="/ready-for-client" element={<ReadyForClientPage />} />
         <Route path="/users" element={<UsersPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/jobs" replace />} />

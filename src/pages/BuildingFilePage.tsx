@@ -9,8 +9,6 @@ import JobCreator from '../components/jobs/JobCreator';
 import BuildingEditor from '../components/jobs/BuildingEditor';
 import BuildingAccessEditor from '../components/jobs/BuildingAccessEditor';
 
-const NOT_BUILT_TITLE = 'Not built yet — this pass only covers the Buildings view and Building File basics';
-
 type Tab = 'site' | 'history';
 
 function money(n: number): string {
@@ -141,9 +139,6 @@ export default function BuildingFilePage() {
           >
             {editingBuilding ? 'Close editor' : 'Edit'}
           </button>
-          <div title={NOT_BUILT_TITLE} className="cursor-not-allowed border border-neutral-300 px-3 py-1.5 text-xs text-neutral-500">
-            Print site sheet
-          </div>
           <button
             onClick={() => {
               setSelectedJobId(null);
