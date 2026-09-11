@@ -25,7 +25,7 @@ export default function LoginPage() {
           </div>
           <div className="font-heading text-sm font-semibold tracking-[0.1em] uppercase">Kind Contractors</div>
         </div>
-        <h1 className="mb-4 font-heading text-lg font-semibold">Manager sign in</h1>
+        <h1 className="mb-4 font-heading text-lg font-semibold">Sign in</h1>
 
         <label className="mb-3 block text-xs text-neutral-600">
           Email

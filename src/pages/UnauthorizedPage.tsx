@@ -12,10 +12,10 @@ export default function UnauthorizedPage() {
   return (
     <div className="flex h-screen items-center justify-center bg-neutral-200">
       <div className="w-[360px] border border-divider bg-white p-6 text-center">
-        <h1 className="mb-2 font-heading text-lg font-semibold">Not set up for Manager access</h1>
+        <h1 className="mb-2 font-heading text-lg font-semibold">Not set up for access</h1>
         <p className="mb-1 text-[13px] text-neutral-700">
           {session?.user.email ? <span className="font-semibold">{session.user.email}</span> : 'Your account'} isn't
-          set up for Manager access yet.
+          set up for access yet.
         </p>
         <p className="mb-4 text-[13px] text-neutral-700">Contact your administrator to be added.</p>
         <button
