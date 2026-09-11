@@ -64,11 +64,7 @@ export async function generateClientReportPdf(model: ClientReportModel): Promise
   doc.setTextColor(90);
   doc.text(`${model.clientName} - ${model.jobSummary}`, marginX, y);
   y += 16;
-  doc.text(
-    `Visit date: ${model.visitDateLabel}${model.technicianName ? `  -  Technician: ${model.technicianName}` : ''}`,
-    marginX,
-    y,
-  );
+  doc.text(`Visit date: ${model.visitDateLabel}`, marginX, y);
   y += 20;
 
   doc.setDrawColor(220);

@@ -19,7 +19,6 @@ export interface ClientReportModel {
   buildingName: string;
   jobSummary: string;
   visitDateLabel: string;
-  technicianName: string | null;
   workCarriedOut: string | null;
   notes: string | null;
   issues: string | null;
@@ -40,7 +39,6 @@ export function buildClientReportModel(
     buildingName: job.buildingName,
     jobSummary: job.jobSummary,
     visitDateLabel: visit.scheduledDate ? new Date(visit.scheduledDate).toLocaleDateString('en-GB') : 'Date not set',
-    technicianName: visit.technicianName,
     workCarriedOut: report.workCarriedOut,
     notes: report.includeNotes ? report.technicianNotes : null,
     issues: report.includeIssues ? report.issues : null,

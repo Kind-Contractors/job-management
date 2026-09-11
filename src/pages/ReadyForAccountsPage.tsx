@@ -60,6 +60,8 @@ export default function ReadyForAccountsPage() {
   const [selectedVisitId, setSelectedVisitId] = useState<string | null>(null);
   const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [selectedForInvoiceIds, setSelectedForInvoiceIds] = useState<Set<string>>(new Set());
+  const [combineError, setCombineError] = useState<string | null>(null);
 
   const {
     data: jobRows = [],
@@ -90,6 +92,32 @@ export default function ReadyForAccountsPage() {
     setCreateError(null);
   };
 
+  // The job of whichever visits are currently checked for combining — null
+  // once nothing is checked, which re-opens every job's checkboxes again.
+  // Combining is scoped to a single job (never inferred from job
+  // frequency, per Luke's own requirement) so every selected visit shares
+  // one client automatically, with no separate client-matching check needed.
+  const selectedForInvoiceRows = rows.filter((r) => selectedForInvoiceIds.has(r.visit.id));
+  const combineJobId = selectedForInvoiceRows[0]?.job.id ?? null;
+  const hasZeroAmountSelected = selectedForInvoiceRows.some(
+    (r) => (r.visit.priceCharged ?? r.job.pricePerVisit ?? 0) === 0,
+  );
+
+  const toggleSelectedForInvoice = (visitId: string) => {
+    setSelectedForInvoiceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(visitId)) next.delete(visitId);
+      else next.add(visitId);
+      return next;
+    });
+    setCombineError(null);
+  };
+
+  const clearSelectedForInvoice = () => {
+    setSelectedForInvoiceIds(new Set());
+    setCombineError(null);
+  };
+
   const createInvoiceMutation = useMutation({
     mutationFn: (row: AccountsRow) =>
       createInvoiceDraft({
@@ -114,6 +142,34 @@ export default function ReadyForAccountsPage() {
     onError: (err) => setCreateError(err instanceof Error ? err.message : 'Failed to create invoice.'),
   });
 
+  // Same shared fields and per-visit line mapping as createInvoiceMutation
+  // above (jobId/description drawn from the one job every selected row
+  // shares) — the only difference is more than one line item.
+  const createCombinedInvoiceMutation = useMutation({
+    mutationFn: (combinedRows: AccountsRow[]) =>
+      createInvoiceDraft({
+        jobId: combinedRows[0].job.id,
+        createdBy: actor,
+        description: combinedRows[0].job.jobSummary,
+        worksOrderNumber: null,
+        lines: combinedRows.map((row) => ({
+          visitId: row.visit.id,
+          description: row.job.jobSummary,
+          quantity: 1,
+          unitAmount: row.visit.priceCharged ?? row.job.pricePerVisit ?? 0,
+        })),
+      }),
+    onSuccess: (invoiceId, combinedRows) => {
+      queryClient.invalidateQueries({ queryKey: ['jobRows'] });
+      setSelectedForInvoiceIds(new Set());
+      setCombineError(null);
+      setSelectedVisitId(combinedRows[0].visit.id);
+      setOpenInvoiceId(invoiceId);
+      setCreateError(null);
+    },
+    onError: (err) => setCombineError(err instanceof Error ? err.message : 'Failed to create combined invoice.'),
+  });
+
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex w-[320px] flex-none flex-col border-r border-divider bg-white">
@@ -121,6 +177,37 @@ export default function ReadyForAccountsPage() {
           <h1 className="font-heading text-lg font-semibold">Ready for accounts</h1>
           <div className="mt-0.5 text-xs text-neutral-600 tabular-nums">{rows.length} needing attention</div>
         </div>
+
+        {selectedForInvoiceIds.size >= 2 && (
+          <div className="flex-none border-b border-divider bg-teal-100 px-3.5 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[12px] font-medium text-ink tabular-nums">
+                {selectedForInvoiceIds.size} visits selected
+              </span>
+              <button
+                onClick={clearSelectedForInvoice}
+                className="cursor-pointer text-[11.5px] text-neutral-600 hover:underline"
+              >
+                Clear
+              </button>
+            </div>
+            {hasZeroAmountSelected && (
+              <div className="mt-1 text-[11px] text-neutral-600">
+                One or more selected visits has no price set — you can edit line amounts after creating the invoice.
+              </div>
+            )}
+            {combineError && <div className="mt-1 text-[11px] text-missed-fg">{combineError}</div>}
+            <button
+              onClick={() => createCombinedInvoiceMutation.mutate(selectedForInvoiceRows)}
+              disabled={createCombinedInvoiceMutation.isPending}
+              className="mt-1.5 w-full cursor-pointer bg-teal px-2.5 py-1.5 text-[11.5px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {createCombinedInvoiceMutation.isPending
+                ? 'Creating…'
+                : `Create combined invoice (${selectedForInvoiceIds.size})`}
+            </button>
+          </div>
+        )}
 
         {isLoading ? (
           <div className="p-3.5">
@@ -149,6 +236,8 @@ export default function ReadyForAccountsPage() {
               const isSelected = row.visit.id === selectedVisitId;
               const dateLabel = row.visit.scheduledDate ? new Date(row.visit.scheduledDate).toLocaleDateString('en-GB') : 'No date set';
               const amount = row.visit.priceCharged ?? row.job.pricePerVisit;
+              const canSelectForInvoice = !row.visit.invoiceId;
+              const selectForInvoiceDisabled = combineJobId !== null && row.job.id !== combineJobId;
               return (
                 <div
                   key={row.visit.id}
@@ -156,7 +245,20 @@ export default function ReadyForAccountsPage() {
                   className={`cursor-pointer border-b border-divider px-3.5 py-2.5 ${isSelected ? 'bg-teal-100' : 'hover:bg-neutral-100'}`}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <span className="text-[12.5px] font-semibold text-ink">{row.job.buildingName}</span>
+                    <div className="flex items-start gap-1.5">
+                      {canSelectForInvoice && (
+                        <input
+                          type="checkbox"
+                          checked={selectedForInvoiceIds.has(row.visit.id)}
+                          disabled={selectForInvoiceDisabled}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={() => toggleSelectedForInvoice(row.visit.id)}
+                          title={selectForInvoiceDisabled ? 'Combined invoices can only include visits from the same job.' : 'Select for a combined invoice'}
+                          className="mt-0.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                        />
+                      )}
+                      <span className="text-[12.5px] font-semibold text-ink">{row.job.buildingName}</span>
+                    </div>
                     <StatusPill presentation={accountsRowPresentation(row)} />
                   </div>
                   <div className="text-[11.5px] text-neutral-600">
