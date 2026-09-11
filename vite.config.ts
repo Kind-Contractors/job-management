@@ -48,6 +48,12 @@ export default defineConfig({
         navigateFallbackAllowlist: [/^\/(?!(rest|auth|storage|functions)\/v1\/).*$/],
       },
       workbox: {
+        // Raised from the 2 MiB default: jsPDF (Ready for Client's PDF
+        // generation, src/lib/clientReportPdf.ts) pushed the main bundle
+        // past it. Only changes the precache SIZE limit, not what's
+        // cached or how — Supabase traffic is still never precached (see
+        // navigateFallbackDenylist/runtimeCaching below), unchanged.
+        maximumFileSizeToCacheInBytes: 3.5 * 1024 * 1024,
         // Never cache Supabase traffic — the one rule that keeps this PWA
         // shell change from altering any live-data/auth behavior anywhere
         // in the app.
