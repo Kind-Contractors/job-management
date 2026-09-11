@@ -88,9 +88,19 @@ interface SupabaseBuildingAccess {
   access_notes: string | null;
 }
 
+interface SupabaseContact {
+  id: string;
+  name: string;
+  email: string | null;
+  phone_number: string | null;
+  is_primary: boolean;
+  is_accounts_contact: boolean;
+}
+
 interface SupabaseClient {
   id: string;
   company_name: string;
+  contacts: SupabaseContact[] | null;
 }
 
 interface SupabaseBuilding {
@@ -367,5 +377,13 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
     clientId: client?.id ?? '',
     clientName: client?.company_name ?? '',
     clientInvoiceAddress: building?.invoice_details ?? '',
+    clientContacts: (client?.contacts ?? []).map((c) => ({
+      id: c.id,
+      name: c.name,
+      email: c.email,
+      phoneNumber: c.phone_number,
+      isPrimary: c.is_primary,
+      isAccountsContact: c.is_accounts_contact,
+    })),
   };
 }

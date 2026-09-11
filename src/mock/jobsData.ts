@@ -154,6 +154,10 @@ export function denormalizeJobRows(): JobRow[] {
       clientId: client.id,
       clientName: client.companyName,
       clientInvoiceAddress: client.invoiceAddress,
+      // Mock/dev-only seam (nothing in the app calls listJobRowsFromMock) —
+      // no mock contact data exists, so this is honestly empty rather than
+      // fabricated, per CLAUDE.md section 16.
+      clientContacts: [],
     };
   });
 }

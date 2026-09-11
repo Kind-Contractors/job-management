@@ -34,6 +34,7 @@ import {
   getXeroAccessToken,
   xeroGet,
   type XeroAccount,
+  type XeroContact,
   type XeroInvoiceLineItemInput,
   type XeroTaxRate,
 } from '../_shared/xeroClient.ts';
@@ -103,6 +104,27 @@ async function updateInvoiceRow(
   }
 }
 
+/**
+ * Xero's own `/Invoices/{id}/Email` call sends to whatever `EmailAddress` is
+ * already on the Contact record — this app never passes an address on that
+ * call itself (see emailInvoice in xeroClient.ts). Checking here, before
+ * calling it, turns an opaque Xero-side failure (a generic HTTP 500, "An
+ * error occurred in Xero...") into a specific, actionable local error —
+ * without changing what /Email itself does, and without guessing that a
+ * missing email is the ONLY thing that endpoint can fail on (a genuinely
+ * blank email is simply the one specific, checkable precondition worth
+ * failing fast on).
+ */
+async function assertXeroContactHasEmail(accessToken: string, xeroContactId: string): Promise<void> {
+  const result = await xeroGet<{ Contacts: XeroContact[] }>(accessToken, `/Contacts/${xeroContactId}`);
+  const email = result.Contacts?.[0]?.EmailAddress?.trim();
+  if (!email) {
+    throw new Error(
+      "This client's Xero contact has no email address on file, so the invoice email can't be sent. Add an email to the client's contact (All Live Jobs' Contact column, or Xero directly), then retry sending this invoice.",
+    );
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -162,12 +184,26 @@ Deno.serve(async (req: Request) => {
 
     const accessToken = await getXeroAccessToken();
 
+    // Resolved before the retry branch below (not just the normal-creation
+    // path) — a retry needs client.xero_contact_id too, to verify its email
+    // before calling /Email again.
+    const job = one(row.jobs);
+    const building = job ? one(job.buildings) : null;
+    const client = building ? one(building.clients) : null;
+    if (!client) throw new Error('Could not resolve the client for this invoice.');
+
     // A Xero invoice already exists for this row (a previous attempt got
     // past POST /Invoices but failed on the email step, e.g. the contact
     // had no email address) — never create a second one. Skip contact/
     // account/VAT resolution and createAuthorisedInvoice entirely; just
     // retry emailing the invoice Xero already has.
     if (row.xero_invoice_id) {
+      if (!client.xero_contact_id) {
+        throw new Error(
+          "This invoice already has a Xero invoice, but this client's Xero contact could not be re-resolved locally to check its email — check the contact directly in Xero.",
+        );
+      }
+      await assertXeroContactHasEmail(accessToken, client.xero_contact_id);
       await emailInvoice(accessToken, row.xero_invoice_id);
 
       await updateInvoiceRow(
@@ -179,11 +215,6 @@ Deno.serve(async (req: Request) => {
 
       return json({ status: 'sent', xeroInvoiceId: row.xero_invoice_id, xeroInvoiceNumber: row.xero_invoice_number }, 200);
     }
-
-    const job = one(row.jobs);
-    const building = job ? one(job.buildings) : null;
-    const client = building ? one(building.clients) : null;
-    if (!client) throw new Error('Could not resolve the client for this invoice.');
 
     // Resolve the Xero contact — reuse if already matched/created for this
     // client, otherwise search by name, otherwise create one. Persisted
@@ -256,6 +287,7 @@ Deno.serve(async (req: Request) => {
       `Invoice created in Xero (${createdInvoice.InvoiceNumber}) but failed to save locally`,
     );
 
+    await assertXeroContactHasEmail(accessToken, xeroContactId);
     await emailInvoice(accessToken, createdInvoice.InvoiceID);
 
     await updateInvoiceRow(

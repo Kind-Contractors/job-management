@@ -29,7 +29,10 @@ const JOB_SELECT = `
     invoice_details,
     name,
     postcode,
-    clients ( id, company_name ),
+    clients (
+      id, company_name,
+      contacts ( id, name, email, phone_number, is_primary, is_accounts_contact )
+    ),
     building_access ( access_notes )
   ),
   technicians ( id, name, is_active ),

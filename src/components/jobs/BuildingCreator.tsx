@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listClients } from '../../repository/clientsRepository';
 import { createBuilding, createClientAndBuilding, type BuildingCreateFields } from '../../repository/buildingsRepository';
+import { listContactsForClient, createContactForClient } from '../../repository/contactsRepository';
 
 type ClientMode = 'existing' | 'new';
 
@@ -48,7 +49,27 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
   const [clientQuery, setClientQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
 
+  // Optional contact, added for either an existing client (a genuinely new
+  // contact for them) or a brand-new client (their first). Never shown as
+  // pre-filled/selected-by-default for an existing client — see
+  // existingContacts below, displayed read-only so a manager sees what
+  // already exists before choosing to add another.
+  const [addContact, setAddContact] = useState(false);
+  const [contactForm, setContactForm] = useState({ name: '', email: '', phoneNumber: '' });
+  const [contactError, setContactError] = useState<string | null>(null);
+  // Set only if the building/client themselves were created successfully
+  // but the optional contact failed to save — BuildingsPage's onCreated
+  // navigates away immediately, which would unmount this panel before the
+  // manager ever saw a contact-save error, so navigation is held back
+  // until this resolves.
+  const [createdBuildingId, setCreatedBuildingId] = useState<string | null>(null);
+
   const { data: clients = [] } = useQuery({ queryKey: ['clients'], queryFn: listClients });
+  const { data: existingContacts = [] } = useQuery({
+    queryKey: ['contacts', form.clientId],
+    queryFn: () => listContactsForClient(form.clientId),
+    enabled: form.clientMode === 'existing' && form.clientId.length > 0,
+  });
 
   const selectedClient = clients.find((c) => c.id === form.clientId);
   const clientMatches = useMemo(() => {
@@ -86,20 +107,76 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
   };
 
   const createMutation = useMutation({
-    mutationFn: async (): Promise<string> => {
+    mutationFn: async (): Promise<{ buildingId: string; clientId: string }> => {
       if (form.clientMode === 'existing') {
-        return createBuilding(form.clientId, buildingFields);
+        const buildingId = await createBuilding(form.clientId, buildingFields);
+        return { buildingId, clientId: form.clientId };
       }
-      const { buildingId } = await createClientAndBuilding({ companyName: form.companyName.trim(), ...buildingFields });
-      return buildingId;
+      return createClientAndBuilding({ companyName: form.companyName.trim(), ...buildingFields });
     },
-    onSuccess: (buildingId) => {
+    onSuccess: async ({ buildingId, clientId }) => {
       queryClient.invalidateQueries({ queryKey: ['buildingRows'] });
       if (form.clientMode === 'new') queryClient.invalidateQueries({ queryKey: ['clients'] });
-      onCreated(buildingId);
+
+      if (!addContact || !contactForm.name.trim()) {
+        onCreated(buildingId);
+        return;
+      }
+
+      // A second, separate insert rather than folding this into the
+      // create_client_and_building RPC — the contact is optional and
+      // non-critical (unlike the client+building pair, which genuinely
+      // needs atomicity to avoid an orphaned client), so this small
+      // non-atomic window is an acceptable trade-off against a schema
+      // change. The building/client are already created and safe either way.
+      try {
+        await createContactForClient(clientId, {
+          name: contactForm.name.trim(),
+          email: contactForm.email.trim() || null,
+          phoneNumber: contactForm.phoneNumber.trim() || null,
+          // Only the client's very first contact defaults to primary — an
+          // existing client with contacts already keeps whichever one (if
+          // any) is primary unchanged; a manager can promote this new one
+          // later via All Live Jobs' contact editor if they want to.
+          isPrimary: existingContacts.length === 0,
+        });
+        queryClient.invalidateQueries({ queryKey: ['jobRows'] });
+        onCreated(buildingId);
+      } catch (err) {
+        setCreatedBuildingId(buildingId);
+        setContactError(err instanceof Error ? err.message : 'Failed to save the contact.');
+      }
     },
     onError: (err) => setError(err instanceof Error ? err.message : 'Failed to create building.'),
   });
+
+  // The building/client already exist at this point — only the optional
+  // contact failed. Navigation is held back (rather than calling onCreated
+  // immediately, which would unmount this panel via BuildingsPage's
+  // immediate navigate()) so this is never silently lost.
+  if (createdBuildingId) {
+    return (
+      <aside className="hidden w-[344px] flex-none flex-col overflow-y-auto border-l border-divider bg-white lg:flex">
+        <div className="border-b border-divider p-4">
+          <h2 className="font-heading text-xl leading-tight font-semibold">Building created</h2>
+        </div>
+        <div className="flex flex-col gap-2 p-4">
+          <div className="border border-teal-700/40 bg-teal-100 p-2.5 text-[12.5px] text-teal-700">
+            The building was created successfully.
+          </div>
+          <div className="border border-missed bg-missed/10 p-2.5 text-[12.5px] text-missed-fg">
+            The contact could not be saved: {contactError}
+          </div>
+          <button
+            onClick={() => onCreated(createdBuildingId)}
+            className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white"
+          >
+            Continue to building
+          </button>
+        </div>
+      </aside>
+    );
+  }
 
   return (
     <aside className="hidden w-[344px] flex-none flex-col overflow-y-auto border-l border-divider bg-white lg:flex">
@@ -240,6 +317,66 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
             className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
           />
         </label>
+
+        <div className="flex flex-col gap-1.5 border-t border-divider pt-2">
+          <div className="font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-600 uppercase">Contact (optional)</div>
+
+          {form.clientMode === 'existing' && form.clientId && existingContacts.length > 0 && (
+            <div className="flex flex-col gap-1">
+              {existingContacts.map((c) => (
+                <div key={c.id} className="border border-neutral-300 bg-neutral-100 px-2 py-1 text-[11.5px]">
+                  <span className="font-semibold text-ink">{c.name}</span>
+                  <span className="text-neutral-600">
+                    {' '}
+                    · {[c.email, c.phoneNumber].filter(Boolean).join(' · ') || 'No email or phone on file'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!addContact ? (
+            <button
+              type="button"
+              onClick={() => setAddContact(true)}
+              className="cursor-pointer self-start border border-neutral-300 px-2.5 py-1 text-[11.5px] text-neutral-700 hover:bg-neutral-100"
+            >
+              + Add a contact
+            </button>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <input
+                value={contactForm.name}
+                onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })}
+                placeholder="Name"
+                className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+              />
+              <input
+                type="email"
+                value={contactForm.email}
+                onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
+                placeholder="Email"
+                className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+              />
+              <input
+                value={contactForm.phoneNumber}
+                onChange={(e) => setContactForm({ ...contactForm, phoneNumber: e.target.value })}
+                placeholder="Phone"
+                className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setAddContact(false);
+                  setContactForm({ name: '', email: '', phoneNumber: '' });
+                }}
+                className="cursor-pointer self-start text-[11px] text-neutral-500 hover:underline"
+              >
+                Remove
+              </button>
+            </div>
+          )}
+        </div>
 
         {error && <div className="text-[11.5px] text-missed-fg">{error}</div>}
 

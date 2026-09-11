@@ -6,6 +6,7 @@ import type { Division, FrequencyType, JobRow, Technician } from '../../domain/t
 import type { GridBlock, GroupBy } from '../../lib/grouping';
 import { buildGridBlocks } from '../../lib/grouping';
 import { dueColorClass, getStatusPresentation } from '../../lib/statusPresentation';
+import { resolveDisplayContact } from '../../lib/contactDisplay';
 import { managerGridTheme } from '../../lib/gridTheme';
 import { computeDerivedPricing, FREQUENCY_TYPE_LABEL } from '../../repository/mapJobRow';
 import { assignJobTechnician, patchJob, type JobPatchInput } from '../../repository/jobsRepository';
@@ -14,6 +15,7 @@ import { parseJobSummary, parsePricePerVisit } from './JobEditor';
 import SelectCellEditor from './SelectCellEditor';
 import GridBandRow from './GridBandRow';
 import StatusPill from './StatusPill';
+import ContactPopover from './ContactPopover';
 
 const DIVISIONS: Division[] = ['General', 'Specialist'];
 const FREQUENCY_TYPES = Object.keys(FREQUENCY_TYPE_LABEL) as FrequencyType[];
@@ -72,6 +74,7 @@ export const COLUMN_IDS = [
   'nextDue',
   'status',
   'technician',
+  'contact',
 ] as const;
 export type JobsGridColumnId = (typeof COLUMN_IDS)[number];
 
@@ -87,12 +90,14 @@ export const COLUMN_LABELS: Record<JobsGridColumnId, string> = {
   nextDue: 'Next due',
   status: 'Status',
   technician: 'Default technician',
+  contact: 'Contact',
 };
 
 function buildColumnDefs(
   hiddenColumns: ReadonlySet<JobsGridColumnId>,
   technicians: Technician[],
   queryClient: QueryClient,
+  onOpenContact: (job: JobRow) => void,
 ): ColDef<GridBlock>[] {
   const hide = (id: JobsGridColumnId) => hiddenColumns.has(id);
   const technicianById = new Map(technicians.map((t) => [t.id, t]));
@@ -339,6 +344,47 @@ function buildColumnDefs(
         return true;
       },
     },
+    {
+      colId: 'contact',
+      headerName: COLUMN_LABELS.contact,
+      flex: 1.3,
+      minWidth: 170,
+      hide: hide('contact'),
+      // Contacts are client-level, not per-job (contactsRepository.ts) — so
+      // this is never a plain text valueSetter like the columns above. A
+      // client can have several contacts with none marked primary (the
+      // common case today), which a single editable text value can't
+      // represent honestly. Clicking opens ContactPopover instead, via
+      // onOpenContact (JobsGrid's own state) — see onCellClicked below,
+      // which special-cases this column before its normal editable/select
+      // branch.
+      editable: false,
+      cellRenderer: (p: { data?: GridBlock }) => {
+        const job = jobOf(p);
+        if (!job) return null;
+        const display = resolveDisplayContact(job.clientContacts);
+        const content =
+          display.kind === 'none' ? (
+            <span className="text-neutral-400">No contact</span>
+          ) : display.kind === 'ambiguous' ? (
+            <span className="text-due-fg">Multiple contacts — set primary</span>
+          ) : (
+            <span>
+              <span className="font-semibold text-ink">{display.contact.name}</span>
+              <span className="text-neutral-600"> · {display.contact.email ?? display.contact.phoneNumber ?? 'no email/phone'}</span>
+            </span>
+          );
+        return (
+          <button
+            type="button"
+            onClick={() => onOpenContact(job)}
+            className="cursor-pointer text-left hover:underline"
+          >
+            {content}
+          </button>
+        );
+      },
+    },
   ];
 }
 
@@ -355,11 +401,12 @@ const NO_HIDDEN_COLUMNS: ReadonlySet<JobsGridColumnId> = new Set();
 export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hiddenColumns = NO_HIDDEN_COLUMNS }: JobsGridProps) {
   const queryClient = useQueryClient();
   const [editError, setEditError] = useState<string | null>(null);
+  const [contactPopoverJob, setContactPopoverJob] = useState<JobRow | null>(null);
   const { data: technicians = [] } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
 
   const blocks = useMemo(() => buildGridBlocks(rows, groupBy), [rows, groupBy]);
   const columnDefs = useMemo(
-    () => buildColumnDefs(hiddenColumns, technicians, queryClient),
+    () => buildColumnDefs(hiddenColumns, technicians, queryClient, setContactPopoverJob),
     [hiddenColumns, technicians, queryClient],
   );
   const gridApiRef = useRef<GridApi<GridBlock> | null>(null);
@@ -441,6 +488,10 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
           }}
           onCellClicked={(event) => {
             if (event.data?.kind !== 'row') return;
+            // The Contact column opens ContactPopover via its own cell
+            // renderer button (onOpenContact) — never the job drawer, and
+            // never treated as an "editable" AG Grid cell (see its colDef).
+            if (event.column.getColId() === 'contact') return;
             const editableFn = event.colDef.editable;
             // Narrow, self-contained cast: every `editable` callback defined
             // above only ever reads `.data` (see jobOf()), so a minimal
@@ -531,6 +582,13 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
           className="h-full"
         />
       </div>
+      {contactPopoverJob && (
+        <ContactPopover
+          clientId={contactPopoverJob.clientId}
+          clientName={contactPopoverJob.clientName}
+          onClose={() => setContactPopoverJob(null)}
+        />
+      )}
     </div>
   );
 }

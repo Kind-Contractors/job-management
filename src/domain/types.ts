@@ -225,6 +225,23 @@ export interface ReportDetail {
   sentToAccountsBy: string | null;
 }
 
+/**
+ * A minimal, per-row projection of a real `contacts` row — embedded on
+ * JobRow so All Live Jobs can show/edit a job's client's contact without a
+ * separate fetch. Never a job-specific concept: every job at the same
+ * client shares the exact same `clientContacts` list (see JobRow's own doc
+ * comment) — this type exists only to avoid pulling in the full `Contact`
+ * shape (which also carries `clientId`, redundant here) for a nested list.
+ */
+export interface JobContactSummary {
+  id: string;
+  name: string;
+  email: string | null;
+  phoneNumber: string | null;
+  isPrimary: boolean;
+  isAccountsContact: boolean;
+}
+
 /** A job denormalized with its building/client for grid display. */
 export interface JobRow extends Job {
   buildingName: string;
@@ -234,6 +251,14 @@ export interface JobRow extends Job {
   clientId: string;
   clientName: string;
   clientInvoiceAddress: string;
+  /**
+   * Every contact belonging to this job's CLIENT (contacts are client-level
+   * only — see contactsRepository.ts) — never a job- or building-specific
+   * relationship, which doesn't exist in the schema. Every job at the same
+   * client shares this exact same list. `[]` when the client has no
+   * contact at all — never fabricated.
+   */
+  clientContacts: JobContactSummary[];
 }
 
 /**
