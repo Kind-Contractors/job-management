@@ -41,6 +41,27 @@ const PHOTO_STATUS_STYLE: Record<PendingPhoto['status'], string> = {
 };
 
 /**
+ * `PendingPhoto.status === 'failed'` is honest — an upload attempt really
+ * did fail — but while the device is currently offline, that's expected
+ * and already being retried automatically (offline/syncEngine.ts's
+ * retryEverything() retries every 'failed' photo unconditionally,
+ * online or not), not a stuck failure needing attention. Presentation
+ * only: never changes `PendingPhoto.status`, `retryPhoto()`, or any
+ * retry/upload logic — a genuinely persistent failure while online still
+ * shows exactly the same red "Failed — tap to retry" state as before.
+ */
+function photoDisplay(photo: PendingPhoto, online: boolean): { label: string; style: string; retryable: boolean } {
+  if (photo.status === 'failed' && !online) {
+    return {
+      label: 'Saved offline · uploading automatically once reconnected',
+      style: PHOTO_STATUS_STYLE.pending,
+      retryable: false,
+    };
+  }
+  return { label: PHOTO_STATUS_LABEL[photo.status], style: PHOTO_STATUS_STYLE[photo.status], retryable: photo.status === 'failed' };
+}
+
+/**
  * Photo capture/report submission now goes entirely through the offline
  * sync engine (src/technician/offline/) — see that module's own header
  * for the full rationale. This page's job is just: rehydrate whatever's
@@ -209,7 +230,21 @@ export default function JobReportPage() {
     try {
       // Persist whatever's currently typed one last time before marking
       // ready, in case a field changed since its own last onChange fired.
-      await updateDraftFields(visitId, { workCarriedOut, technicianNotes, issues });
+      // workCarriedOut falls back to defaultWorkCarriedOut here — the
+      // textarea shows that default (the job summary, or the existing
+      // report's text on a resubmission) whenever the technician hasn't
+      // touched the field, but the underlying state stays null until they
+      // do. Without this fallback, a technician who reasonably takes the
+      // pre-filled description as "already filled in" and never edits it
+      // would submit a genuinely blank Work Carried Out, even though real,
+      // visible text was on screen the whole time (confirmed against a
+      // real submitted report — technicianNotes/issues, which have no such
+      // default, saved correctly; only this field, which does, came back
+      // null). Committing whatever's actually visible, not the possibly-
+      // still-null internal state, is the fix — never touches
+      // technicianNotes/issues, the draft seed, or resubmission's own
+      // distinct default.
+      await updateDraftFields(visitId, { workCarriedOut: workCarriedOut ?? defaultWorkCarriedOut, technicianNotes, issues });
       const readyDraft = await markReadyToSubmit(visitId);
       void trySubmitIfReady(visitId); // fire immediately in case we're already online — never awaited, navigation doesn't wait on it
       navigate(`/technician/visits/${visitId}/completed`, {
@@ -240,20 +275,21 @@ export default function JobReportPage() {
                 {label} ({phasePhotos.length})
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {phasePhotos.map((p) => (
-                  <div key={p.id} className="flex flex-col items-center gap-0.5">
-                    <button
-                      type="button"
-                      onClick={() => p.status === 'failed' && void retryPhoto(p)}
-                      title={p.lastError ?? PHOTO_STATUS_LABEL[p.status]}
-                      className={`h-14 w-14 flex-none border object-cover ${p.status === 'failed' ? 'cursor-pointer' : 'cursor-default'} ${PHOTO_STATUS_STYLE[p.status]}`}
-                      style={{ backgroundImage: `url(${previewUrlFor(p)})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
-                    />
-                    <span className={`text-center text-[8.5px] leading-tight ${PHOTO_STATUS_STYLE[p.status].split(' ')[1]}`}>
-                      {PHOTO_STATUS_LABEL[p.status]}
-                    </span>
-                  </div>
-                ))}
+                {phasePhotos.map((p) => {
+                  const display = photoDisplay(p, online);
+                  return (
+                    <div key={p.id} className="flex flex-col items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={() => display.retryable && void retryPhoto(p)}
+                        title={p.lastError ?? display.label}
+                        className={`h-14 w-14 flex-none border object-cover ${display.retryable ? 'cursor-pointer' : 'cursor-default'} ${display.style}`}
+                        style={{ backgroundImage: `url(${previewUrlFor(p)})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
+                      />
+                      <span className={`text-center text-[8.5px] leading-tight ${display.style.split(' ')[1]}`}>{display.label}</span>
+                    </div>
+                  );
+                })}
                 <button
                   type="button"
                   onClick={() => fileInputRefs.current[key]?.click()}

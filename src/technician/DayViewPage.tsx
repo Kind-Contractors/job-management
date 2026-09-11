@@ -6,9 +6,14 @@ import {
   listNeedsCorrection,
   listTodayVisits,
   listUpcomingVisits,
+  retryUnlessOffline,
   type TechnicianCorrectionSummary,
   type TechnicianVisitSummary,
 } from './api';
+import { useSyncStatus } from './offline/syncEngine';
+
+/** Same reasoning/value as JobFilePage.tsx/JobReportPage.tsx's identical constant — a technician re-opening Today's Jobs seconds after it was already loaded shouldn't force a new round trip. */
+const VISIT_LIST_STALE_TIME_MS = 5 * 60 * 1000;
 
 type Tab = 'today' | 'upcoming' | 'returned';
 
@@ -78,6 +83,26 @@ function StopRow({
   );
 }
 
+/** Shared by all three tabs below — shown only when a tab has never successfully fetched anything AND the device is currently offline (see the `*OfflineWithNoData` checks in DayViewPage), never for a genuinely empty online result. */
+function OfflineEmptyState({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="p-4">
+      <div className="border border-neutral-300 bg-neutral-100 p-4">
+        <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-600 uppercase">You're offline</div>
+        <div className="mt-1.5 text-[13px] text-ink">
+          Nothing has been saved on this device yet, so it can't be shown without a connection.
+        </div>
+        <button
+          onClick={onRetry}
+          className="mt-3 cursor-pointer border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+        >
+          Try again
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** Reuses the same row shape as StopRow — no sequence badge (order doesn't apply here), a due-toned accent instead of teal, and the manager's return reason shown beneath the address. */
 function ReturnedRow({ item, onSelect }: { item: TechnicianCorrectionSummary; onSelect: () => void }) {
   return (
@@ -105,21 +130,57 @@ export default function DayViewPage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('today');
 
-  const { data: visits = [], isLoading, isError, error } = useQuery({ queryKey: ['technician', 'todayVisits'], queryFn: listTodayVisits });
-  const { data: needsCorrection = [], isLoading: correctionLoading, isError: correctionError } = useQuery({
+  const { online } = useSyncStatus();
+
+  const {
+    data: visitsData,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: ['technician', 'todayVisits'],
+    queryFn: listTodayVisits,
+    staleTime: VISIT_LIST_STALE_TIME_MS,
+    retry: retryUnlessOffline,
+  });
+  const visits = visitsData ?? [];
+  // visitsData (not the defaulted `visits`) distinguishes "never
+  // successfully fetched" from "fetched, and there's genuinely nothing
+  // scheduled" — an empty array is a legitimate, common online result,
+  // not itself a sign of missing data.
+  const todayOfflineWithNoData = visitsData === undefined && !online;
+
+  const {
+    data: needsCorrectionData,
+    isLoading: correctionLoading,
+    isError: correctionError,
+    error: correctionErrorObj,
+    refetch: refetchCorrection,
+  } = useQuery({
     queryKey: ['technician', 'needsCorrection'],
     queryFn: listNeedsCorrection,
+    staleTime: VISIT_LIST_STALE_TIME_MS,
+    retry: retryUnlessOffline,
   });
+  const needsCorrection = needsCorrectionData ?? [];
+  const correctionOfflineWithNoData = needsCorrectionData === undefined && !online;
+
   const {
-    data: upcomingVisits = [],
+    data: upcomingVisitsData,
     isLoading: upcomingLoading,
     isError: upcomingError,
     error: upcomingErrorObj,
+    refetch: refetchUpcoming,
   } = useQuery({
     queryKey: ['technician', 'upcomingVisits'],
     queryFn: listUpcomingVisits,
     enabled: tab === 'upcoming',
+    staleTime: VISIT_LIST_STALE_TIME_MS,
+    retry: retryUnlessOffline,
   });
+  const upcomingVisits = upcomingVisitsData ?? [];
+  const upcomingOfflineWithNoData = upcomingVisitsData === undefined && !online;
 
   const doneCount = visits.filter((v) => v.status === 'completed' || v.reportSubmitted).length;
   const nextIndex = visits.findIndex((v) => v.status !== 'completed' && !v.reportSubmitted);
@@ -137,7 +198,9 @@ export default function DayViewPage() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === 'today' &&
-          (isLoading ? (
+          (todayOfflineWithNoData ? (
+            <OfflineEmptyState onRetry={() => void refetch()} />
+          ) : isLoading ? (
             <div className="p-4">
               <div className="grid gap-1.5">
                 {[1, 0.85, 0.7, 0.55].map((o, i) => (
@@ -181,7 +244,9 @@ export default function DayViewPage() {
           ))}
 
         {tab === 'upcoming' &&
-          (upcomingLoading ? (
+          (upcomingOfflineWithNoData ? (
+            <OfflineEmptyState onRetry={() => void refetchUpcoming()} />
+          ) : upcomingLoading ? (
             <div className="p-4">
               <div className="font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">Loading…</div>
             </div>
@@ -221,7 +286,9 @@ export default function DayViewPage() {
           ))}
 
         {tab === 'returned' &&
-          (correctionLoading ? (
+          (correctionOfflineWithNoData ? (
+            <OfflineEmptyState onRetry={() => void refetchCorrection()} />
+          ) : correctionLoading ? (
             <div className="p-4">
               <div className="font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">Loading…</div>
             </div>
@@ -229,6 +296,9 @@ export default function DayViewPage() {
             <div className="p-4">
               <div className="border border-missed bg-missed/10 p-4">
                 <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-missed-fg uppercase">Couldn't load returned reports</div>
+                <div className="mt-1.5 text-[13px] text-ink">
+                  {correctionErrorObj instanceof Error ? correctionErrorObj.message : 'Something went wrong.'}
+                </div>
               </div>
             </div>
           ) : needsCorrection.length === 0 ? (
