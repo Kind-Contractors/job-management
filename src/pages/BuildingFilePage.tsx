@@ -175,7 +175,7 @@ export default function BuildingFilePage() {
       {tab === 'site' ? (
         <div className="grid grid-cols-[1fr_320px] gap-5">
           <div className="flex flex-col gap-4">
-            <div className="border border-neutral-300 p-4">
+            <div className="border border-neutral-300 bg-white p-4">
               <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
                 Site instructions
               </div>
@@ -184,7 +184,7 @@ export default function BuildingFilePage() {
               </div>
             </div>
 
-            <div className="border border-neutral-300">
+            <div className="border border-neutral-300 bg-white">
               <div className="border-b border-neutral-300 px-4 py-2.5 font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
                 Jobs at this building ({buildingJobs.length})
               </div>
@@ -213,7 +213,7 @@ export default function BuildingFilePage() {
           </div>
 
           <div className="flex flex-col gap-4">
-            <div className="border border-neutral-300 p-4">
+            <div className="border border-neutral-300 bg-white p-4">
               <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
                 At a glance
               </div>
@@ -225,7 +225,7 @@ export default function BuildingFilePage() {
               </div>
             </div>
 
-            <div className="border border-neutral-300">
+            <div className="border border-neutral-300 bg-white">
               <div className="border-b border-neutral-300 px-4 py-2.5 font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
                 Contacts ({contacts.length})
               </div>
@@ -310,7 +310,7 @@ export default function BuildingFilePage() {
           </div>
         </div>
       ) : (
-        <div className="border border-neutral-300 p-4">
+        <div className="border border-neutral-300 bg-white p-4">
           {historyLoading ? (
             <div className="text-[12.5px] text-neutral-500">Loading history…</div>
           ) : historyError ? (

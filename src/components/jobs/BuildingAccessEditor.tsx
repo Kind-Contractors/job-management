@@ -74,22 +74,25 @@ export default function BuildingAccessEditor({ buildingId, access, onDone }: Bui
             className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
           />
         </label>
-        <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-          Keyholder name
-          <input
-            value={form.keyholderName}
-            onChange={(e) => setForm({ ...form, keyholderName: e.target.value })}
-            className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-          Keyholder phone
-          <input
-            value={form.keyholderPhone}
-            onChange={(e) => setForm({ ...form, keyholderPhone: e.target.value })}
-            className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
-          />
-        </label>
+        {/* Side by side — both short fields, so pairing them uses this panel's width better than stacking each full-width. */}
+        <div className="flex gap-1.5">
+          <label className="flex flex-1 flex-col gap-1 text-[11px] text-neutral-600">
+            Keyholder name
+            <input
+              value={form.keyholderName}
+              onChange={(e) => setForm({ ...form, keyholderName: e.target.value })}
+              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+            />
+          </label>
+          <label className="flex flex-1 flex-col gap-1 text-[11px] text-neutral-600">
+            Keyholder phone
+            <input
+              value={form.keyholderPhone}
+              onChange={(e) => setForm({ ...form, keyholderPhone: e.target.value })}
+              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+            />
+          </label>
+        </div>
         <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
           Parking notes
           <textarea

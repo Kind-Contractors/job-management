@@ -30,7 +30,9 @@ function ReportPhotos({ reportId }: { reportId: string }) {
   }
 
   return (
-    <div className="flex flex-col gap-1.5">
+    // Phases sit side by side (not stacked) so each column's thumbnails can be
+    // larger — matches the same change made to Ready for Client's photo grid.
+    <div className="grid grid-cols-3 gap-3">
       {(['before', 'during', 'after'] as const).map((phase) => {
         const phasePhotos = photos.filter((p) => p.phase === phase);
         if (phasePhotos.length === 0) return null;
@@ -43,10 +45,10 @@ function ReportPhotos({ reportId }: { reportId: string }) {
               {phasePhotos.map((p) =>
                 urls[p.id] ? (
                   <a key={p.id} href={urls[p.id]} target="_blank" rel="noreferrer">
-                    <img src={urls[p.id]} alt="" className="h-16 w-16 border border-neutral-300 object-cover" />
+                    <img src={urls[p.id]} alt="" className="h-20 w-20 border border-neutral-300 object-cover" />
                   </a>
                 ) : (
-                  <div key={p.id} className="h-16 w-16 animate-shimmer border border-neutral-300 bg-neutral-200" />
+                  <div key={p.id} className="h-20 w-20 animate-shimmer border border-neutral-300 bg-neutral-200" />
                 ),
               )}
             </div>
@@ -126,7 +128,7 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
   });
 
   return (
-    <div className="mt-2 border border-neutral-300 p-2.5">
+    <div className="mt-3 border border-neutral-300 bg-white p-3">
       <div className="flex items-center gap-2">
         <span className="font-heading text-[10.5px] font-semibold tracking-[0.09em] text-neutral-700 uppercase">Report ·</span>
         <StatusPill presentation={getReportReviewStatusPresentation(reviewStatus)} />

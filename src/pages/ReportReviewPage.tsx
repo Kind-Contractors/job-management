@@ -83,8 +83,8 @@ export default function ReportReviewPage() {
             </div>
           </div>
         ) : (
-          <div className="max-w-[560px] p-5">
-            <div className="flex items-start justify-between gap-3 border-b border-divider pb-3">
+          <div className="max-w-[760px] p-5">
+            <div className="flex items-start justify-between gap-3 pb-3">
               <div>
                 <h2 className="font-heading text-xl font-semibold">{selected.job.buildingName}</h2>
                 <div className="mt-0.5 text-[13px] text-neutral-600">

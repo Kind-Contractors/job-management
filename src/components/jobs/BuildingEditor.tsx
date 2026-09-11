@@ -67,34 +67,36 @@ export default function BuildingEditor({ building, onDone }: BuildingEditorProps
   const input = toInput(form);
 
   return (
-    <div className="border border-neutral-300 p-3">
+    <div className="max-w-[640px] border border-neutral-300 bg-white p-3">
       <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">Edit building</div>
 
       <div className="mt-2 flex flex-col gap-2">
-        <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-          Building name (optional)
-          <input
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            placeholder="Falls back to the address if left blank"
-            className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
-          />
-        </label>
+        {/* Side by side — both are short fields; stacked full-width (in a form with no width cap) left a lot of empty space to the right of each one. */}
+        <div className="flex gap-2">
+          <label className="flex flex-[2] flex-col gap-1 text-[11px] text-neutral-600">
+            Building name (optional)
+            <input
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="Falls back to the address if left blank"
+              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+            />
+          </label>
+          <label className="flex flex-1 flex-col gap-1 text-[11px] text-neutral-600">
+            Postcode (optional)
+            <input
+              value={form.postcode}
+              onChange={(e) => setForm({ ...form, postcode: e.target.value })}
+              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+            />
+          </label>
+        </div>
 
         <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
           Address
           <input
             value={form.address}
             onChange={(e) => setForm({ ...form, address: e.target.value })}
-            className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
-          />
-        </label>
-
-        <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-          Postcode (optional)
-          <input
-            value={form.postcode}
-            onChange={(e) => setForm({ ...form, postcode: e.target.value })}
             className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
           />
         </label>
