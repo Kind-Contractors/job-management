@@ -56,7 +56,9 @@ export default function ScheduleTechnicianGrid({
 
   return (
     <div className="border border-neutral-300 bg-white">
-      <div className={`grid ${days.length === 1 ? 'grid-cols-[180px_1fr]' : 'grid-cols-[180px_repeat(6,1fr)]'}`}>
+      <div
+        className={`grid ${days.length === 1 ? 'grid-cols-[180px_minmax(0,1fr)]' : 'grid-cols-[180px_repeat(6,minmax(0,1fr))]'}`}
+      >
         <div className="border-b border-neutral-300 bg-neutral-100 px-3 py-2.5 font-heading text-[10px] font-semibold tracking-[0.14em] text-neutral-500 uppercase">
           Technician
         </div>

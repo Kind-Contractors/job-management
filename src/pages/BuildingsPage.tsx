@@ -98,8 +98,8 @@ const COLUMN_DEFS: ColDef<BuildingListRow>[] = [
     valueFormatter: (p) => (!p.value ? '—' : money(p.value)),
     cellClass: 'tabular-nums text-neutral-700',
   },
-  { headerName: 'Next visit', flex: 1, minWidth: 110, valueGetter: (p) => p.data?.nextVisitLabel, cellClass: 'text-neutral-600' },
-  { headerName: 'Last visit', flex: 1, minWidth: 110, valueGetter: (p) => p.data?.lastVisitLabel, cellClass: 'text-neutral-600' },
+  { headerName: 'Next visit', flex: 1, minWidth: 110, valueGetter: (p) => p.data?.nextVisitLabel, cellClass: 'tabular-nums text-neutral-600' },
+  { headerName: 'Last visit', flex: 1, minWidth: 110, valueGetter: (p) => p.data?.lastVisitLabel, cellClass: 'tabular-nums text-neutral-600' },
   {
     headerName: 'Flags',
     flex: 1,

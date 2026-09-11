@@ -6,7 +6,12 @@ export default function GridBandRow(params: ICellRendererParams<GridBlock>) {
   const block = params.data;
   if (!block || block.kind !== 'band') return null;
   return (
-    <div className="flex h-full items-center gap-2.5 border-t border-b border-neutral-300 bg-neutral-200 px-5">
+    // px-4 (16px) matches AG Grid's own real column inset here — the
+    // Theming API's cellHorizontalPadding is spacing(8) * 2 = 16px, the
+    // same padding the grid already applies to every header/body cell —
+    // not an independently-picked value, so the group title lines up with
+    // the column values directly beneath it.
+    <div className="flex h-full items-center gap-2.5 border-t border-b border-neutral-300 bg-neutral-200 px-4">
       <span className="font-heading text-[12.5px] font-semibold tracking-[0.11em] uppercase">
         ▾ {block.title}
       </span>

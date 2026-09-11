@@ -79,6 +79,25 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * AG Grid's Theming API (src/lib/gridTheme.ts) has no param for text
+ * transform/letter-spacing, so its native column headers otherwise render
+ * in plain sentence case — visually inconsistent with every other
+ * "heading-style" micro-label in the app (band-row group titles, footer
+ * bar text), which are all uppercase + letter-spaced per CLAUDE.md
+ * section 4. Verified against a side-by-side rendered mock at the real
+ * 10px/Barlow-Condensed/600-weight header size: sentence case reads as
+ * thin/accidental at that size, uppercase + spacing reads as a deliberate
+ * column heading. Scoped by AG Grid's own class, not a page selector —
+ * applies identically to every AG Grid instance in the app (currently
+ * All Live Jobs and Buildings, the only two), so both stay in sync
+ * automatically.
+ */
+.ag-header-cell-text {
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
 @keyframes shimmer {
   0% {
     opacity: 0.4;
