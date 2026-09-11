@@ -106,7 +106,7 @@ export default function ScheduleToolbar({
             needsAttentionOpen ? 'border-teal bg-teal-100 text-teal-700' : 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-100'
           }`}
         >
-          Needs attention
+          Jobs to book
           {needsAttentionCount > 0 && (
             <span className="border border-current px-1 text-[10.5px] tabular-nums">{needsAttentionCount}</span>
           )}

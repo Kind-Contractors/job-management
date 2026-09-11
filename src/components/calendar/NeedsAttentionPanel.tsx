@@ -8,7 +8,7 @@ const GROUPS: { key: 'overdue' | 'unscheduled'; label: string; emptyLabel: strin
 /**
  * The same Overdue/Needs-booking drag source that used to be a permanently
  * docked 220px sidebar — now a panel the manager opens on demand from the
- * toolbar's "Needs attention" button, so it doesn't compete with the
+ * toolbar's "Jobs to book" button, so it doesn't compete with the
  * calendar for width/attention except when actually being worked from.
  * Same data (`overdueJobs`/`needsBookingJobs`, already Division-filtered in
  * ThisWeekPage.tsx), same drag-and-drop behavior — only the presentation
@@ -27,7 +27,7 @@ export default function NeedsAttentionPanel({
     <div className="absolute top-full right-0 z-20 mt-1.5 flex w-[300px] flex-col border border-neutral-300 bg-white shadow-lg">
       <div className="flex items-center gap-2 border-b border-neutral-300 bg-neutral-100 px-3 py-2">
         <span className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
-          Needs attention
+          Jobs to book
         </span>
         <button onClick={onClose} className="ml-auto cursor-pointer px-1 text-neutral-500 hover:text-ink" aria-label="Close">
           ✕
