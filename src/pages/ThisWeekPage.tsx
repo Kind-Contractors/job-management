@@ -112,6 +112,7 @@ export default function ThisWeekPage() {
   const [bookingError, setBookingError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [prefilledTechnicianId, setPrefilledTechnicianId] = useState<string | null>(null);
   const [pendingDrop, setPendingDrop] = useState<{ jobId: string; date: string } | null>(null);
   const [pendingTechnicianId, setPendingTechnicianId] = useState('');
   const [searchParams, setSearchParams] = useSearchParams();
@@ -402,10 +403,14 @@ export default function ThisWeekPage() {
     [divisionFilteredJobs],
   );
 
-  /** The day drawer and JobInspectorDrawer are mutually exclusive — opening one always closes the other, mirroring the existing selectedJobId/creatingJob split in BuildingFilePage.tsx. */
-  const openDay = (dateISO: string) => {
+  /**
+   * The day drawer and JobInspectorDrawer are mutually exclusive — opening one always closes the other, mirroring the existing selectedJobId/creatingJob split in BuildingFilePage.tsx.
+   * technicianId is optional — passed only by ScheduleTechnicianGrid's per-technician cells/"+" (Week/Day mode); Month mode and the day header call this with just a date, since neither has a technician to offer.
+   */
+  const openDay = (dateISO: string, technicianId?: string) => {
     setSelectedJobId(null);
     setSelectedDate(dateISO);
+    setPrefilledTechnicianId(technicianId ?? null);
   };
   const openJob = (jobId: string) => {
     setSelectedDate(null);
@@ -650,12 +655,16 @@ export default function ThisWeekPage() {
       )}
       {selectedDate && (
         <ScheduleDayDrawer
-          key={selectedDate}
+          // Includes the prefill in the key — a reopen for the same date but a
+          // different (or no) technician must remount with fresh initial state,
+          // not silently keep whatever the drawer's own <select> was left showing.
+          key={`${selectedDate}::${prefilledTechnicianId ?? ''}`}
           dateISO={selectedDate}
           visits={visits}
           jobRows={jobRows}
           technicians={technicians}
           visitStatusStyle={VISIT_STATUS_STYLE}
+          initialTechnicianId={prefilledTechnicianId}
           onClose={() => setSelectedDate(null)}
           onSelectVisit={openJob}
         />

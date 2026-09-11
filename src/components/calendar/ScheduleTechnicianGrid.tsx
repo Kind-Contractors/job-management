@@ -36,7 +36,8 @@ export default function ScheduleTechnicianGrid({
   visitStatusStyle: Record<VisitStatus, string>;
   todayISO: string;
   selectedDateISO: string | null;
-  onSelectDay: (dateISO: string) => void;
+  /** technicianId is passed whenever the click originated from a specific technician's row/cell (or its "+" affordance) — omitted from the day-header click, which isn't tied to any one technician. */
+  onSelectDay: (dateISO: string, technicianId?: string) => void;
   onSelectVisit: (jobId: string) => void;
   /**
    * Handles a drop on this technician's cell for the given date — the
@@ -118,16 +119,33 @@ export default function ScheduleTechnicianGrid({
                     key={`${technician.id}-${cellDateISO}`}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={onDrop(technician.id, cellDateISO)}
-                    onClick={() => onSelectDay(cellDateISO)}
+                    onClick={() => onSelectDay(cellDateISO, technician.id)}
                     role="button"
                     tabIndex={0}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') onSelectDay(cellDateISO);
+                      if (e.key === 'Enter' || e.key === ' ') onSelectDay(cellDateISO, technician.id);
                     }}
-                    className={`cursor-pointer border-b border-l border-neutral-300 px-2 py-2 transition-colors hover:bg-neutral-100 ${
+                    className={`group relative cursor-pointer border-b border-l border-neutral-300 px-2 py-2 transition-colors hover:bg-neutral-100 ${
                       isToday ? 'bg-teal-100/40' : ''
                     } ${isSelected ? 'ring-1 ring-inset ring-teal' : ''}`}
                   >
+                    {/* A reserved, always-present strip — never overlaps a chip below it, whether the
+                        cell is empty or already has bookings (see req. 7: the "+" must never sit on
+                        top of a booking card). Invisible until hover/focus reveals the button itself. */}
+                    <div className="flex h-4 items-center justify-end">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectDay(cellDateISO, technician.id);
+                        }}
+                        aria-label={`Add booking for ${technician.name} on ${cellDateISO}`}
+                        title="Add booking"
+                        className="flex h-4 w-4 cursor-pointer items-center justify-center border border-teal bg-white text-[11px] leading-none font-semibold text-teal-700 opacity-0 hover:bg-teal-100 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+                      >
+                        +
+                      </button>
+                    </div>
                     {dayVisits.length === 0 ? (
                       <span className="text-[11px] text-neutral-400">Free</span>
                     ) : (

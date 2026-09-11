@@ -33,6 +33,7 @@ export default function ScheduleDayDrawer({
   jobRows,
   technicians,
   visitStatusStyle,
+  initialTechnicianId,
   onClose,
   onSelectVisit,
 }: {
@@ -41,6 +42,8 @@ export default function ScheduleDayDrawer({
   jobRows: JobRow[];
   technicians: Technician[];
   visitStatusStyle: Record<WeekVisit['status'], string>;
+  /** Pre-selects the Technician field when opened from a specific technician's row/cell in Week or Day mode (see ScheduleTechnicianGrid's "+" affordance) — omitted (or null) when opened from Month mode or the day header, which carry no technician context. */
+  initialTechnicianId?: string | null;
   onClose: () => void;
   onSelectVisit: (jobId: string) => void;
 }) {
@@ -63,7 +66,7 @@ export default function ScheduleDayDrawer({
   const [clientId, setClientId] = useState('');
   const [buildingId, setBuildingId] = useState('');
   const [jobId, setJobId] = useState('');
-  const [technicianId, setTechnicianId] = useState('');
+  const [technicianId, setTechnicianId] = useState(initialTechnicianId ?? '');
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
   const clients = useMemo(() => {

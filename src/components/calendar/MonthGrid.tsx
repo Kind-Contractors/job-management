@@ -33,6 +33,7 @@ interface MonthGridProps {
   bookingPending: boolean;
   onSelectVisit: (jobId: string) => void;
   /** Opens the Schedule Day Drawer for this date — fires on a click anywhere in an empty cell, the date number, or "+N more", never on an existing booking chip (which stops propagation) or while a drop is pending confirmation. */
+  /** Month cells have no technician axis (see ScheduleTechnicianGrid's own onSelectDay for the Week/Day equivalent that does carry one) — always called with just the date. */
   onSelectDay: (dateISO: string) => void;
   /** Today's real date — the one cell that always gets a distinct visual mark, regardless of month/selection. */
   todayISO: string;
@@ -120,22 +121,41 @@ export default function MonthGrid({
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') handleCellClick();
             }}
-            className={`min-h-[112px] border-b border-l border-neutral-300 px-2 py-2 transition-colors ${
+            className={`group relative min-h-[112px] border-b border-l border-neutral-300 px-2 py-2 transition-colors ${
               isPending ? '' : 'cursor-pointer hover:bg-neutral-100'
             } ${i % 7 === 0 ? 'border-l-0' : ''} ${day.inMonth ? 'bg-white' : 'bg-neutral-100'} ${
               isSelected ? 'ring-1 ring-inset ring-teal' : ''
             }`}
           >
-            <div
-              className={`inline-flex h-6 w-6 items-center justify-center text-[11.5px] tabular-nums ${
-                isToday
-                  ? 'bg-teal font-semibold text-white'
-                  : day.inMonth
-                    ? 'text-neutral-600'
-                    : 'text-neutral-400'
-              }`}
-            >
-              {DAY_NUM.format(day.date)}
+            <div className="flex items-center justify-between">
+              <div
+                className={`inline-flex h-6 w-6 items-center justify-center text-[11.5px] tabular-nums ${
+                  isToday
+                    ? 'bg-teal font-semibold text-white'
+                    : day.inMonth
+                      ? 'text-neutral-600'
+                      : 'text-neutral-400'
+                }`}
+              >
+                {DAY_NUM.format(day.date)}
+              </div>
+              {/* Sits in the same row as the date number — always separate from the chip
+                  stack below (see req. 7), never rendered while a drop-confirmation is
+                  already showing in this cell. Month has no technician axis to pre-fill. */}
+              {!isPending && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectDay(day.dateISO);
+                  }}
+                  aria-label={`Add booking on ${day.dateISO}`}
+                  title="Add booking"
+                  className="flex h-5 w-5 cursor-pointer items-center justify-center border border-teal bg-white text-[12px] leading-none font-semibold text-teal-700 opacity-0 hover:bg-teal-100 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
+                >
+                  +
+                </button>
+              )}
             </div>
 
             {isPending ? (
