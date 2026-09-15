@@ -138,6 +138,42 @@ export async function listPhotosForReport(reportId: string): Promise<ReportPhoto
   }));
 }
 
+export interface ReportPhotoWithReport extends ReportPhoto {
+  reportId: string;
+}
+
+/**
+ * Sibling to listPhotosForReport, not a replacement — for Building History's
+ * "Work Photos" section, which needs photos across every report belonging
+ * to a building at once. listPhotosForReport/its callers (ReportPanel.tsx,
+ * ReadyForClientPage.tsx) are unchanged and keep using the single-report
+ * version. Only 'uploaded' photos are returned — a pending/failed upload
+ * has no real file to sign a URL for, so it's excluded here rather than
+ * shown as a placeholder (see req. 9's "skip or placeholder" — this picks
+ * skip, the simpler of the two).
+ */
+export async function listPhotosForReports(reportIds: string[]): Promise<ReportPhotoWithReport[]> {
+  if (reportIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('photos')
+    .select('id, report_id, phase, storage_path, upload_status, include_in_client_report')
+    .in('report_id', reportIds)
+    .eq('upload_status', 'uploaded')
+    .order('phase');
+
+  if (error) throw new Error(`Failed to load photos: ${error.message}`);
+
+  return (data ?? []).map((row) => ({
+    id: row.id,
+    reportId: row.report_id,
+    phase: row.phase,
+    storagePath: row.storage_path,
+    uploadStatus: row.upload_status,
+    includeInClientReport: row.include_in_client_report,
+  }));
+}
+
 /** Toggles one photo's inclusion in the client-facing report — a single-column update, independent of the report-level include_photos toggle (that one hides the whole photos section; this one hides just this photo within it). */
 export async function updatePhotoClientInclusion(photoId: string, included: boolean): Promise<void> {
   const { error } = await supabase.from('photos').update({ include_in_client_report: included }).eq('id', photoId);

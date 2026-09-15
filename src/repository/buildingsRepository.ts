@@ -8,6 +8,7 @@ import type { BuildingHistoryEvent, BuildingRow } from '../domain/types';
 import { supabase } from '../lib/supabaseClient';
 import { mapBuildingRow, type SupabaseBuildingRecord } from './mapBuildingRow';
 import { logCurrentUserActivity } from './activityEventsRepository';
+import { listPhotosForReports, type ReportPhotoWithReport } from './reportsRepository';
 
 const BUILDING_SELECT = `
   id,
@@ -318,4 +319,71 @@ export async function listBuildingHistory(buildingId: string): Promise<BuildingH
   ];
 
   return events.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+}
+
+/** One report's worth of work photos, for Building History's "Work Photos" section — a report is always exactly one visit, so this is also "one visit's photos." Bare metadata only; signing is the caller's own job (see BuildingFilePage.tsx), matching how ReportPanel.tsx/ReadyForClientPage.tsx already separate "what photos exist" from "get their URLs". */
+export interface BuildingPhotoGroup {
+  jobId: string;
+  jobSummary: string;
+  visitId: string;
+  scheduledDate: string | null;
+  reportId: string;
+  photos: ReportPhotoWithReport[];
+}
+
+/**
+ * Standalone resolution of the same photos.report_id -> reports.visit_id ->
+ * visits.job_id -> jobs.building_id chain listBuildingHistory() above also
+ * walks — deliberately not sharing that function's internals, so neither
+ * can be affected by a change to the other. Groups by report (one visit's
+ * worth of photos) rather than flattening, so the caller can show job name
+ * + visit date per group and never has to re-derive which photos belong
+ * together.
+ */
+export async function listBuildingPhotos(buildingId: string): Promise<BuildingPhotoGroup[]> {
+  const { data: jobs, error: jobsError } = await supabase.from('jobs').select('id, job_summary').eq('building_id', buildingId);
+  if (jobsError) throw new Error(`Failed to load building photos: ${jobsError.message}`);
+  const jobIds = (jobs ?? []).map((j) => j.id);
+  if (jobIds.length === 0) return [];
+  const jobSummaryByJobId = new Map((jobs ?? []).map((j) => [j.id, j.job_summary as string]));
+
+  const { data: visits, error: visitsError } = await supabase
+    .from('visits')
+    .select('id, job_id, scheduled_date')
+    .in('job_id', jobIds);
+  if (visitsError) throw new Error(`Failed to load building photos: ${visitsError.message}`);
+  const visitIds = (visits ?? []).map((v) => v.id);
+  if (visitIds.length === 0) return [];
+  const visitById = new Map((visits ?? []).map((v) => [v.id, v]));
+
+  const { data: reports, error: reportsError } = await supabase.from('reports').select('id, visit_id').in('visit_id', visitIds);
+  if (reportsError) throw new Error(`Failed to load building photos: ${reportsError.message}`);
+  const reportIds = (reports ?? []).map((r) => r.id);
+  if (reportIds.length === 0) return [];
+  const visitIdByReportId = new Map((reports ?? []).map((r) => [r.id, r.visit_id]));
+
+  const photos = await listPhotosForReports(reportIds);
+  if (photos.length === 0) return [];
+
+  const groupsByReportId = new Map<string, BuildingPhotoGroup>();
+  for (const photo of photos) {
+    let group = groupsByReportId.get(photo.reportId);
+    if (!group) {
+      const visitId = visitIdByReportId.get(photo.reportId) ?? '';
+      const visit = visitById.get(visitId);
+      const jobId = visit?.job_id ?? '';
+      group = {
+        jobId,
+        jobSummary: jobSummaryByJobId.get(jobId) ?? 'Job',
+        visitId,
+        scheduledDate: visit?.scheduled_date ?? null,
+        reportId: photo.reportId,
+        photos: [],
+      };
+      groupsByReportId.set(photo.reportId, group);
+    }
+    group.photos.push(photo);
+  }
+
+  return Array.from(groupsByReportId.values()).sort((a, b) => (b.scheduledDate ?? '').localeCompare(a.scheduledDate ?? ''));
 }

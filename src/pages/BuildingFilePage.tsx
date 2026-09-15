@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { listBuildingHistory, listBuildingRows } from '../repository/buildingsRepository';
+import { listBuildingHistory, listBuildingPhotos, listBuildingRows } from '../repository/buildingsRepository';
 import { listJobRows } from '../repository/jobsRepository';
 import { listContactsForClient } from '../repository/contactsRepository';
+import { signReportPhotoUrls } from '../repository/reportsRepository';
 import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
 import JobCreator from '../components/jobs/JobCreator';
 import BuildingEditor from '../components/jobs/BuildingEditor';
@@ -44,10 +45,16 @@ const HISTORY_EVENT_LABEL: Record<string, string> = {
   report_sent_to_accounts: 'Sent to accounts',
 };
 
+const PHOTO_PHASE_LABEL = { before: 'Before', during: 'During', after: 'After' } as const;
+
 export default function BuildingFilePage() {
   const { buildingId } = useParams<{ buildingId: string }>();
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('site');
+  // Collapsed by default — the activity log can get long over time, and
+  // Work Photos (always shown in full below it) shouldn't require
+  // scrolling past it to reach.
+  const [historyExpanded, setHistoryExpanded] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [editingBuilding, setEditingBuilding] = useState(false);
   const [editingAccess, setEditingAccess] = useState(false);
@@ -88,6 +95,33 @@ export default function BuildingFilePage() {
     queryFn: () => listBuildingHistory(buildingId!),
     enabled: Boolean(buildingId) && tab === 'history',
   });
+  const {
+    data: photoGroups = [],
+    isLoading: photosLoading,
+    isError: photosError,
+  } = useQuery({
+    queryKey: ['buildingPhotos', buildingId],
+    queryFn: () => listBuildingPhotos(buildingId!),
+    enabled: Boolean(buildingId) && tab === 'history',
+  });
+  const allBuildingPhotos = useMemo(() => photoGroups.flatMap((g) => g.photos), [photoGroups]);
+  const { data: photoUrls = {} } = useQuery({
+    queryKey: ['buildingPhotoUrls', buildingId, allBuildingPhotos.map((p) => p.id).join(',')],
+    queryFn: () => signReportPhotoUrls(allBuildingPhotos),
+    enabled: allBuildingPhotos.length > 0,
+  });
+  // Same groups, re-partitioned by job for display — groups are already
+  // date-descending from listBuildingPhotos(), so each job's own bucket
+  // stays in that order too.
+  const photoGroupsByJob = useMemo(() => {
+    const map = new Map<string, { jobSummary: string; groups: typeof photoGroups }>();
+    for (const g of photoGroups) {
+      const entry = map.get(g.jobId) ?? { jobSummary: g.jobSummary, groups: [] };
+      entry.groups.push(g);
+      map.set(g.jobId, entry);
+    }
+    return Array.from(map.entries()).map(([jobId, entry]) => ({ jobId, ...entry }));
+  }, [photoGroups]);
 
   if (buildingsLoading || jobsLoading) {
     return (
@@ -339,33 +373,126 @@ export default function BuildingFilePage() {
           </div>
         </div>
       ) : (
-        <div className="border border-neutral-300 bg-white p-4">
-          {historyLoading ? (
-            <div className="text-[12.5px] text-neutral-500">Loading history…</div>
-          ) : historyError ? (
-            <div className="text-[12.5px] text-missed-fg">Couldn't load history.</div>
-          ) : history.length === 0 ? (
-            <div className="text-[12.5px] text-neutral-500">No history recorded yet for this building.</div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {history.map((event) => (
-                <div key={event.id} className="flex gap-2.5 text-[12.5px]">
-                  <i className="mt-1 block h-1.5 w-1.5 flex-none bg-teal-700" />
-                  <div>
-                    <div className="font-semibold">
-                      {HISTORY_EVENT_LABEL[event.eventType] ?? event.eventType}
-                      {event.jobSummary ? ` — ${event.jobSummary}` : ''}
-                    </div>
-                    {event.detail && <div className="text-neutral-600">{event.detail}</div>}
-                    <div className="text-[11px] text-neutral-500">
-                      {new Date(event.occurredAt).toLocaleDateString('en-GB')}
-                      {event.actor ? ` · ${event.actor}` : ''}
+        <div className="flex flex-col gap-4">
+          <div className="border border-neutral-300 bg-white p-4">
+            <div className="flex items-center gap-2">
+              <span className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
+                Activity
+              </span>
+              {!historyLoading && !historyError && (
+                <span className="text-[11px] text-neutral-500 tabular-nums">({history.length})</span>
+              )}
+              {!historyLoading && !historyError && history.length > 0 && (
+                <button
+                  onClick={() => setHistoryExpanded((e) => !e)}
+                  className="ml-auto cursor-pointer text-[11px] text-teal-700 hover:underline"
+                >
+                  {historyExpanded ? 'Hide' : 'Show'}
+                </button>
+              )}
+            </div>
+            {historyLoading ? (
+              <div className="mt-1.5 text-[12.5px] text-neutral-500">Loading history…</div>
+            ) : historyError ? (
+              <div className="mt-1.5 text-[12.5px] text-missed-fg">Couldn't load history.</div>
+            ) : history.length === 0 ? (
+              <div className="mt-1.5 text-[12.5px] text-neutral-500">No history recorded yet for this building.</div>
+            ) : historyExpanded ? (
+              <div className="mt-2 flex flex-col gap-3">
+                {history.map((event) => (
+                  <div key={event.id} className="flex gap-2.5 text-[12.5px]">
+                    <i className="mt-1 block h-1.5 w-1.5 flex-none bg-teal-700" />
+                    <div>
+                      <div className="font-semibold">
+                        {HISTORY_EVENT_LABEL[event.eventType] ?? event.eventType}
+                        {event.jobSummary ? ` — ${event.jobSummary}` : ''}
+                      </div>
+                      {event.detail && <div className="text-neutral-600">{event.detail}</div>}
+                      <div className="text-[11px] text-neutral-500">
+                        {new Date(event.occurredAt).toLocaleDateString('en-GB')}
+                        {event.actor ? ` · ${event.actor}` : ''}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          {/* Read-only retrospective of uploaded work photos — no include/exclude,
+              editing, deletion, or send/approve actions; see listBuildingPhotos(). Always
+              shown in full (no collapse) — Activity above is what collapses, so photos
+              never require scrolling past a long activity log to reach. */}
+          <div className="border border-neutral-300 bg-white p-4">
+            <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
+              Work photos
             </div>
-          )}
+            {photosLoading ? (
+              <div className="mt-1.5 text-[12.5px] text-neutral-500">Loading photos…</div>
+            ) : photosError ? (
+              <div className="mt-1.5 text-[12.5px] text-missed-fg">Couldn't load photos.</div>
+            ) : photoGroupsByJob.length === 0 ? (
+              <div className="mt-1.5 text-[12.5px] text-neutral-500">No work photos uploaded yet for this building.</div>
+            ) : (
+              <div className="mt-2 flex flex-col gap-4">
+                {photoGroupsByJob.map(({ jobId, jobSummary, groups }) => (
+                  <div key={jobId}>
+                    <div className="mb-1.5 flex items-center gap-2">
+                      <span className="font-heading text-[10px] font-semibold tracking-[0.1em] text-neutral-600 uppercase">
+                        {jobSummary}
+                      </span>
+                      <button
+                        onClick={() => {
+                          setCreatingJob(false);
+                          setSelectedJobId(jobId);
+                        }}
+                        className="cursor-pointer text-[11px] text-teal-700 hover:underline"
+                      >
+                        View job
+                      </button>
+                    </div>
+                    <div className="flex flex-col gap-3">
+                      {groups.map((g) => (
+                        <div key={g.reportId} className="border-l-2 border-neutral-200 pl-3">
+                          <div className="mb-1 text-[11px] text-neutral-500 tabular-nums">
+                            Visit {g.scheduledDate ? new Date(g.scheduledDate).toLocaleDateString('en-GB') : 'date unknown'}
+                          </div>
+                          <div className="grid grid-cols-3 gap-3">
+                            {(['before', 'during', 'after'] as const).map((phase) => {
+                              const phasePhotos = g.photos.filter((p) => p.phase === phase);
+                              if (phasePhotos.length === 0) return null;
+                              return (
+                                <div key={phase}>
+                                  <div className="mb-1 font-heading text-[9.5px] font-semibold tracking-[0.1em] text-neutral-500 uppercase">
+                                    {PHOTO_PHASE_LABEL[phase]} ({phasePhotos.length})
+                                  </div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {phasePhotos.map((p) =>
+                                      photoUrls[p.id] ? (
+                                        <a key={p.id} href={photoUrls[p.id]} target="_blank" rel="noreferrer">
+                                          <img
+                                            src={photoUrls[p.id]}
+                                            alt=""
+                                            className="h-20 w-20 border border-neutral-300 object-cover"
+                                          />
+                                        </a>
+                                      ) : (
+                                        <div key={p.id} className="h-20 w-20 animate-shimmer border border-neutral-300 bg-neutral-200" />
+                                      ),
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
