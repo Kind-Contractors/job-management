@@ -63,6 +63,18 @@ function technicianLabel(id: string | null | undefined, technicianById: Map<stri
   return t.isActive ? t.name : `${t.name} (inactive)`;
 }
 
+/**
+ * Marks a cell as an inline-editable input with a thin inset border, reusing
+ * the exact `ring-1 ring-inset` idiom already used for a "selected" day cell
+ * in ScheduleTechnicianGrid.tsx/MonthGrid.tsx — an inset ring rather than a
+ * real `border` because AG Grid's Theming API already draws each cell's own
+ * hairline border; a bare Tailwind `border` would sit awkwardly alongside
+ * that instead of framing the cell cleanly. Restrained opacity (not the
+ * selection ring's full-strength teal) so many editable cells at once read
+ * as "these are inputs," not as several falsely "selected" cells.
+ */
+const EDITABLE_CELL_CLASS = 'ring-1 ring-inset ring-teal/40';
+
 export const COLUMN_IDS = [
   'building',
   'job',
@@ -128,6 +140,7 @@ function buildColumnDefs(
       minWidth: 180,
       hide: hide('job'),
       editable: (p: { data?: GridBlock }) => jobOf(p) != null,
+      cellClass: EDITABLE_CELL_CLASS,
       valueGetter: (p) => jobOf(p)?.jobSummary,
       valueSetter: (p) => {
         const job = jobOf(p);
@@ -147,6 +160,7 @@ function buildColumnDefs(
       minWidth: 104,
       hide: hide('division'),
       editable: (p: { data?: GridBlock }) => jobOf(p) != null,
+      cellClass: EDITABLE_CELL_CLASS,
       valueGetter: (p) => jobOf(p)?.division,
       cellEditor: SelectCellEditor,
       cellEditorParams: { options: DIVISIONS.map((d) => ({ value: d, label: d })) },
@@ -168,6 +182,7 @@ function buildColumnDefs(
       minWidth: 110,
       hide: hide('frequency'),
       editable: (p: { data?: GridBlock }) => jobOf(p) != null,
+      cellClass: EDITABLE_CELL_CLASS,
       // Raw enum for editing — NOT frequencyRaw (the display label), which
       // isn't itself a valid write-back value. valueFormatter below
       // reproduces the exact display mapJobRow.ts already computes,
@@ -234,7 +249,9 @@ function buildColumnDefs(
         patchJobRowInCache(queryClient, updated);
         return true;
       },
-      cellClass: 'tabular-nums',
+      // Only fixed-pricing jobs get the editable tint — a variable job's price
+      // cell stays plain, matching its own `editable` callback right above.
+      cellClass: (p: { data?: GridBlock }) => (jobOf(p)?.pricePerVisit != null ? `tabular-nums ${EDITABLE_CELL_CLASS}` : 'tabular-nums'),
     },
     {
       colId: 'perMonth',
@@ -309,6 +326,7 @@ function buildColumnDefs(
       // Inspector's Visits list). The "Default technician" header exists
       // specifically so this cell is never mistaken for the other one.
       editable: (p: { data?: GridBlock }) => jobOf(p) != null,
+      cellClass: EDITABLE_CELL_CLASS,
       valueGetter: (p) => jobOf(p)?.defaultTechnicianId ?? null,
       valueFormatter: (p) => technicianLabel(p.value, technicianById),
       cellEditor: SelectCellEditor,
@@ -464,7 +482,23 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
           rowData={blocks}
           columnDefs={columnDefs}
           defaultColDef={{
-            tooltipValueGetter: (p) => (p.data?.kind === 'row' ? 'Click to view job details' : undefined),
+            // Same editable check onCellClicked/tabToNextCell already use below —
+            // says what THIS cell's click actually does, not one generic string
+            // for the whole row (an editable cell starts editing, not the drawer).
+            tooltipValueGetter: (p) => {
+              if (p.data?.kind !== 'row') return undefined;
+              // Narrow, self-contained cast (same idiom as onCellClicked/tabToNextCell
+              // below): a group-header colDef never reaches a real row's tooltip.
+              const colDef = p.colDef as ColDef<GridBlock> | undefined;
+              if (!colDef) return undefined;
+              if (colDef.colId === 'contact') return 'Click to view or edit contact';
+              const editableFn = colDef.editable;
+              const isEditable =
+                typeof editableFn === 'function'
+                  ? (editableFn as (pp: { data?: GridBlock }) => boolean)({ data: p.data })
+                  : !!editableFn;
+              return isEditable ? 'Click to edit' : 'Click to view job details';
+            },
           }}
           getRowId={(params: GetRowIdParams<GridBlock>) => params.data.id}
           onGridReady={(params) => {
