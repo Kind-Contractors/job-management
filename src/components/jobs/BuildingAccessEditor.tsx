@@ -74,22 +74,24 @@ export default function BuildingAccessEditor({ buildingId, access, onDone }: Bui
             className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
           />
         </label>
-        {/* Side by side — both short fields, so pairing them uses this panel's width better than stacking each full-width. */}
+        {/* Side by side — both short fields, so pairing them uses this panel's width better than stacking each full-width.
+            min-w-0 on each is required: this panel sits in a 320px column, and without it a flex item's default
+            min-width:auto refuses to shrink below the input's own intrinsic width, pushing the phone field outside the box. */}
         <div className="flex gap-1.5">
-          <label className="flex flex-1 flex-col gap-1 text-[11px] text-neutral-600">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-[11px] text-neutral-600">
             Keyholder name
             <input
               value={form.keyholderName}
               onChange={(e) => setForm({ ...form, keyholderName: e.target.value })}
-              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+              className="min-w-0 border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
             />
           </label>
-          <label className="flex flex-1 flex-col gap-1 text-[11px] text-neutral-600">
+          <label className="flex min-w-0 flex-1 flex-col gap-1 text-[11px] text-neutral-600">
             Keyholder phone
             <input
               value={form.keyholderPhone}
               onChange={(e) => setForm({ ...form, keyholderPhone: e.target.value })}
-              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+              className="min-w-0 border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
             />
           </label>
         </div>
