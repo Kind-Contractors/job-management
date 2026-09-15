@@ -419,8 +419,25 @@ const NO_HIDDEN_COLUMNS: ReadonlySet<JobsGridColumnId> = new Set();
 export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hiddenColumns = NO_HIDDEN_COLUMNS }: JobsGridProps) {
   const queryClient = useQueryClient();
   const [editError, setEditError] = useState<string | null>(null);
+  const [savedMessage, setSavedMessage] = useState<string | null>(null);
   const [contactPopoverJob, setContactPopoverJob] = useState<JobRow | null>(null);
   const { data: technicians = [] } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
+  const savedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Shows the transient "Saved" toast, resetting its own auto-dismiss timer on each call so a second quick edit doesn't cut the first one's toast short. */
+  const showSaved = () => {
+    if (savedTimeoutRef.current) clearTimeout(savedTimeoutRef.current);
+    setSavedMessage('Saved');
+    savedTimeoutRef.current = setTimeout(() => setSavedMessage(null), 2000);
+  };
+
+  // Cleanup only — cancels a pending dismiss timer if the grid unmounts
+  // mid-toast, so it never calls setState after unmount.
+  useEffect(() => {
+    return () => {
+      if (savedTimeoutRef.current) clearTimeout(savedTimeoutRef.current);
+    };
+  }, []);
 
   const blocks = useMemo(() => buildGridBlocks(rows, groupBy), [rows, groupBy]);
   const columnDefs = useMemo(
@@ -455,6 +472,7 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
    */
   const patchMutation = useMutation({
     mutationFn: ({ jobId, patch }: { jobId: string; patch: JobPatchInput }) => patchJob(jobId, patch),
+    onSuccess: () => showSaved(),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['jobRows'] }),
     onError: (err) => setEditError(err instanceof Error ? err.message : 'Failed to save change.'),
   });
@@ -462,18 +480,28 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
   const assignMutation = useMutation({
     mutationFn: ({ jobId, technicianId }: { jobId: string; technicianId: string | null }) =>
       assignJobTechnician(jobId, technicianId),
+    onSuccess: () => showSaved(),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['jobRows'] }),
     onError: (err) => setEditError(err instanceof Error ? err.message : 'Failed to assign technician.'),
   });
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
       {editError && (
         <div className="mb-1.5 flex flex-none items-center gap-2 border border-missed bg-missed/10 px-3 py-1.5 text-[12px] text-missed-fg">
           {editError}
           <button onClick={() => setEditError(null)} className="ml-auto cursor-pointer underline">
             Dismiss
           </button>
+        </div>
+      )}
+      {/* Transient, non-blocking confirmation for a successful inline edit —
+          floats over the grid rather than shifting its layout, since it can
+          fire on every single cell commit. pointer-events-none so it never
+          intercepts a click meant for the grid beneath it. */}
+      {savedMessage && (
+        <div className="pointer-events-none absolute right-3 bottom-3 z-10 border border-teal-700 bg-teal-100 px-3 py-1.5 text-[12px] font-semibold text-teal-700 shadow-md">
+          {savedMessage}
         </div>
       )}
       <div className="min-h-0 flex-1">
