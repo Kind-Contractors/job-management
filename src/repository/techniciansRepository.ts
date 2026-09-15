@@ -8,6 +8,7 @@
 
 import type { Technician, WeekVisit } from '../domain/types';
 import { supabase } from '../lib/supabaseClient';
+import { logCurrentUserActivity } from './activityEventsRepository';
 
 export async function listTechnicians(): Promise<Technician[]> {
   const { data, error } = await supabase.from('technicians').select('id, name, is_active, notes, app_user_id');
@@ -86,16 +87,22 @@ export async function setTechnicianActive(technicianId: string, isActive: boolea
  * the day before or the day of").
  */
 export async function createVisit(jobId: string, technicianId: string | null, scheduledDate: string): Promise<void> {
-  const { error } = await supabase.from('visits').insert({
-    job_id: jobId,
-    technician_id: technicianId,
-    scheduled_date: scheduledDate,
-    status: 'booked',
-  });
+  const { data, error } = await supabase
+    .from('visits')
+    .insert({
+      job_id: jobId,
+      technician_id: technicianId,
+      scheduled_date: scheduledDate,
+      status: 'booked',
+    })
+    .select('id')
+    .single();
 
   if (error) {
     throw new Error(`Failed to book visit: ${error.message}`);
   }
+
+  await logCurrentUserActivity('visit', data.id, 'visit_created');
 }
 
 /**
@@ -110,10 +117,18 @@ export async function createVisit(jobId: string, technicianId: string | null, sc
  * one's.
  */
 export async function rescheduleVisit(visitId: string, scheduledDate: string): Promise<void> {
+  const { data: before } = await supabase.from('visits').select('scheduled_date').eq('id', visitId).maybeSingle();
+
   const { error } = await supabase.from('visits').update({ scheduled_date: scheduledDate }).eq('id', visitId);
 
   if (error) {
     throw new Error(`Failed to reschedule visit: ${error.message}`);
+  }
+
+  if (before && before.scheduled_date !== scheduledDate) {
+    const fmt = (d: string) => new Date(d).toLocaleDateString('en-GB');
+    const detail = before.scheduled_date ? `${fmt(before.scheduled_date)} → ${fmt(scheduledDate)}` : `Set to ${fmt(scheduledDate)}`;
+    await logCurrentUserActivity('visit', visitId, 'visit_rescheduled', detail);
   }
 }
 
@@ -128,9 +143,25 @@ export async function rescheduleVisit(visitId: string, scheduledDate: string): P
  * changeable person assignment — reference/Luke_manager_app_version_1.txt).
  */
 export async function assignVisitTechnician(visitId: string, technicianId: string | null): Promise<void> {
+  const { data: before } = await supabase.from('visits').select('technician_id').eq('id', visitId).maybeSingle();
+
   const { error } = await supabase.from('visits').update({ technician_id: technicianId }).eq('id', visitId);
 
   if (error) {
     throw new Error(`Failed to assign technician: ${error.message}`);
   }
+
+  const beforeId = before?.technician_id ?? null;
+  if (beforeId === technicianId) return;
+
+  const idsToResolve = [beforeId, technicianId].filter((id): id is string => !!id);
+  const namesById = new Map<string, string>();
+  if (idsToResolve.length > 0) {
+    const { data: techs } = await supabase.from('technicians').select('id, name').in('id', idsToResolve);
+    for (const t of techs ?? []) namesById.set(t.id, t.name);
+  }
+  const beforeName = beforeId ? (namesById.get(beforeId) ?? 'Unknown') : 'Unassigned';
+  const afterName = technicianId ? (namesById.get(technicianId) ?? 'Unknown') : 'Unassigned';
+  const eventType = !beforeId ? 'visit_technician_assigned' : !technicianId ? 'visit_technician_unassigned' : 'visit_technician_changed';
+  await logCurrentUserActivity('visit', visitId, eventType, `${beforeName} → ${afterName}`);
 }

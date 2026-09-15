@@ -320,6 +320,8 @@ export interface BuildingHistoryEvent {
   detail: string | null;
   occurredAt: string;
   actor: string | null;
+  /** The related job's CURRENT name, resolved at query time (never stored on the event itself) — null for building-level events, which aren't tied to one job. */
+  jobSummary: string | null;
 }
 
 /**

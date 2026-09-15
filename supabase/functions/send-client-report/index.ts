@@ -249,6 +249,20 @@ Deno.serve(async (req: Request) => {
     await callerClient.from('report_client_sends').update({ status: 'sent', updated_at: now }).eq('id', sendRow.id);
     await callerClient.from('reports').update({ sent_to_client_at: now, sent_to_client_by: actor }).eq('id', reportId);
 
+    // The one, canonical place 'report_sent_to_client' is ever logged — only
+    // reached once the email provider has actually confirmed delivery (a
+    // failed send returns from fail()/the !emailResponse.ok branch above
+    // instead, well before this line). Best-effort: a logging failure must
+    // never turn an already-successful send into an error response.
+    const { error: activityError } = await callerClient.from('activity_events').insert({
+      entity_type: 'report',
+      entity_id: reportId,
+      event_type: 'report_sent_to_client',
+      actor,
+      occurred_at: now,
+    });
+    if (activityError) console.error('Failed to log activity event "report_sent_to_client":', activityError.message);
+
     return json({ status: 'sent' }, 200);
   } catch (err) {
     const message = errorMessage(err);

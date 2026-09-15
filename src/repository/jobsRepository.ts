@@ -8,7 +8,68 @@
 import type { Division, FrequencyType, JobRow } from '../domain/types';
 import { denormalizeJobRows } from '../mock/jobsData';
 import { supabase } from '../lib/supabaseClient';
-import { mapJobRow, type SupabaseJobRecord } from './mapJobRow';
+import { mapJobRow, FREQUENCY_TYPE_LABEL, type SupabaseJobRecord } from './mapJobRow';
+import { logCurrentUserActivity } from './activityEventsRepository';
+
+function formatMoney(n: number | null): string {
+  return n == null ? 'Variable' : `£${n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatFrequency(f: string | null): string {
+  return f ? (FREQUENCY_TYPE_LABEL[f as FrequencyType] ?? f) : 'Not set';
+}
+
+interface JobBeforeFields {
+  job_summary: string;
+  job_notes: string | null;
+  job_type: string;
+  pricing_type: string;
+  price_per_visit: number | null;
+  frequency_type: string | null;
+}
+
+/**
+ * Shared by updateJob() and patchJob() — both end up diffing the same
+ * before/after shape, just with different subsets of fields present on
+ * `input` (patchJob only ever sends the one column a grid cell edited).
+ * Price/frequency get their own event types (distinct bullets in the
+ * requirements, with an old → new value); everything else collapses into
+ * one generic "details updated" event naming only which fields changed.
+ */
+async function logJobChanges(jobId: string, before: JobBeforeFields, input: JobPatchInput): Promise<void> {
+  const changedFields: string[] = [];
+  if (input.jobSummary !== undefined && input.jobSummary !== before.job_summary) changedFields.push('name');
+  if (input.jobNotes !== undefined && input.jobNotes !== before.job_notes) changedFields.push('notes');
+  if (input.division !== undefined) {
+    const newJobType = input.division === 'Specialist' ? 'specialist' : 'general';
+    if (newJobType !== before.job_type) changedFields.push('division');
+  }
+  if (input.pricingType !== undefined && input.pricingType !== before.pricing_type) changedFields.push('pricing type');
+
+  if (changedFields.length > 0) {
+    await logCurrentUserActivity('job', jobId, 'job_details_updated', `Updated: ${changedFields.join(', ')}`);
+  }
+
+  if (input.pricePerVisit !== undefined && input.pricePerVisit !== before.price_per_visit) {
+    await logCurrentUserActivity(
+      'job',
+      jobId,
+      'job_price_changed',
+      `${formatMoney(before.price_per_visit)} → ${formatMoney(input.pricePerVisit)}`,
+    );
+  }
+
+  if (input.frequencyType !== undefined && input.frequencyType !== before.frequency_type) {
+    await logCurrentUserActivity(
+      'job',
+      jobId,
+      'job_frequency_changed',
+      `${formatFrequency(before.frequency_type)} → ${formatFrequency(input.frequencyType)}`,
+    );
+  }
+}
+
+const JOB_BEFORE_SELECT = 'job_summary, job_notes, job_type, pricing_type, price_per_visit, frequency_type';
 
 const JOB_SELECT = `
   id,
@@ -81,11 +142,26 @@ export async function listJobRows(): Promise<JobRow[]> {
  * touch visits/schedules.
  */
 export async function assignJobTechnician(jobId: string, technicianId: string | null): Promise<void> {
+  const { data: before } = await supabase.from('jobs').select('default_technician_id').eq('id', jobId).maybeSingle();
+
   const { error } = await supabase.from('jobs').update({ default_technician_id: technicianId }).eq('id', jobId);
 
   if (error) {
     throw new Error(`Failed to assign technician: ${error.message}`);
   }
+
+  const beforeId = before?.default_technician_id ?? null;
+  if (beforeId === technicianId) return;
+
+  const idsToResolve = [beforeId, technicianId].filter((id): id is string => !!id);
+  const namesById = new Map<string, string>();
+  if (idsToResolve.length > 0) {
+    const { data: techs } = await supabase.from('technicians').select('id, name').in('id', idsToResolve);
+    for (const t of techs ?? []) namesById.set(t.id, t.name);
+  }
+  const beforeName = beforeId ? (namesById.get(beforeId) ?? 'Unknown') : 'Unassigned';
+  const afterName = technicianId ? (namesById.get(technicianId) ?? 'Unknown') : 'Unassigned';
+  await logCurrentUserActivity('job', jobId, 'job_default_technician_changed', `${beforeName} → ${afterName}`);
 }
 
 export interface JobEditInput {
@@ -108,6 +184,8 @@ export interface JobEditInput {
  * transforms a value to fit.
  */
 export async function updateJob(jobId: string, input: JobEditInput): Promise<void> {
+  const { data: before } = await supabase.from('jobs').select(JOB_BEFORE_SELECT).eq('id', jobId).maybeSingle();
+
   const { error } = await supabase
     .from('jobs')
     .update({
@@ -123,6 +201,8 @@ export async function updateJob(jobId: string, input: JobEditInput): Promise<voi
   if (error) {
     throw new Error(`Failed to update job: ${error.message}`);
   }
+
+  if (before) await logJobChanges(jobId, before, input);
 }
 
 export type JobPatchInput = Partial<JobEditInput>;
@@ -138,6 +218,8 @@ export type JobPatchInput = Partial<JobEditInput>;
  * job alone, reused as-is by the grid's Technician column.
  */
 export async function patchJob(jobId: string, input: JobPatchInput): Promise<void> {
+  const { data: before } = await supabase.from('jobs').select(JOB_BEFORE_SELECT).eq('id', jobId).maybeSingle();
+
   const patch: Record<string, unknown> = {};
   if ('jobSummary' in input) patch.job_summary = input.jobSummary;
   if ('jobNotes' in input) patch.job_notes = input.jobNotes;
@@ -151,6 +233,8 @@ export async function patchJob(jobId: string, input: JobPatchInput): Promise<voi
   if (error) {
     throw new Error(`Failed to update job: ${error.message}`);
   }
+
+  if (before) await logJobChanges(jobId, before, input);
 }
 
 export interface JobCreateInput {
@@ -200,6 +284,7 @@ export async function createJob(input: JobCreateInput): Promise<string> {
     throw new Error(`Failed to create job: ${error.message}`);
   }
 
+  await logCurrentUserActivity('job', data.id, 'job_created');
   return data.id;
 }
 

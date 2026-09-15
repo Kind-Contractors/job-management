@@ -7,6 +7,7 @@
 import type { BuildingHistoryEvent, BuildingRow } from '../domain/types';
 import { supabase } from '../lib/supabaseClient';
 import { mapBuildingRow, type SupabaseBuildingRecord } from './mapBuildingRow';
+import { logCurrentUserActivity } from './activityEventsRepository';
 
 const BUILDING_SELECT = `
   id,
@@ -63,6 +64,7 @@ export async function createBuilding(clientId: string, input: BuildingCreateFiel
     throw new Error(`Failed to create building: ${error.message}`);
   }
 
+  await logCurrentUserActivity('building', data.id, 'building_created');
   return data.id;
 }
 
@@ -81,6 +83,12 @@ export interface BuildingEditFields {
  * Plain update by id, same manager_full_access RLS as createBuilding().
  */
 export async function updateBuilding(buildingId: string, fields: BuildingEditFields): Promise<void> {
+  const { data: before } = await supabase
+    .from('buildings')
+    .select('name, address, postcode, invoice_details, extra_requirements')
+    .eq('id', buildingId)
+    .maybeSingle();
+
   const { error } = await supabase
     .from('buildings')
     .update({
@@ -94,6 +102,23 @@ export async function updateBuilding(buildingId: string, fields: BuildingEditFie
 
   if (error) {
     throw new Error(`Failed to update building: ${error.message}`);
+  }
+
+  if (!before) return;
+
+  // Site instructions get their own event type (a distinct bullet in the
+  // requirements) — everything else here is a general "details updated"
+  // event naming only which fields changed, never their values.
+  const changedFields: string[] = [];
+  if (before.name !== fields.name) changedFields.push('name');
+  if (before.address !== fields.address) changedFields.push('address');
+  if (before.postcode !== fields.postcode) changedFields.push('postcode');
+  if (before.invoice_details !== fields.invoiceDetails) changedFields.push('invoice details');
+  if (changedFields.length > 0) {
+    await logCurrentUserActivity('building', buildingId, 'building_details_updated', `Updated: ${changedFields.join(', ')}`);
+  }
+  if (before.extra_requirements !== fields.siteInstructions) {
+    await logCurrentUserActivity('building', buildingId, 'site_instructions_updated');
   }
 }
 
@@ -115,6 +140,12 @@ export interface BuildingAccessEditFields {
  * pass (not required yet).
  */
 export async function upsertBuildingAccess(buildingId: string, fields: BuildingAccessEditFields): Promise<void> {
+  const { data: before } = await supabase
+    .from('building_access')
+    .select('key_safe_code, keyholder_name, keyholder_phone, parking_notes, access_notes')
+    .eq('building_id', buildingId)
+    .maybeSingle();
+
   const { error } = await supabase.from('building_access').upsert(
     {
       building_id: buildingId,
@@ -129,6 +160,22 @@ export async function upsertBuildingAccess(buildingId: string, fields: BuildingA
 
   if (error) {
     throw new Error(`Failed to update access details: ${error.message}`);
+  }
+
+  // Names ONLY which category changed — never the actual key safe code,
+  // keyholder phone, parking notes, or access notes text. `before` is null
+  // the first time a building gets access details at all; every provided
+  // field then correctly counts as "changed" against that absent baseline.
+  const changedGroups: string[] = [];
+  if ((before?.key_safe_code ?? null) !== fields.keySafeCode) changedGroups.push('Key safe information');
+  if ((before?.keyholder_name ?? null) !== fields.keyholderName || (before?.keyholder_phone ?? null) !== fields.keyholderPhone) {
+    changedGroups.push('Keyholder information');
+  }
+  if ((before?.parking_notes ?? null) !== fields.parkingNotes) changedGroups.push('Parking information');
+  if ((before?.access_notes ?? null) !== fields.accessNotes) changedGroups.push('Access notes');
+
+  if (changedGroups.length > 0) {
+    await logCurrentUserActivity('building', buildingId, 'access_info_updated', `Updated: ${changedGroups.join(', ')}`);
   }
 }
 
@@ -162,6 +209,7 @@ export async function createClientAndBuilding(input: NewClientBuildingInput): Pr
   }
 
   const row = data as unknown as { client_id: string; building_id: string };
+  await logCurrentUserActivity('building', row.building_id, 'building_created');
   return { clientId: row.client_id, buildingId: row.building_id };
 }
 
@@ -170,23 +218,104 @@ export async function createClientAndBuilding(input: NewClientBuildingInput): Pr
  * every building today — this returns [] rather than any fabricated event
  * (CLAUDE.md section 15).
  */
-export async function listBuildingHistory(buildingId: string): Promise<BuildingHistoryEvent[]> {
-  const { data, error } = await supabase
-    .from('activity_events')
-    .select('id, event_type, detail, occurred_at, actor')
-    .eq('entity_type', 'building')
-    .eq('entity_id', buildingId)
-    .order('occurred_at', { ascending: false });
+interface RawActivityEvent {
+  id: string;
+  entity_id: string;
+  event_type: string;
+  detail: string | null;
+  occurred_at: string;
+  actor: string | null;
+}
 
-  if (error) {
-    throw new Error(`Failed to load building history: ${error.message}`);
-  }
+const ACTIVITY_EVENT_SELECT = 'id, entity_id, event_type, detail, occurred_at, actor';
 
-  return (data ?? []).map((row) => ({
+function toHistoryEvent(row: RawActivityEvent, jobSummary: string | null): BuildingHistoryEvent {
+  return {
     id: row.id,
     eventType: row.event_type,
     detail: row.detail,
     occurredAt: row.occurred_at,
     actor: row.actor,
-  }));
+    jobSummary,
+  };
+}
+
+/**
+ * `entity_id` is deliberately not a real foreign key (activity_events is
+ * polymorphic across building/job/visit/report — see its own migration
+ * comment), so a building's full timeline can't be a single join. Instead:
+ * walk building -> its jobs -> their visits -> their reports to collect
+ * every relevant id, then fetch each entity_type's own events by id. This
+ * also lets every job/visit/report event carry the CURRENT job name at
+ * display time (never stored in the event itself — see req. 6), by
+ * resolving it here from the same id maps already built for the id lookup.
+ */
+export async function listBuildingHistory(buildingId: string): Promise<BuildingHistoryEvent[]> {
+  const { data: jobs, error: jobsError } = await supabase.from('jobs').select('id, job_summary').eq('building_id', buildingId);
+  if (jobsError) throw new Error(`Failed to load building history: ${jobsError.message}`);
+
+  const jobIds = (jobs ?? []).map((j) => j.id);
+  const jobSummaryByJobId = new Map((jobs ?? []).map((j) => [j.id, j.job_summary as string | null]));
+
+  const { data: visits, error: visitsError } =
+    jobIds.length > 0
+      ? await supabase.from('visits').select('id, job_id').in('job_id', jobIds)
+      : { data: [] as { id: string; job_id: string }[], error: null };
+  if (visitsError) throw new Error(`Failed to load building history: ${visitsError.message}`);
+
+  const visitIds = (visits ?? []).map((v) => v.id);
+  const jobIdByVisitId = new Map((visits ?? []).map((v) => [v.id, v.job_id]));
+
+  const { data: reports, error: reportsError } =
+    visitIds.length > 0
+      ? await supabase.from('reports').select('id, visit_id').in('visit_id', visitIds)
+      : { data: [] as { id: string; visit_id: string }[], error: null };
+  if (reportsError) throw new Error(`Failed to load building history: ${reportsError.message}`);
+
+  const reportIds = (reports ?? []).map((r) => r.id);
+  const visitIdByReportId = new Map((reports ?? []).map((r) => [r.id, r.visit_id]));
+
+  const jobSummaryForVisitId = (visitId: string): string | null => {
+    const jobId = jobIdByVisitId.get(visitId);
+    return jobId ? (jobSummaryByJobId.get(jobId) ?? null) : null;
+  };
+  const jobSummaryForReportId = (reportId: string): string | null => {
+    const visitId = visitIdByReportId.get(reportId);
+    return visitId ? jobSummaryForVisitId(visitId) : null;
+  };
+
+  const [buildingEvents, jobEvents, visitEvents, reportEvents] = await Promise.all([
+    supabase.from('activity_events').select(ACTIVITY_EVENT_SELECT).eq('entity_type', 'building').eq('entity_id', buildingId),
+    jobIds.length > 0
+      ? supabase.from('activity_events').select(ACTIVITY_EVENT_SELECT).eq('entity_type', 'job').in('entity_id', jobIds)
+      : Promise.resolve({ data: [] as RawActivityEvent[], error: null }),
+    visitIds.length > 0
+      ? supabase.from('activity_events').select(ACTIVITY_EVENT_SELECT).eq('entity_type', 'visit').in('entity_id', visitIds)
+      : Promise.resolve({ data: [] as RawActivityEvent[], error: null }),
+    reportIds.length > 0
+      ? supabase.from('activity_events').select(ACTIVITY_EVENT_SELECT).eq('entity_type', 'report').in('entity_id', reportIds)
+      : Promise.resolve({ data: [] as RawActivityEvent[], error: null }),
+  ]);
+
+  for (const result of [buildingEvents, jobEvents, visitEvents, reportEvents]) {
+    if (result.error) throw new Error(`Failed to load building history: ${result.error.message}`);
+  }
+
+  const events: BuildingHistoryEvent[] = [
+    ...(buildingEvents.data ?? []).map((row) => toHistoryEvent(row as RawActivityEvent, null)),
+    ...(jobEvents.data ?? []).map((row) => {
+      const r = row as RawActivityEvent;
+      return toHistoryEvent(r, jobSummaryByJobId.get(r.entity_id) ?? null);
+    }),
+    ...(visitEvents.data ?? []).map((row) => {
+      const r = row as RawActivityEvent;
+      return toHistoryEvent(r, jobSummaryForVisitId(r.entity_id));
+    }),
+    ...(reportEvents.data ?? []).map((row) => {
+      const r = row as RawActivityEvent;
+      return toHistoryEvent(r, jobSummaryForReportId(r.entity_id));
+    }),
+  ];
+
+  return events.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
 }

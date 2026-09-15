@@ -4,6 +4,7 @@
 
 import type { Contact } from '../domain/types';
 import { supabase } from '../lib/supabaseClient';
+import { logCurrentUserActivity } from './activityEventsRepository';
 
 const CONTACT_SELECT = 'id, client_id, name, role, email, phone_number, is_primary, is_accounts_contact, notes';
 
@@ -56,6 +57,25 @@ async function unsetOtherPrimaryContacts(clientId: string, exceptContactId?: str
 }
 
 /**
+ * Contacts belong to a client, not a building (a client can have several
+ * buildings) — so a contact event is logged against every building of that
+ * client, the same "shows up everywhere this contact is relevant" behavior
+ * a shared contact already has on Site File. `activity_entity_type` has no
+ * 'contact'/'client' value (and this pass isn't adding one), so 'building'
+ * is the closest existing, correct scope.
+ */
+async function logContactActivity(clientId: string, eventType: string, detail: string): Promise<void> {
+  const { data: buildings, error } = await supabase.from('buildings').select('id').eq('client_id', clientId);
+  if (error) {
+    console.error(`Failed to resolve buildings for contact activity "${eventType}":`, error.message);
+    return;
+  }
+  for (const building of buildings ?? []) {
+    await logCurrentUserActivity('building', building.id, eventType, detail);
+  }
+}
+
+/**
  * Creates a genuinely NEW contact for a client — only ever called from an
  * explicit "+ Add contact" action (see ContactPopover.tsx), never as a
  * side effect of editing an existing contact's fields (that's updateContact
@@ -79,6 +99,8 @@ export async function createContactForClient(clientId: string, input: ContactFie
     .single();
 
   if (error) throw new Error(`Failed to create contact: ${error.message}`);
+
+  await logContactActivity(clientId, 'contact_added', `Contact added: ${data.name}`);
 
   return {
     id: data.id,
@@ -106,6 +128,12 @@ export async function updateContact(
   clientId: string,
   patch: Partial<ContactFieldsInput>,
 ): Promise<void> {
+  const { data: before } = await supabase
+    .from('contacts')
+    .select('name, email, phone_number, is_primary')
+    .eq('id', contactId)
+    .maybeSingle();
+
   if (patch.isPrimary) await unsetOtherPrimaryContacts(clientId, contactId);
 
   const dbPatch: Record<string, unknown> = {};
@@ -116,4 +144,16 @@ export async function updateContact(
 
   const { error } = await supabase.from('contacts').update(dbPatch).eq('id', contactId);
   if (error) throw new Error(`Failed to update contact: ${error.message}`);
+
+  const changed =
+    !!before &&
+    ((patch.name !== undefined && patch.name !== before.name) ||
+      (patch.email !== undefined && patch.email !== before.email) ||
+      (patch.phoneNumber !== undefined && patch.phoneNumber !== before.phone_number) ||
+      (patch.isPrimary !== undefined && patch.isPrimary !== before.is_primary));
+
+  if (changed) {
+    const name = patch.name ?? before!.name;
+    await logContactActivity(clientId, 'contact_updated', `Contact updated: ${name}`);
+  }
 }

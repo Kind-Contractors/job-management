@@ -313,6 +313,14 @@ export async function getLatestClientSend(reportId: string): Promise<ClientSendR
   };
 }
 
+/**
+ * Bookkeeping-only — sets the timestamp but never actually emails anyone
+ * (the real send is send-client-report/index.ts, invoked from Ready for
+ * Client). Deliberately does NOT log 'report_sent_to_client' here anymore:
+ * that event is now only ever written by the Edge Function, after the
+ * email provider has actually confirmed delivery, so the timeline never
+ * claims a report was sent to a client when no email was ever sent.
+ */
 export async function sendReportToClient(reportId: string, actor: string): Promise<void> {
   const now = new Date().toISOString();
   const { error } = await supabase
@@ -321,7 +329,6 @@ export async function sendReportToClient(reportId: string, actor: string): Promi
     .eq('id', reportId);
 
   if (error) throw new Error(`Failed to send report to client: ${error.message}`);
-  await logActivityEvent('report', reportId, 'report_sent_to_client', actor, null, now);
 }
 
 export async function sendReportToAccounts(reportId: string, actor: string): Promise<void> {
