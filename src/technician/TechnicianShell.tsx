@@ -1,7 +1,9 @@
 import { useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth/AuthProvider';
 import { startSyncEngine, useSyncStatus } from './offline/syncEngine';
+import { getCurrentTechnician } from './api';
 import kindContractorsLogo from '../assets/kind_Contractors_logo.png';
 
 const dateFormatter = new Intl.DateTimeFormat('en-GB', {
@@ -19,6 +21,14 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
 export default function TechnicianShell() {
   const { signOut } = useAuth();
   const sync = useSyncStatus();
+  // Cached indefinitely for the session — a technician's own name never
+  // changes mid-session, so there's no reason to refetch it on every
+  // navigation the way visit data does.
+  const { data: technician } = useQuery({
+    queryKey: ['technicianWhoAmI'],
+    queryFn: getCurrentTechnician,
+    staleTime: Infinity,
+  });
 
   // Started once, here — every technician screen mounts under this shell,
   // so this is the one place that's guaranteed to run for the life of the
@@ -55,6 +65,7 @@ export default function TechnicianShell() {
         <span className="ml-auto font-heading text-[11px] font-semibold tracking-[0.1em] text-neutral-600 uppercase">
           {dateFormatter.format(new Date())}
         </span>
+        {technician?.name && <span className="text-[12px] text-ink">{technician.name}</span>}
         <button
           onClick={() => void signOut()}
           className="cursor-pointer border border-neutral-300 px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-200"

@@ -368,6 +368,27 @@ export interface ResubmitReportInput {
  * only shapes the request. Never sends on-site timing; the original visit's
  * on_site_start/on_site_end are left untouched by design.
  */
+export interface TechnicianWhoAmI {
+  technicianId: string;
+  name: string;
+}
+
+/**
+ * The signed-in technician's own name, for the app header — see
+ * technician_whoami(). null only if the caller somehow isn't a linked
+ * technician (shouldn't happen once past AuthProvider's own role check,
+ * but the RPC returns zero rows rather than an error in that case, same
+ * as every other technician RPC).
+ */
+export async function getCurrentTechnician(): Promise<TechnicianWhoAmI | null> {
+  const { data, error } = await supabase.rpc('technician_whoami').maybeSingle();
+  if (error) throw new Error(`Failed to load technician profile: ${error.message}`);
+  if (!data) return null;
+
+  const row = data as { technician_id: string; technician_name: string };
+  return { technicianId: row.technician_id, name: row.technician_name };
+}
+
 export async function resubmitReport(input: ResubmitReportInput): Promise<void> {
   const { error } = await supabase.rpc('technician_resubmit_report', {
     p_report_id: input.reportId,
