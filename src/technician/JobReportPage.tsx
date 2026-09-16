@@ -303,7 +303,6 @@ export default function JobReportPage() {
                   }}
                   type="file"
                   accept="image/*"
-                  capture="environment"
                   multiple
                   hidden
                   onChange={(e) => {

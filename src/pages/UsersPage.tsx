@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createUser,
+  deleteUser,
   listUsers,
   setUserActive,
   updateUser,
@@ -213,11 +214,72 @@ function CreatedUserPanel({ result, onClose }: { result: CreatedUser; onClose: (
   );
 }
 
+/**
+ * A real, irreversible delete — unlike Deactivate, this cannot be undone —
+ * so it gets its own confirm step, reusing the same modal-overlay shell
+ * ReadyForClientPage.tsx's SendConfirmDialog already established rather
+ * than inventing a second pattern.
+ */
+function DeleteConfirmDialog({
+  user,
+  isDeleting,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  user: AppUserRow;
+  isDeleting: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30" onClick={onCancel}>
+      <div onClick={(e) => e.stopPropagation()} className="w-[420px] border border-neutral-300 bg-white p-4">
+        <div className="border-b border-divider pb-2.5">
+          <div className="font-heading text-[10px] font-semibold tracking-[0.16em] text-missed-fg uppercase">Delete user</div>
+          <h2 className="mt-1 font-heading text-lg font-semibold">{user.displayName || user.email}</h2>
+          <div className="text-[12.5px] text-neutral-600">
+            {user.email} · {roleLabel(user.role)}
+            {user.technicianId ? ' · has a linked technician record' : ''}
+          </div>
+        </div>
+
+        <div className="mt-3 text-[12.5px] text-ink">
+          This permanently removes their sign-in, their user record{user.technicianId ? ', and their linked technician record' : ''}
+          . This cannot be undone. Only do this for an account with no jobs, visits, reports, or photos attached.
+        </div>
+
+        {error && <div className="mt-2 text-[11.5px] text-missed-fg">{error}</div>}
+
+        <div className="mt-3.5 flex gap-1.5">
+          <button
+            onClick={onConfirm}
+            disabled={isDeleting}
+            className="cursor-pointer bg-missed px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isDeleting ? 'Deleting…' : 'Delete permanently'}
+          </button>
+          <button
+            onClick={onCancel}
+            disabled={isDeleting}
+            className="cursor-pointer border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function UsersPage() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<Tab>('all');
   const [q, setQ] = useState('');
   const [drawer, setDrawer] = useState<'closed' | 'add' | { edit: AppUserRow } | { created: CreatedUser }>('closed');
+  const [deletingUser, setDeletingUser] = useState<AppUserRow | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { data: users = [], isLoading, isError, error } = useQuery({ queryKey: ['users'], queryFn: listUsers });
 
@@ -227,6 +289,17 @@ export default function UsersPage() {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       queryClient.invalidateQueries({ queryKey: ['technicians'] });
     },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (userId: string) => deleteUser(userId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['technicians'] });
+      setDeletingUser(null);
+      setDeleteError(null);
+    },
+    onError: (err) => setDeleteError(err instanceof Error ? err.message : 'Failed to delete user.'),
   });
 
   const filtered = useMemo(() => {
@@ -355,6 +428,15 @@ export default function UsersPage() {
                         >
                           {u.isActive ? 'Deactivate' : 'Reactivate'}
                         </button>
+                        <button
+                          onClick={() => {
+                            setDeleteError(null);
+                            setDeletingUser(u);
+                          }}
+                          className="cursor-pointer text-[12px] text-missed-fg hover:underline"
+                        >
+                          Delete
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -371,6 +453,15 @@ export default function UsersPage() {
       )}
       {typeof drawer === 'object' && 'created' in drawer && (
         <CreatedUserPanel result={drawer.created} onClose={() => setDrawer('closed')} />
+      )}
+      {deletingUser && (
+        <DeleteConfirmDialog
+          user={deletingUser}
+          isDeleting={deleteMutation.isPending}
+          error={deleteError}
+          onCancel={() => (deleteMutation.isPending ? null : setDeletingUser(null))}
+          onConfirm={() => deleteMutation.mutate(deletingUser.id)}
+        />
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import { useMemo, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -116,6 +116,8 @@ export default function ThisWeekPage() {
   const [pendingDrop, setPendingDrop] = useState<{ jobId: string; date: string } | null>(null);
   const [pendingTechnicianId, setPendingTechnicianId] = useState('');
   const [searchParams, setSearchParams] = useSearchParams();
+  const [bookedToast, setBookedToast] = useState<string | null>(null);
+  const bookedToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const queryClient = useQueryClient();
   const days = useMemo(() => workWeek(weekOffset), [weekOffset]);
@@ -256,15 +258,37 @@ export default function ThisWeekPage() {
     },
   });
 
+  /**
+   * Transient confirmation that a drag actually booked the visit — same
+   * pattern as JobsGrid.tsx's "Saved" toast. Exists specifically because a
+   * job dragged off "Jobs to book" just disappears from that list the
+   * instant it's booked (its derived status is no longer unbooked/overdue),
+   * which with no other feedback can read as "did that work, or did I lose
+   * it?" — see the read-only audit that confirmed nothing is ever deleted.
+   */
+  const showBookedToast = (message: string) => {
+    if (bookedToastTimeoutRef.current) clearTimeout(bookedToastTimeoutRef.current);
+    setBookedToast(message);
+    bookedToastTimeoutRef.current = setTimeout(() => setBookedToast(null), 2500);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (bookedToastTimeoutRef.current) clearTimeout(bookedToastTimeoutRef.current);
+    };
+  }, []);
+
   const bookMutation = useMutation({
     mutationFn: ({ jobId, technicianId, date }: { jobId: string; technicianId: string; date: string }) =>
       createVisit(jobId, technicianId, date),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       setBookingError(null);
       setPendingDrop(null);
       setPendingTechnicianId('');
       queryClient.invalidateQueries({ queryKey: ['jobRows'] });
       queryClient.invalidateQueries({ queryKey: ['visits'] });
+      const jobSummary = jobById.get(variables.jobId)?.jobSummary;
+      showBookedToast(jobSummary ? `Booked — ${jobSummary}` : 'Booked');
     },
     onError: (err) => setBookingError(err instanceof Error ? err.message : 'Failed to book visit.'),
   });
@@ -489,7 +513,7 @@ export default function ThisWeekPage() {
   const siblings = selectedJob ? jobRows.filter((j) => j.buildingId === selectedJob.buildingId && j.id !== selectedJob.id) : [];
 
   return (
-    <div className="flex min-h-0 flex-1">
+    <div className="relative flex min-h-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <ScheduleHeader onAddBooking={() => openDay(todayISO)} />
 
@@ -668,6 +692,15 @@ export default function ThisWeekPage() {
           onClose={() => setSelectedDate(null)}
           onSelectVisit={openJob}
         />
+      )}
+      {/* Transient, non-blocking confirmation — floats over the calendar rather
+          than shifting layout; pointer-events-none so it never intercepts a
+          click meant for the grid beneath it. Same pattern as JobsGrid.tsx's
+          "Saved" toast. */}
+      {bookedToast && (
+        <div className="pointer-events-none absolute right-3 bottom-3 z-10 border border-teal-700 bg-teal-100 px-3 py-1.5 text-[12px] font-semibold text-teal-700 shadow-md">
+          {bookedToast}
+        </div>
       )}
     </div>
   );

@@ -76,3 +76,18 @@ export interface UpdateUserInput {
 export async function updateUser(input: UpdateUserInput): Promise<void> {
   await callAdminUsers<{ ok: true }>({ action: 'update', ...input });
 }
+
+export interface DeletedUser {
+  deletedUserId: string;
+  deletedTechnicianId: string | null;
+}
+
+/**
+ * Permanent removal — unlike setUserActive(), this cannot be undone. Only
+ * ever call this on an account already confirmed (separately, read-only)
+ * to have no jobs/visits/reports/photos referencing it; the Edge Function
+ * itself does not check for that, exactly like a real DROP would not.
+ */
+export async function deleteUser(userId: string): Promise<DeletedUser> {
+  return callAdminUsers<DeletedUser>({ action: 'delete', userId });
+}

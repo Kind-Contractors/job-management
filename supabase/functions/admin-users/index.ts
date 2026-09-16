@@ -12,9 +12,9 @@
 // already uses, so only an active manager can ever call this.
 //
 // One function, action-dispatched body ({ action: 'list'|'create'|
-// 'setActive'|'update' }) — keeps the deployment surface to one endpoint
-// for a single, cohesive responsibility (user administration), the same
-// way xero-create-invoice is one endpoint for its own multi-step flow.
+// 'setActive'|'update'|'delete' }) — keeps the deployment surface to one
+// endpoint for a single, cohesive responsibility (user administration), the
+// same way xero-create-invoice is one endpoint for its own multi-step flow.
 //
 // User <-> Technician relationship, kept in sync deliberately:
 // - Creating a 'technician' user also creates its technicians row
@@ -29,8 +29,16 @@
 //   and technicians.name together, so the Users screen and the Schedule
 //   never show two different names for the same person going forward.
 //
-// Technicians and managers are deactivated, never deleted here — same
-// convention as setTechnicianActive() already established.
+// Technicians and managers are deactivated, not deleted, as the normal
+// day-to-day path (see setActive) — 'delete' exists only for a genuine
+// mistake (e.g. a test account created with a typo'd/wrong email, or one
+// that never completed setup) and is a real, permanent removal: it does
+// NOT check for existing jobs/visits/reports/photos referencing the
+// technician before deleting, so it must only ever be used on an account
+// already confirmed (by a separate, deliberate read-only check) to have no
+// production activity attached. This mirrors handleCreate's own rollback
+// below, which already calls auth.admin.deleteUser() for exactly this
+// "undo a bad account" reason.
 
 import { corsHeaders } from 'npm:@supabase/supabase-js@2/cors';
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
@@ -194,6 +202,52 @@ async function handleUpdate(
   if (technicianError) throw new Error(`Failed to update the linked technician: ${technicianError.message}`);
 }
 
+/**
+ * Permanently removes a user — verifies the row exists first (so a typo'd
+ * or already-gone id fails loudly rather than silently doing nothing), then
+ * deletes in dependency order: the linked technicians row first (explicit,
+ * rather than relying on its own app_user_id -> app_users ON DELETE SET
+ * NULL to tidy it up), then app_users, then the real Auth identity LAST via
+ * the Admin API (service.auth.admin.deleteUser) — never a raw SQL DELETE
+ * against auth.users, which would bypass GoTrue's own bookkeeping
+ * (identities/sessions/refresh tokens) for that user. Every step is
+ * idempotent (deleting an already-gone row/identity is treated as success),
+ * so retrying this action after a partial failure is always safe.
+ */
+async function handleDelete(service: SupabaseClient, body: { userId?: string }): Promise<{ deletedUserId: string; deletedTechnicianId: string | null }> {
+  const userId = body.userId;
+  if (!userId) throw new Error('userId is required.');
+
+  const { data: existing, error: lookupError } = await service
+    .from('app_users')
+    .select('id, technicians ( id )')
+    .eq('id', userId)
+    .maybeSingle();
+  if (lookupError) throw new Error(`Failed to look up the user: ${lookupError.message}`);
+  if (!existing) throw new Error('No user found with that id.');
+
+  const technician = Array.isArray(existing.technicians) ? existing.technicians[0] : existing.technicians;
+  const technicianId: string | null = technician?.id ?? null;
+
+  if (technicianId) {
+    const { error: technicianError } = await service.from('technicians').delete().eq('id', technicianId);
+    if (technicianError) throw new Error(`Failed to delete the linked technician record: ${technicianError.message}`);
+  }
+
+  const { error: appUserError } = await service.from('app_users').delete().eq('id', userId);
+  if (appUserError) throw new Error(`Failed to delete the user record: ${appUserError.message}`);
+
+  const { error: authError } = await service.auth.admin.deleteUser(userId);
+  // Tolerate "already gone" (Supabase returns a 404-style AuthApiError) so
+  // this action is safely retryable if an earlier attempt got this far
+  // before failing on a later step.
+  if (authError && (authError as { status?: number }).status !== 404) {
+    throw new Error(`Failed to delete the Auth account: ${authError.message}`);
+  }
+
+  return { deletedUserId: userId, deletedTechnicianId: technicianId };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -230,6 +284,8 @@ Deno.serve(async (req: Request) => {
       case 'update':
         await handleUpdate(service, body);
         return json({ ok: true }, 200);
+      case 'delete':
+        return json(await handleDelete(service, body), 200);
       default:
         return json({ error: `Unknown action: ${String(body.action)}` }, 400);
     }
