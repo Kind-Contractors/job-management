@@ -62,6 +62,8 @@ export default function ReadyForAccountsPage() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [selectedForInvoiceIds, setSelectedForInvoiceIds] = useState<Set<string>>(new Set());
   const [combineError, setCombineError] = useState<string | null>(null);
+  const [singleReference, setSingleReference] = useState('');
+  const [combinedReference, setCombinedReference] = useState('');
 
   const {
     data: jobRows = [],
@@ -90,6 +92,9 @@ export default function ReadyForAccountsPage() {
     setSelectedVisitId(row.visit.id);
     setOpenInvoiceId(row.visit.invoiceId ?? null);
     setCreateError(null);
+    // A reference typed for the previously-selected row must never carry
+    // over and get attached to a different job's invoice.
+    setSingleReference('');
   };
 
   // The job of whichever visits are currently checked for combining — null
@@ -116,15 +121,16 @@ export default function ReadyForAccountsPage() {
   const clearSelectedForInvoice = () => {
     setSelectedForInvoiceIds(new Set());
     setCombineError(null);
+    setCombinedReference('');
   };
 
   const createInvoiceMutation = useMutation({
-    mutationFn: (row: AccountsRow) =>
+    mutationFn: ({ row, worksOrderNumber }: { row: AccountsRow; worksOrderNumber: string | null }) =>
       createInvoiceDraft({
         jobId: row.job.id,
         createdBy: actor,
         description: row.job.jobSummary,
-        worksOrderNumber: null,
+        worksOrderNumber,
         lines: [
           {
             visitId: row.visit.id,
@@ -138,32 +144,36 @@ export default function ReadyForAccountsPage() {
       queryClient.invalidateQueries({ queryKey: ['jobRows'] });
       setOpenInvoiceId(invoiceId);
       setCreateError(null);
+      setSingleReference('');
     },
     onError: (err) => setCreateError(err instanceof Error ? err.message : 'Failed to create invoice.'),
   });
 
   // Same shared fields and per-visit line mapping as createInvoiceMutation
   // above (jobId/description drawn from the one job every selected row
-  // shares) — the only difference is more than one line item.
+  // shares) — the only difference is more than one line item. One reference
+  // covers the whole combined invoice, not one per visit — matching how
+  // works_order_number is already a single per-invoice column, not per line.
   const createCombinedInvoiceMutation = useMutation({
-    mutationFn: (combinedRows: AccountsRow[]) =>
+    mutationFn: ({ rows, worksOrderNumber }: { rows: AccountsRow[]; worksOrderNumber: string | null }) =>
       createInvoiceDraft({
-        jobId: combinedRows[0].job.id,
+        jobId: rows[0].job.id,
         createdBy: actor,
-        description: combinedRows[0].job.jobSummary,
-        worksOrderNumber: null,
-        lines: combinedRows.map((row) => ({
+        description: rows[0].job.jobSummary,
+        worksOrderNumber,
+        lines: rows.map((row) => ({
           visitId: row.visit.id,
           description: row.job.jobSummary,
           quantity: 1,
           unitAmount: row.visit.priceCharged ?? row.job.pricePerVisit ?? 0,
         })),
       }),
-    onSuccess: (invoiceId, combinedRows) => {
+    onSuccess: (invoiceId, variables) => {
       queryClient.invalidateQueries({ queryKey: ['jobRows'] });
       setSelectedForInvoiceIds(new Set());
       setCombineError(null);
-      setSelectedVisitId(combinedRows[0].visit.id);
+      setCombinedReference('');
+      setSelectedVisitId(variables.rows[0].visit.id);
       setOpenInvoiceId(invoiceId);
       setCreateError(null);
     },
@@ -197,8 +207,22 @@ export default function ReadyForAccountsPage() {
               </div>
             )}
             {combineError && <div className="mt-1 text-[11px] text-missed-fg">{combineError}</div>}
+            <label className="mt-1.5 flex flex-col gap-1 text-[11px] text-ink">
+              Invoice reference (optional)
+              <input
+                value={combinedReference}
+                onChange={(e) => setCombinedReference(e.target.value)}
+                placeholder="e.g. a client works order number"
+                className="border border-neutral-300 bg-white px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+              />
+            </label>
             <button
-              onClick={() => createCombinedInvoiceMutation.mutate(selectedForInvoiceRows)}
+              onClick={() =>
+                createCombinedInvoiceMutation.mutate({
+                  rows: selectedForInvoiceRows,
+                  worksOrderNumber: combinedReference.trim() || null,
+                })
+              }
               disabled={createCombinedInvoiceMutation.isPending}
               className="mt-1.5 w-full cursor-pointer bg-teal px-2.5 py-1.5 text-[11.5px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -328,9 +352,20 @@ export default function ReadyForAccountsPage() {
                     return amount != null ? `${money(amount)} for this visit.` : 'This job has a variable price — confirm the amount after creating the invoice.';
                   })()}
                 </div>
+                <label className="mt-2 flex flex-col gap-1 text-[11px] text-neutral-600">
+                  Invoice reference (optional)
+                  <input
+                    value={singleReference}
+                    onChange={(e) => setSingleReference(e.target.value)}
+                    placeholder="e.g. a client works order number"
+                    className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+                  />
+                </label>
                 {createError && <div className="mt-1.5 text-[11.5px] text-missed-fg">{createError}</div>}
                 <button
-                  onClick={() => createInvoiceMutation.mutate(selected)}
+                  onClick={() =>
+                    createInvoiceMutation.mutate({ row: selected, worksOrderNumber: singleReference.trim() || null })
+                  }
                   disabled={createInvoiceMutation.isPending}
                   className="mt-2 cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >

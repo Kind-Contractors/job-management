@@ -159,7 +159,7 @@ export default function InvoiceEditor({ invoiceId, onClose }: InvoiceEditorProps
         {/* Side by side — both are short fields; stacked full-width (like Description) left a lot of empty space to the right of each one. */}
         <div className="flex gap-2">
           <label className="flex flex-1 flex-col gap-1 text-[11px] text-neutral-600">
-            Works order number
+            Invoice reference
             <input
               value={worksOrderNumber}
               onChange={(e) => setWorksOrderNumber(e.target.value)}
@@ -180,6 +180,7 @@ export default function InvoiceEditor({ invoiceId, onClose }: InvoiceEditorProps
             />
           </label>
         </div>
+        <div className="text-[10px] text-neutral-400">Invoice reference is sent to Xero as this invoice's Reference field.</div>
 
         <div className="text-[11px] text-neutral-600">Line items ({lines.length})</div>
         {lines.map((line, i) => (

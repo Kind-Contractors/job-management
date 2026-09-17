@@ -18,6 +18,7 @@ import { resolveDisplayContact } from '../lib/contactDisplay';
 import { buildClientReportModel, type ClientReportModel } from '../lib/clientReportModel';
 import { generateClientReportPdf } from '../lib/clientReportPdf';
 import type { JobContactSummary } from '../domain/types';
+import kindContractorsLogo from '../assets/kind_Contractors_logo.png';
 
 /** Strips the `data:...;base64,` prefix a data URL carries — the email provider wants raw base64 content, not a data URL. */
 function blobToBase64(blob: Blob): Promise<string> {
@@ -105,9 +106,18 @@ const PHASE_LABEL: Record<ReportPhoto['phase'], string> = { before: 'Before', du
  * surrounding wrapper in the main return gives it a soft backdrop to sit
  * on. Purely presentational: the content model/fields are unchanged from
  * before, so this still shows exactly what generateClientReportPdf() puts
- * in the real attachment, nothing more.
+ * in the real attachment, nothing more — the branding below (logo, teal
+ * section markers, spec-status banner, footer) deliberately mirrors that
+ * PDF's own layout so the preview stops understating what's actually sent.
  */
 function ClientReportPreview({ model }: { model: ClientReportModel }) {
+  const sectionHeading = (label: string) => (
+    <div className="flex items-center gap-1.5 font-heading text-[10px] font-semibold tracking-[0.1em] text-teal-700 uppercase">
+      <span className="h-2 w-2 flex-none bg-teal" />
+      {label}
+    </div>
+  );
+
   return (
     <div className="mx-auto max-w-[380px] border border-neutral-200 bg-white shadow-md">
       <div className="h-1.5 bg-teal" />
@@ -115,59 +125,75 @@ function ClientReportPreview({ model }: { model: ClientReportModel }) {
         <div className="font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">
           Client-facing preview
         </div>
-        <h3 className="mt-1.5 font-heading text-lg font-semibold">{model.buildingName}</h3>
-        <div className="text-[12.5px] text-neutral-600">
-          {model.clientName} · {model.jobSummary} · {model.visitDateLabel}
+
+        <div className="mt-3 flex items-center justify-between gap-2">
+          <img src={kindContractorsLogo} alt="Kind Contractors" className="h-6 w-auto object-contain" />
+          <div className="font-heading text-[9px] font-semibold tracking-[0.13em] text-teal-700 uppercase">Service report</div>
+        </div>
+        <div className="mt-2 border-t-2 border-teal" />
+
+        <div className="mt-3 border border-teal-700/15 bg-teal-100 p-3">
+          <h3 className="font-heading text-lg font-semibold text-teal-700">{model.buildingName}</h3>
+          <div className="mt-0.5 text-[12.5px] text-neutral-600">
+            {model.clientName} - {model.jobSummary}
+          </div>
+          <div className="mt-1.5 text-[11px] text-neutral-600">
+            <span className="font-heading font-semibold tracking-[0.08em] text-teal-700 uppercase">Visit date </span>
+            {model.visitDateLabel}
+          </div>
         </div>
 
         {model.workCarriedOut && (
           <div className="mt-4">
-            <div className="font-heading text-[10px] font-semibold tracking-[0.1em] text-neutral-500 uppercase">
-              Work carried out
-            </div>
-            <div className="mt-0.5 text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{model.workCarriedOut}</div>
+            {sectionHeading('Work carried out')}
+            <div className="mt-1 text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{model.workCarriedOut}</div>
           </div>
         )}
 
-        <div className="mt-4 text-[12.5px] text-ink">
-          {model.specMet ? 'Specification completed as agreed.' : 'Part of the specification was not fully completed.'}
-        </div>
-
         {model.notes && (
           <div className="mt-4">
-            <div className="font-heading text-[10px] font-semibold tracking-[0.1em] text-neutral-500 uppercase">Notes</div>
-            <div className="mt-0.5 text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{model.notes}</div>
+            {sectionHeading('Notes')}
+            <div className="mt-1 text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{model.notes}</div>
           </div>
         )}
 
         {model.issues && (
           <div className="mt-4">
-            <div className="font-heading text-[10px] font-semibold tracking-[0.1em] text-neutral-500 uppercase">Issues flagged</div>
-            <div className="mt-0.5 text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{model.issues}</div>
+            {sectionHeading('Issues flagged')}
+            <div className="mt-1 text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{model.issues}</div>
           </div>
         )}
 
+        <div
+          className={`mt-4 border-l-4 px-3 py-2 text-[12.5px] font-semibold ${
+            model.specMet ? 'border-teal-700 bg-teal-100 text-teal-700' : 'border-missed bg-missed/10 text-missed-fg'
+          }`}
+        >
+          {model.specMet ? 'Specification completed as agreed.' : 'Part of the specification was not fully completed.'}
+        </div>
+
         {model.photos.length > 0 && (
-          <div className="mt-4">
-            <div className="font-heading text-[10px] font-semibold tracking-[0.1em] text-neutral-500 uppercase">Photos</div>
-            <div className="mt-1 flex flex-col gap-2">
-              {(['before', 'during', 'after'] as const).map((phase) => {
-                const phasePhotos = model.photos.filter((p) => p.phase === phase);
-                if (phasePhotos.length === 0) return null;
-                return (
-                  <div key={phase}>
-                    <div className="mb-1 text-[10.5px] text-neutral-500 uppercase">{PHASE_LABEL[phase]}</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {phasePhotos.map((p) => (
-                        <img key={p.id} src={p.url} alt="" className="h-16 w-16 border border-neutral-300 object-cover" />
-                      ))}
-                    </div>
+          <div className="mt-4 flex flex-col gap-3">
+            {(['before', 'during', 'after'] as const).map((phase) => {
+              const phasePhotos = model.photos.filter((p) => p.phase === phase);
+              if (phasePhotos.length === 0) return null;
+              return (
+                <div key={phase}>
+                  {sectionHeading(`${PHASE_LABEL[phase]} (${phasePhotos.length})`)}
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {phasePhotos.map((p) => (
+                      <img key={p.id} src={p.url} alt="" className="h-16 w-16 border border-neutral-300 object-cover" />
+                    ))}
                   </div>
-                );
-              })}
-            </div>
+                </div>
+              );
+            })}
           </div>
         )}
+
+        <div className="mt-5 border-t border-divider pt-2 text-center font-heading text-[9px] font-semibold tracking-[0.12em] text-neutral-400 uppercase">
+          Kind Contractors
+        </div>
       </div>
     </div>
   );

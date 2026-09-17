@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createVisit } from '../../repository/techniciansRepository';
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import type { JobRow, Technician, WeekVisit } from '../../domain/types';
+import SearchableSelect from '../shared/SearchableSelect';
 
 const DATE_HEADER_FORMAT = new Intl.DateTimeFormat('en-GB', {
   weekday: 'long',
@@ -152,42 +153,33 @@ export default function ScheduleDayDrawer({
 
         <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
           Client
-          <select
+          <SearchableSelect
             value={clientId}
-            onChange={(e) => {
-              setClientId(e.target.value);
+            onChange={(id) => {
+              setClientId(id);
               setBuildingId('');
               setJobId('');
             }}
-            className="border border-neutral-300 px-2 py-1.5 text-[12.5px] text-ink outline-none focus:border-teal"
-          >
-            <option value="">Select a client…</option>
-            {clients.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+            options={clients.map((c) => ({ id: c.id, label: c.name }))}
+            placeholder="Search clients…"
+            aria-label="Search for a client"
+          />
         </label>
 
         <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
           Building
-          <select
+          <SearchableSelect
             value={buildingId}
-            onChange={(e) => {
-              setBuildingId(e.target.value);
+            onChange={(id) => {
+              setBuildingId(id);
               setJobId('');
             }}
+            options={buildingsForClient.map((b) => ({ id: b.id, label: b.name, sublabel: buildingById.get(b.id)?.postcode ?? undefined }))}
+            placeholder="Search buildings…"
             disabled={!clientId}
-            className="border border-neutral-300 px-2 py-1.5 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-100 disabled:text-neutral-400"
-          >
-            <option value="">Select a building…</option>
-            {buildingsForClient.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
+            disabledMessage="Select a client first"
+            aria-label="Search for a building"
+          />
         </label>
 
         {selectedBuilding && (
