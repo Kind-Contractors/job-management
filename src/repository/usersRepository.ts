@@ -9,6 +9,7 @@
 // uses the service-role key only inside that function, never in the
 // browser. See that function's own file header for the full rationale.
 
+import { FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 
 export type AppRole = 'manager' | 'technician';
@@ -29,14 +30,44 @@ interface AdminUsersErrorBody {
   error?: string;
 }
 
-/** Every call goes through this one Edge Function invocation — mirrors invoicesRepository.ts's sendInvoice() pattern exactly (one privileged action, one function.invoke call, errors surfaced as plain thrown Errors). */
+/**
+ * Every call goes through this one Edge Function invocation — mirrors
+ * invoicesRepository.ts's sendInvoice() pattern exactly (one privileged
+ * action, one function.invoke call, errors surfaced as plain thrown
+ * Errors).
+ *
+ * A non-2xx response makes the Supabase client throw a `FunctionsHttpError`
+ * whose own `.message` is just the generic "Edge Function returned a
+ * non-2xx status code" — NOT what admin-users actually said. The real
+ * `{ error: "..." }` body it returned is only available by reading
+ * `error.context` (the raw Response) — see the supabase-js FunctionsClient
+ * source's own documented error-handling example. Without this, every
+ * admin-users failure (duplicate email, validation, etc.) surfaced as that
+ * one generic string, regardless of what admin-users itself explained.
+ */
 async function callAdminUsers<T>(body: Record<string, unknown>): Promise<T> {
   const { data, error } = await supabase.functions.invoke<T & AdminUsersErrorBody>('admin-users', { body });
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (error instanceof FunctionsHttpError) {
+      const message = await readAdminUsersErrorMessage(error);
+      if (message) throw new Error(message);
+    }
+    throw new Error(error.message);
+  }
   if (data && typeof data === 'object' && 'error' in data && data.error) {
     throw new Error(data.error);
   }
   return data as T;
+}
+
+/** Reads the real `{ error: "..." }` body a FunctionsHttpError's underlying Response carries — returns null (never throws) if the body isn't that expected JSON shape, so the caller falls back to the generic message instead. */
+async function readAdminUsersErrorMessage(error: FunctionsHttpError): Promise<string | null> {
+  try {
+    const body = (await error.context.json()) as AdminUsersErrorBody;
+    return body?.error ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function listUsers(): Promise<AppUserRow[]> {

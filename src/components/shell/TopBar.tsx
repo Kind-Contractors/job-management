@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthProvider';
+import ChangePasswordDialog from '../../auth/ChangePasswordDialog';
 import kindContractorsLogo from '../../assets/kind_Contractors_logo.png';
 
 /** The only two routes whose page actually reads the `q` search param — see AllLiveJobsPage.tsx/BuildingsPage.tsx. Exact match, not startsWith, so /buildings/:id (Building File) is correctly excluded. */
@@ -23,6 +25,7 @@ export default function TopBar() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { pathname } = useLocation();
   const { session, signOut } = useAuth();
+  const [changingPassword, setChangingPassword] = useState(false);
   const q = searchParams.get('q') ?? '';
   const email = session?.user.email ?? '';
   const searchable = SEARCHABLE_ROUTES.includes(pathname);
@@ -71,12 +74,19 @@ export default function TopBar() {
           {email}
         </span>
         <button
+          onClick={() => setChangingPassword(true)}
+          className="cursor-pointer border border-neutral-300 px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-200"
+        >
+          Change password
+        </button>
+        <button
           onClick={() => void signOut()}
           className="cursor-pointer border border-neutral-300 px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-200"
         >
           Sign out
         </button>
       </div>
+      {changingPassword && <ChangePasswordDialog onClose={() => setChangingPassword(false)} />}
     </header>
   );
 }

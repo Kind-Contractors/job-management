@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth/AuthProvider';
+import ChangePasswordDialog from '../auth/ChangePasswordDialog';
 import { startSyncEngine, useSyncStatus } from './offline/syncEngine';
 import { getCurrentTechnician } from './api';
 import kindContractorsLogo from '../assets/kind_Contractors_logo.png';
@@ -21,6 +22,7 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
 export default function TechnicianShell() {
   const { signOut } = useAuth();
   const sync = useSyncStatus();
+  const [changingPassword, setChangingPassword] = useState(false);
   // Cached indefinitely for the session — a technician's own name never
   // changes mid-session, so there's no reason to refetch it on every
   // navigation the way visit data does.
@@ -67,12 +69,19 @@ export default function TechnicianShell() {
         </span>
         {technician?.name && <span className="text-[12px] text-ink">{technician.name}</span>}
         <button
+          onClick={() => setChangingPassword(true)}
+          className="cursor-pointer border border-neutral-300 px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-200"
+        >
+          Change password
+        </button>
+        <button
           onClick={() => void signOut()}
           className="cursor-pointer border border-neutral-300 px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-200"
         >
           Sign out
         </button>
       </header>
+      {changingPassword && <ChangePasswordDialog onClose={() => setChangingPassword(false)} />}
       <div className="flex min-h-0 flex-1 justify-center overflow-y-auto">
         <div className="w-full max-w-[420px]">
           <Outlet />

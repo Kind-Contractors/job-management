@@ -163,9 +163,23 @@ async function handleCreate(
   return { id: userId, email, tempPassword };
 }
 
-async function handleSetActive(service: SupabaseClient, body: { userId?: string; isActive?: boolean }): Promise<void> {
+/**
+ * `callerId` is the calling manager's own id (resolved once in Deno.serve
+ * from the same caller-scoped client assertManager() already validated —
+ * never trusted from the request body) — a manager targeting their own
+ * account here would deactivate the only session that can undo it, and if
+ * they're the last active manager, lock everyone out of user management
+ * entirely. Rejected before any write, same as the missing-field checks
+ * above it.
+ */
+async function handleSetActive(
+  service: SupabaseClient,
+  body: { userId?: string; isActive?: boolean },
+  callerId: string,
+): Promise<void> {
   const userId = body.userId;
   if (!userId || typeof body.isActive !== 'boolean') throw new Error('userId and isActive are required.');
+  if (userId === callerId) throw new Error('You cannot deactivate or delete your own account.');
 
   const { error: appUserError } = await service.from('app_users').update({ is_active: body.isActive }).eq('id', userId);
   if (appUserError) throw new Error(`Failed to update the user: ${appUserError.message}`);
@@ -213,10 +227,19 @@ async function handleUpdate(
  * (identities/sessions/refresh tokens) for that user. Every step is
  * idempotent (deleting an already-gone row/identity is treated as success),
  * so retrying this action after a partial failure is always safe.
+ *
+ * `callerId` (see handleSetActive's own doc comment for the full rationale)
+ * blocks a manager from deleting their own account — permanent and
+ * irreversible, so this check matters even more here than for setActive.
  */
-async function handleDelete(service: SupabaseClient, body: { userId?: string }): Promise<{ deletedUserId: string; deletedTechnicianId: string | null }> {
+async function handleDelete(
+  service: SupabaseClient,
+  body: { userId?: string },
+  callerId: string,
+): Promise<{ deletedUserId: string; deletedTechnicianId: string | null }> {
   const userId = body.userId;
   if (!userId) throw new Error('userId is required.');
+  if (userId === callerId) throw new Error('You cannot deactivate or delete your own account.');
 
   const { data: existing, error: lookupError } = await service
     .from('app_users')
@@ -256,8 +279,15 @@ Deno.serve(async (req: Request) => {
     return json({ error: 'Method not allowed. Use POST.' }, 405);
   }
 
+  let callerId: string;
   try {
-    await assertManager(req);
+    const callerClient = await assertManager(req);
+    // The same caller-scoped client assertManager() just validated — reused
+    // only to resolve the caller's own id, never trusted from the request
+    // body, so setActive/delete can reject a manager targeting themselves.
+    const { data: callerData, error: callerError } = await callerClient.auth.getUser();
+    if (callerError || !callerData.user) throw new Error('Could not resolve the calling user.');
+    callerId = callerData.user.id;
   } catch (err) {
     if (err instanceof UnauthorizedError) return json({ error: err.message }, 403);
     return json({ error: errorMessage(err) }, 500);
@@ -279,13 +309,13 @@ Deno.serve(async (req: Request) => {
       case 'create':
         return json(await handleCreate(service, body), 200);
       case 'setActive':
-        await handleSetActive(service, body);
+        await handleSetActive(service, body, callerId);
         return json({ ok: true }, 200);
       case 'update':
         await handleUpdate(service, body);
         return json({ ok: true }, 200);
       case 'delete':
-        return json(await handleDelete(service, body), 200);
+        return json(await handleDelete(service, body, callerId), 200);
       default:
         return json({ error: `Unknown action: ${String(body.action)}` }, 400);
     }
