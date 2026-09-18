@@ -8,28 +8,15 @@ import {
   HiOutlineBuildingOffice2,
   HiOutlineCalendarDays,
   HiOutlineClipboardDocumentCheck,
-  HiOutlineClock,
-  HiOutlineDocumentText,
-  HiOutlineExclamationTriangle,
   HiOutlinePaperAirplane,
   HiOutlineTableCells,
   HiOutlineUsers,
-  HiOutlineXCircle,
 } from 'react-icons/hi2';
 import { listJobRows } from '../../repository/jobsRepository';
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import { listTechnicians } from '../../repository/techniciansRepository';
 import { listUsers } from '../../repository/usersRepository';
 import { isReportReadyForClient, isVisitReadyForAccounts } from '../../lib/statusPresentation';
-
-type AttentionKey = 'review' | 'needs_booking' | 'overdue' | 'missed';
-
-const ATTENTION_ITEMS: { key: AttentionKey; label: string; icon: IconType; dotClass: string }[] = [
-  { key: 'review', label: 'Reports to review', icon: HiOutlineDocumentText, dotClass: 'bg-teal-700' },
-  { key: 'needs_booking', label: 'Due, not scheduled', icon: HiOutlineClock, dotClass: 'bg-due' },
-  { key: 'overdue', label: 'Overdue', icon: HiOutlineExclamationTriangle, dotClass: 'bg-missed' },
-  { key: 'missed', label: 'Missed visits', icon: HiOutlineXCircle, dotClass: 'bg-missed' },
-];
 
 const DIVISIONS = ['General', 'Specialist', 'Both'] as const;
 
@@ -118,17 +105,13 @@ export default function NavRail() {
 
   const divisionFiltered = jobRows.filter((j) => division === 'Both' || j.division === division);
 
-  const counts: Record<AttentionKey, number> = {
-    review: divisionFiltered.filter((j) => j.status === 'review').length,
-    // 'needs_booking' (a schedule says due this month, no visit yet) and
-    // 'unscheduled' (no visit history at all, whether or not a schedule
-    // exists) both represent "this job needs a booking from the manager" —
-    // see mapJobRow.ts's deriveVisitState. Counting only 'needs_booking'
-    // would miss the majority of real jobs today (no schedule row at all).
-    needs_booking: divisionFiltered.filter((j) => j.status === 'needs_booking' || j.status === 'unscheduled').length,
-    overdue: divisionFiltered.filter((j) => j.status === 'overdue').length,
-    missed: divisionFiltered.filter((j) => j.status === 'missed').length,
-  };
+  // Still needed for the "Report review" nav item's own badge count below,
+  // even though the separate "Reports to review"/"Due, not scheduled"/
+  // "Overdue"/"Missed visits" shortcut rows that used to sit above it (and
+  // read the sibling needs_booking/overdue/missed counts) were removed —
+  // that operational filtering still lives in All Live Jobs' own status
+  // chips, unchanged.
+  const reviewCount = divisionFiltered.filter((j) => j.status === 'review').length;
 
   // A report being "ready for accounts" is a per-visit condition (approved,
   // not yet sent to accounts), not a job-level status — a job can have this
@@ -151,14 +134,6 @@ export default function NavRail() {
   );
   const goToReadyForClient = () => navigate('/ready-for-client');
 
-  const goToFilteredJobs = (key: AttentionKey) => {
-    const next = new URLSearchParams(searchParams);
-    next.set('status', key);
-    next.delete('readyForAccounts');
-    next.delete('group');
-    navigate(`/jobs?${next.toString()}`);
-  };
-
   const goToView = (nextGroup: 'client' | 'frequency') => {
     const next = new URLSearchParams(searchParams);
     next.delete('status');
@@ -180,7 +155,7 @@ export default function NavRail() {
     { key: 'buildings', label: 'Buildings', icon: HiOutlineBuildingOffice2, active: onBuildings, count: buildingRows.length, onClick: () => navigate('/buildings') },
     { key: 'schedule', label: 'Schedule', icon: HiOutlineCalendarDays, active: onThisWeek, count: technicians.length, onClick: () => navigate('/this-week') },
     { key: 'matrix', label: 'Month matrix', icon: HiOutlineTableCells, active: onMonthMatrix, count: divisionFiltered.length, onClick: () => navigate('/month-matrix') },
-    { key: 'reviews', label: 'Report review', icon: HiOutlineClipboardDocumentCheck, active: onReportReview, count: counts.review, onClick: () => navigate('/report-review') },
+    { key: 'reviews', label: 'Report review', icon: HiOutlineClipboardDocumentCheck, active: onReportReview, count: reviewCount, onClick: () => navigate('/report-review') },
     { key: 'users', label: 'Users', icon: HiOutlineUsers, active: onUsers, count: users.filter((u) => u.isActive).length, onClick: () => navigate('/users') },
   ];
 
@@ -202,18 +177,6 @@ export default function NavRail() {
           {collapsed ? '»' : '«'}
         </button>
       </div>
-      {ATTENTION_ITEMS.map((item) => (
-        <NavItem
-          key={item.key}
-          active={onJobs && status === item.key}
-          onClick={() => goToFilteredJobs(item.key)}
-          dotClass={item.dotClass}
-          icon={item.icon}
-          label={item.label}
-          count={counts[item.key]}
-          collapsed={collapsed}
-        />
-      ))}
       <NavItem
         active={onReadyForAccounts}
         onClick={goToReadyForAccounts}
