@@ -6,8 +6,6 @@ import {
   listPhotosForReport,
   resubmitReport,
   returnReportForCorrection,
-  sendReportToAccounts,
-  sendReportToClient,
   signReportPhotoUrls,
   updateReport,
   type ReportPhoto,
@@ -74,18 +72,26 @@ export const REVIEW_LABEL: Record<ReportPanelProps['reviewStatus'], string> = {
 };
 
 /**
- * The one report-review/approve/return/resubmit/send surface in the app —
- * used exclusively by ReportReviewPage.tsx's dedicated queue (the Job
- * Inspector drawer shows only a compact status line via VisitRow.tsx, not
- * this component — full report inspection/approval/sending belongs only
- * here, in Report Review, to keep exactly one place that does it).
+ * The one report-review/approve/return/resubmit surface in the app — used
+ * exclusively by ReportReviewPage.tsx's dedicated queue (the Job Inspector
+ * drawer shows only a compact status line via VisitRow.tsx, not this
+ * component — full report inspection/approval belongs only here, in Report
+ * Review, to keep exactly one place that does it). Sending a report to a
+ * client or to accounts is never done from here — see Ready for Client
+ * (ReadyForClientPage.tsx) and Ready for Accounts (ReadyForAccountsPage.tsx),
+ * the only two real send/invoice pathways in the app. This component used to
+ * carry its own "Send to client"/"Send to accounts" bookkeeping-only
+ * shortcuts; both were removed as a confirmed P0 (they marked a report as
+ * sent/invoiced without ever generating a PDF, emailing anyone, or creating
+ * a Xero invoice, silently removing that visit from the real Ready for
+ * Client/Ready for Accounts queues with no recovery path).
  */
 export default function ReportPanel({ reportId, reviewStatus, actor, readyForAccounts }: ReportPanelProps) {
   const queryClient = useQueryClient();
   // Auto-open whenever this report is actually actionable — this is what
   // lands the manager straight on the thing they need to act on. Approved-
-  // but-unsent (readyForAccounts) is equally actionable — a manager should
-  // see the Send to accounts button already open, not one more click away.
+  // but-not-yet-invoiced (readyForAccounts) is equally worth seeing in full,
+  // even though acting on it now happens on Ready for Accounts, not here.
   const [expanded, setExpanded] = useState(reviewStatus !== 'approved' || readyForAccounts);
   const [returnReason, setReturnReason] = useState('');
   const [returnError, setReturnError] = useState<string | null>(null);
@@ -115,8 +121,6 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
 
   const approveMutation = useMutation({ mutationFn: () => approveReport(reportId, actor), onSuccess: invalidate });
   const resubmitMutation = useMutation({ mutationFn: () => resubmitReport(reportId, actor), onSuccess: invalidate });
-  const sendClientMutation = useMutation({ mutationFn: () => sendReportToClient(reportId, actor), onSuccess: invalidate });
-  const sendAccountsMutation = useMutation({ mutationFn: () => sendReportToAccounts(reportId, actor), onSuccess: invalidate });
 
   const returnMutation = useMutation({
     mutationFn: () => returnReportForCorrection(reportId, returnReason, actor),
@@ -223,28 +227,6 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
                   className="cursor-pointer bg-teal px-2.5 py-1 text-[11px] font-semibold text-white"
                 >
                   Approve directly
-                </button>
-              </>
-            )}
-            {report.reviewStatus === 'approved' && (
-              <>
-                <button
-                  onClick={() => sendClientMutation.mutate()}
-                  disabled={sendClientMutation.isPending || !!report.sentToClientAt}
-                  className="cursor-pointer bg-teal px-2.5 py-1 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-500"
-                >
-                  {report.sentToClientAt
-                    ? `Sent to client ${new Date(report.sentToClientAt).toLocaleDateString('en-GB')}`
-                    : 'Send to client'}
-                </button>
-                <button
-                  onClick={() => sendAccountsMutation.mutate()}
-                  disabled={sendAccountsMutation.isPending || !!report.sentToAccountsAt}
-                  className="cursor-pointer bg-teal px-2.5 py-1 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-500"
-                >
-                  {report.sentToAccountsAt
-                    ? `Sent to accounts ${new Date(report.sentToAccountsAt).toLocaleDateString('en-GB')}`
-                    : 'Send to accounts'}
                 </button>
               </>
             )}

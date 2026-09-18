@@ -288,7 +288,7 @@ export async function resubmitReport(reportId: string, actor: string): Promise<v
   await logActivityEvent('report', reportId, 'report_resubmitted', actor);
 }
 
-/** Send to client and send to accounts are fully independent — see CLAUDE.md section 7. No real email/document is generated (section 15) — this only records the handoff. */
+/** Sending to a client and sending to accounts are fully independent — see CLAUDE.md section 7. */
 export interface SendClientReportInput {
   reportId: string;
   contactId: string;
@@ -347,33 +347,4 @@ export async function getLatestClientSend(reportId: string): Promise<ClientSendR
     errorMessage: data.error_message,
     createdAt: data.created_at,
   };
-}
-
-/**
- * Bookkeeping-only — sets the timestamp but never actually emails anyone
- * (the real send is send-client-report/index.ts, invoked from Ready for
- * Client). Deliberately does NOT log 'report_sent_to_client' here anymore:
- * that event is now only ever written by the Edge Function, after the
- * email provider has actually confirmed delivery, so the timeline never
- * claims a report was sent to a client when no email was ever sent.
- */
-export async function sendReportToClient(reportId: string, actor: string): Promise<void> {
-  const now = new Date().toISOString();
-  const { error } = await supabase
-    .from('reports')
-    .update({ sent_to_client_at: now, sent_to_client_by: actor })
-    .eq('id', reportId);
-
-  if (error) throw new Error(`Failed to send report to client: ${error.message}`);
-}
-
-export async function sendReportToAccounts(reportId: string, actor: string): Promise<void> {
-  const now = new Date().toISOString();
-  const { error } = await supabase
-    .from('reports')
-    .update({ sent_to_accounts_at: now, sent_to_accounts_by: actor })
-    .eq('id', reportId);
-
-  if (error) throw new Error(`Failed to send report to accounts: ${error.message}`);
-  await logActivityEvent('report', reportId, 'report_sent_to_accounts', actor, null, now);
 }
