@@ -1,11 +1,23 @@
 import { useEffect, useState } from 'react';
 import { Outlet } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../auth/AuthProvider';
 import ChangePasswordDialog from '../auth/ChangePasswordDialog';
-import { startSyncEngine, useSyncStatus } from './offline/syncEngine';
+import { startSyncEngine, subscribeReportSynced, useSyncStatus } from './offline/syncEngine';
 import { getCurrentTechnician } from './api';
 import kindContractorsLogo from '../assets/kind_Contractors_logo.png';
+
+/**
+ * The three list queries a newly booked/assigned visit, or a newly
+ * synced/returned report, could affect — invalidated together below rather
+ * than a broader "invalidate everything technician" so an unrelated cache
+ * entry (e.g. technicianWhoAmI) is never forced to refetch by this.
+ */
+const VISIT_LIST_QUERY_KEYS: readonly (readonly string[])[] = [
+  ['technician', 'todayVisits'],
+  ['technician', 'upcomingVisits'],
+  ['technician', 'needsCorrection'],
+];
 
 const dateFormatter = new Intl.DateTimeFormat('en-GB', {
   weekday: 'short',
@@ -22,6 +34,7 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
 export default function TechnicianShell() {
   const { signOut } = useAuth();
   const sync = useSyncStatus();
+  const queryClient = useQueryClient();
   const [changingPassword, setChangingPassword] = useState(false);
   // Cached indefinitely for the session — a technician's own name never
   // changes mid-session, so there's no reason to refetch it on every
@@ -39,6 +52,54 @@ export default function TechnicianShell() {
   useEffect(() => {
     startSyncEngine();
   }, []);
+
+  // Newly booked/assigned jobs, and reports returned for correction, are
+  // changes the app has no way to detect on its own — they happen on
+  // someone else's device. Re-checking immediately the moment this device
+  // is actually able to reach the server again (reconnects, or the tab/app
+  // comes back to the foreground) closes the gap the 5-minute staleTime on
+  // these queries would otherwise leave open, without lowering that
+  // staleTime globally (see DayViewPage.tsx's own comment on why it stays
+  // 5 minutes for the "already fresh enough, don't bother" case).
+  // invalidateQueries only ever triggers a real network request for an
+  // ACTIVE (mounted) query, and TanStack Query's default networkMode
+  // ('online') defers even that until the browser is actually online — so
+  // this is a safe no-op while offline or while no technician screen that
+  // reads these keys is mounted.
+  useEffect(() => {
+    const refreshVisitLists = () => {
+      for (const queryKey of VISIT_LIST_QUERY_KEYS) {
+        void queryClient.invalidateQueries({ queryKey: [...queryKey] });
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshVisitLists();
+    };
+    window.addEventListener('online', refreshVisitLists);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('online', refreshVisitLists);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [queryClient]);
+
+  // The targeted bridge from the (deliberately framework-agnostic) offline
+  // sync engine to TanStack Query — fires only for a genuine server-
+  // confirmed report outcome (a real success, or a safely-resolved
+  // duplicate; see syncEngine.ts's trySubmitIfReady()), never for routine
+  // photo-upload progress. Invalidating visitDetail for the specific visit
+  // (rather than every cached visit) plus the three list queries is what
+  // makes JobFilePage/JobReportPage's existing "already submitted" checks
+  // see the true state promptly instead of waiting out their own
+  // staleTime.
+  useEffect(() => {
+    return subscribeReportSynced((visitId) => {
+      void queryClient.invalidateQueries({ queryKey: ['technician', 'visitDetail', visitId] });
+      for (const queryKey of VISIT_LIST_QUERY_KEYS) {
+        void queryClient.invalidateQueries({ queryKey: [...queryKey] });
+      }
+    });
+  }, [queryClient]);
 
   const hasPending = sync.pendingPhotoCount > 0 || sync.failedDraftCount > 0;
 

@@ -117,7 +117,11 @@ export default function CompletedPage() {
         <div className="flex-none border-b border-due/40 bg-due/10 px-4 py-3">
           <h1 className="font-heading text-lg font-semibold text-due-fg">Job completed</h1>
           <div className="text-[12.5px] text-due-fg">
-            {draft?.submitError ? 'Sync failed — will retry automatically' : 'Waiting to sync — will send automatically'}
+            {draft?.permanentFailure
+              ? "Couldn't be sent — contact the office"
+              : draft?.submitError
+                ? 'Sync failed — will retry automatically'
+                : 'Waiting to sync — will send automatically'}
           </div>
         </div>
       )}
@@ -153,7 +157,12 @@ export default function CompletedPage() {
           </div>
         ) : (
           <div className="text-[13.5px] leading-relaxed text-neutral-700">
-            {draft?.submitError ? (
+            {draft?.permanentFailure ? (
+              <>
+                This report couldn't be sent: {draft.submitError}. This won't retry automatically — please contact the
+                office about this visit.
+              </>
+            ) : draft?.submitError ? (
               <>
                 The last attempt to send this report failed: {draft.submitError}. It will keep retrying automatically —
                 nothing is lost, and there's nothing you need to do.

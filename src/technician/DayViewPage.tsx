@@ -12,8 +12,24 @@ import {
 } from './api';
 import { useSyncStatus } from './offline/syncEngine';
 
-/** Same reasoning/value as JobFilePage.tsx/JobReportPage.tsx's identical constant — a technician re-opening Today's Jobs seconds after it was already loaded shouldn't force a new round trip. */
+/** Same reasoning/value as JobFilePage.tsx/JobReportPage.tsx's identical constant — a technician re-opening Today's Jobs seconds after it was already loaded shouldn't force a new round trip. Left unchanged — newly booked/assigned jobs reaching this screen promptly is instead handled by POLL_INTERVAL_MS below plus TechnicianShell.tsx's online/foreground invalidation, not by shortening this. */
 const VISIT_LIST_STALE_TIME_MS = 5 * 60 * 1000;
+
+/**
+ * A newly booked/assigned visit (or a report bounced back for correction)
+ * can only ever be noticed by actually asking the server — there's no
+ * Realtime subscription. Polling this lightly, and only while the device
+ * is genuinely online, closes that gap without hammering the network or
+ * fighting the 5-minute staleTime above (refetchInterval bypasses
+ * staleTime by design; it's an independent "also refetch on this timer"
+ * rule). Returning `false` while offline stops the interval from even
+ * attempting a doomed request, on top of TanStack Query's own default
+ * online-aware networkMode.
+ */
+const POLL_INTERVAL_MS = 60_000;
+function pollWhileOnline(): number | false {
+  return navigator.onLine ? POLL_INTERVAL_MS : false;
+}
 
 type Tab = 'today' | 'upcoming' | 'returned';
 
@@ -135,6 +151,7 @@ export default function DayViewPage() {
   const {
     data: visitsData,
     isLoading,
+    isFetching,
     isError,
     error,
     refetch,
@@ -143,6 +160,7 @@ export default function DayViewPage() {
     queryFn: listTodayVisits,
     staleTime: VISIT_LIST_STALE_TIME_MS,
     retry: retryUnlessOffline,
+    refetchInterval: pollWhileOnline,
   });
   const visits = visitsData ?? [];
   // visitsData (not the defaulted `visits`) distinguishes "never
@@ -154,6 +172,7 @@ export default function DayViewPage() {
   const {
     data: needsCorrectionData,
     isLoading: correctionLoading,
+    isFetching: correctionFetching,
     isError: correctionError,
     error: correctionErrorObj,
     refetch: refetchCorrection,
@@ -162,6 +181,7 @@ export default function DayViewPage() {
     queryFn: listNeedsCorrection,
     staleTime: VISIT_LIST_STALE_TIME_MS,
     retry: retryUnlessOffline,
+    refetchInterval: pollWhileOnline,
   });
   const needsCorrection = needsCorrectionData ?? [];
   const correctionOfflineWithNoData = needsCorrectionData === undefined && !online;
@@ -169,6 +189,7 @@ export default function DayViewPage() {
   const {
     data: upcomingVisitsData,
     isLoading: upcomingLoading,
+    isFetching: upcomingFetching,
     isError: upcomingError,
     error: upcomingErrorObj,
     refetch: refetchUpcoming,
@@ -178,22 +199,43 @@ export default function DayViewPage() {
     enabled: tab === 'upcoming',
     staleTime: VISIT_LIST_STALE_TIME_MS,
     retry: retryUnlessOffline,
+    refetchInterval: pollWhileOnline,
   });
   const upcomingVisits = upcomingVisitsData ?? [];
   const upcomingOfflineWithNoData = upcomingVisitsData === undefined && !online;
+
+  const isManuallyRefreshing = isFetching || correctionFetching || upcomingFetching;
+  const handleManualRefresh = () => {
+    if (!online) return;
+    void refetch();
+    void refetchCorrection();
+    if (tab === 'upcoming') void refetchUpcoming();
+  };
 
   const doneCount = visits.filter((v) => v.status === 'completed' || v.reportSubmitted).length;
   const nextIndex = visits.findIndex((v) => v.status !== 'completed' && !v.reportSubmitted);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex flex-none items-baseline justify-between border-b border-divider bg-neutral-200 px-4 py-3">
+      <div className="flex flex-none items-center justify-between border-b border-divider bg-neutral-200 px-4 py-3">
         <h1 className="font-heading text-xl font-semibold">{tab === 'returned' ? 'Returned' : 'Your day'}</h1>
-        {tab === 'today' && !isLoading && !isError && (
-          <span className="text-[12px] text-neutral-600 tabular-nums">
-            {visits.length} stop{visits.length === 1 ? '' : 's'} · {doneCount} done
-          </span>
-        )}
+        <div className="flex items-center gap-2.5">
+          {tab === 'today' && !isLoading && !isError && (
+            <span className="text-[12px] text-neutral-600 tabular-nums">
+              {visits.length} stop{visits.length === 1 ? '' : 's'} · {doneCount} done
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={handleManualRefresh}
+            disabled={!online || isManuallyRefreshing}
+            title={!online ? "You're offline — showing what was last saved on this device" : 'Refresh'}
+            aria-label="Refresh"
+            className="cursor-pointer border border-neutral-300 bg-white px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {!online ? 'Offline' : isManuallyRefreshing ? 'Refreshing…' : '⟳ Refresh'}
+          </button>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">

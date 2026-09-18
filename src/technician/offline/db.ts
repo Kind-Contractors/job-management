@@ -48,6 +48,17 @@ export interface DraftReport {
   submitting: boolean;
   /** The most recent submit attempt's error, if any — shown in the UI; cleared on the next successful attempt (the draft/photos are deleted entirely at that point anyway). */
   submitError: string | null;
+  /**
+   * True only when the server has explicitly, permanently rejected this
+   * exact submission for a reason retrying can never fix (e.g. the visit
+   * was reassigned away, or a report already exists but isn't the specific
+   * "safe to auto-resolve" case syncEngine.ts handles on its own) — see
+   * isPermanentSubmitError() there. Excludes this draft from the automatic
+   * 30s/online/focus retry loop; never set for a network-shaped failure,
+   * which must keep retrying normally. Absent (undefined) on any draft
+   * written before this field existed — treated the same as false.
+   */
+  permanentFailure?: boolean;
   updatedAt: string;
 }
 

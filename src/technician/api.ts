@@ -19,6 +19,27 @@
 
 import { supabase } from '../lib/supabaseClient';
 
+/**
+ * Thrown by submitReport()/resubmitReport() only — preserves the
+ * PostgREST/Postgres error `code` (the SQLSTATE, e.g. 'P0001' for a plain
+ * `raise exception` inside technician_submit_report/technician_resubmit_report)
+ * alongside the message, which a plain `Error` would otherwise discard. The
+ * offline sync engine uses `code` to tell a genuine server-side rejection
+ * (the RPC executed and explicitly refused the request) apart from a
+ * network-level failure (which never produces a coded PostgREST response at
+ * all) — see offline/syncEngine.ts's isPermanentSubmitError(). No database
+ * change: this only stops the client from throwing away information the
+ * server was already sending.
+ */
+export class RpcError extends Error {
+  code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = 'RpcError';
+    this.code = code;
+  }
+}
+
 export type TechnicianVisitStatus = 'due' | 'booked' | 'completed' | 'missed' | 'cancelled';
 export type TechnicianReportReviewStatus = 'awaiting_review' | 'approved' | 'returned_for_correction';
 
@@ -346,7 +367,7 @@ export async function submitReport(input: SubmitReportInput): Promise<string> {
     p_spec_met: input.specMet,
   });
 
-  if (error) throw new Error(error.message);
+  if (error) throw new RpcError(error.message, error.code);
   return data as string;
 }
 
@@ -399,5 +420,5 @@ export async function resubmitReport(input: ResubmitReportInput): Promise<void> 
     p_spec_met: input.specMet,
   });
 
-  if (error) throw new Error(error.message);
+  if (error) throw new RpcError(error.message, error.code);
 }

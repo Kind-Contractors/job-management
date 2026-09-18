@@ -37,7 +37,7 @@ import {
   type DraftReport,
   type PendingPhoto,
 } from './db';
-import { newVisitPhotoStoragePath, resubmitReport, submitReport, uploadVisitPhotoToPath, type PhotoPhase } from '../api';
+import { RpcError, newVisitPhotoStoragePath, resubmitReport, submitReport, uploadVisitPhotoToPath, type PhotoPhase } from '../api';
 
 const RETRY_INTERVAL_MS = 30_000;
 
@@ -46,10 +46,58 @@ function notify(): void {
   for (const fn of listeners) fn();
 }
 
-/** For useSyncExternalStore-style subscriptions — components re-read whatever IndexedDB state they care about whenever this fires. */
+/** For useSyncExternalStore-style subscriptions — components re-read whatever IndexedDB state they care about whenever this fires. Fires on every local queue change (photo progress, draft edits, retries) — deliberately generic and high-frequency, unlike subscribeReportSynced below. */
 export function subscribeSyncEngine(callback: () => void): () => void {
   listeners.add(callback);
   return () => listeners.delete(callback);
+}
+
+const reportSyncedListeners = new Set<(visitId: string) => void>();
+function notifyReportSynced(visitId: string): void {
+  for (const fn of reportSyncedListeners) fn(visitId);
+}
+
+/**
+ * A separate, narrow channel from subscribeSyncEngine above — fires exactly
+ * once per visit, only when that visit's report has genuinely reached a
+ * server-confirmed end state (either a real successful submit/resubmit, or
+ * a confirmed "the server already has this report" resolution — see
+ * trySubmitIfReady()). Never fires for photo-upload progress or any other
+ * local queue change. This is what the React layer (TechnicianShell.tsx)
+ * uses to invalidate exactly the affected TanStack Query keys, instead of
+ * refetching on every unrelated IndexedDB write.
+ */
+export function subscribeReportSynced(callback: (visitId: string) => void): () => void {
+  reportSyncedListeners.add(callback);
+  return () => reportSyncedListeners.delete(callback);
+}
+
+/** The exact, stable message technician_submit_report() raises when a report row already exists for the visit — matched narrowly, only to trigger the specific safe-auto-resolve path below, never as a general classifier. */
+const ALREADY_EXISTS_MESSAGE = 'A report already exists for this visit.';
+
+function isAlreadyExistsError(err: unknown): boolean {
+  return err instanceof RpcError && err.message === ALREADY_EXISTS_MESSAGE;
+}
+
+/**
+ * True only for a genuine server-side rejection — the RPC actually ran and
+ * technician_submit_report()/technician_resubmit_report() explicitly raised
+ * an exception (a real PostgREST error with a Postgres SQLSTATE `code`,
+ * e.g. 'P0001' for a plain `raise exception`). A network-level failure
+ * (offline, DNS, a dropped connection, a timeout) never produces that
+ * shape — supabase-js/postgrest-js only report `code` when a response
+ * actually came back from the server, so an absent `code` is treated as
+ * transient here, never permanent. A handful of Postgres SQLSTATE classes
+ * are connection/resource-level even though a code IS present (08
+ * connection exception, 40 transaction rollback, 53–58 insufficient
+ * resources/system/operator intervention/external errors) — those are
+ * still retried like any other transient failure, not treated as a
+ * business-rule rejection.
+ */
+function isPermanentSubmitError(err: unknown): boolean {
+  if (!(err instanceof RpcError) || !err.code) return false;
+  const transientClasses = ['08', '40', '53', '54', '55', '57', '58'];
+  return !transientClasses.includes(err.code.slice(0, 2));
 }
 
 const uploadingIds = new Set<string>();
@@ -77,11 +125,18 @@ async function attemptUploadPhoto(photo: PendingPhoto): Promise<void> {
   await trySubmitIfReady(photo.visitId);
 }
 
-/** Attempts the actual, final submit/resubmit RPC for a visit — only when every one of its photos has genuinely finished uploading. Safe to call as often as you like; it's a no-op unless the draft is ready, not already mid-submit, online, and fully uploaded. */
+/**
+ * Attempts the actual, final submit/resubmit RPC for a visit — only when
+ * every one of its photos has genuinely finished uploading. Safe to call as
+ * often as you like; it's a no-op unless the draft is ready, not already
+ * mid-submit, online, fully uploaded, and — since a permanently-rejected
+ * draft can never succeed by retrying — not already marked
+ * `permanentFailure` (see isPermanentSubmitError()).
+ */
 export async function trySubmitIfReady(visitId: string): Promise<void> {
   if (submittingVisitIds.has(visitId)) return;
   const draft = await getDraft(visitId);
-  if (!draft || !draft.readyToSubmit || draft.submitting) return;
+  if (!draft || !draft.readyToSubmit || draft.submitting || draft.permanentFailure) return;
   if (!navigator.onLine) return;
 
   const photos = await listPhotosForVisit(visitId);
@@ -120,13 +175,45 @@ export async function trySubmitIfReady(visitId: string): Promise<void> {
       // the local queue. Never delete a photo's blob before this point.
       await deleteDraft(visitId);
       await deletePhotosForVisit(visitId);
+      notifyReportSynced(visitId);
     } catch (err) {
-      await putDraft({
-        ...draft,
-        submitting: false,
-        submitError: err instanceof Error ? err.message : 'Failed to submit report.',
-        updatedAt: new Date().toISOString(),
-      });
+      if (isAlreadyExistsError(err)) {
+        // The server already has a report for this visit — this local
+        // draft is a redundant duplicate (most likely this very submission
+        // having actually succeeded on an earlier attempt whose success
+        // response never made it back, e.g. the connection dropped right
+        // after). The real report is the server's; this branch never
+        // created it and must never try to. Safe to drop the local
+        // duplicate outright and tell the UI to treat this visit as
+        // synced, exactly like a genuine success — never touches the
+        // existing server-side report.
+        await deleteDraft(visitId);
+        await deletePhotosForVisit(visitId);
+        notifyReportSynced(visitId);
+      } else if (isPermanentSubmitError(err)) {
+        // A definitive server rejection that retrying can never fix (e.g.
+        // the visit was reassigned away). Stop the automatic retry loop —
+        // trySubmitIfReady()'s own guard above skips permanentFailure
+        // drafts — but keep the technician's typed work in place rather
+        // than silently discarding it; they (or the office) need to act on
+        // this deliberately, not have it vanish.
+        await putDraft({
+          ...draft,
+          submitting: false,
+          submitError: err instanceof Error ? err.message : 'Failed to submit report.',
+          permanentFailure: true,
+          updatedAt: new Date().toISOString(),
+        });
+      } else {
+        // Transient (network/connection/timeout) — leave it exactly as
+        // before, retried by every future trigger until it succeeds.
+        await putDraft({
+          ...draft,
+          submitting: false,
+          submitError: err instanceof Error ? err.message : 'Failed to submit report.',
+          updatedAt: new Date().toISOString(),
+        });
+      }
     }
   } finally {
     submittingVisitIds.delete(visitId);
