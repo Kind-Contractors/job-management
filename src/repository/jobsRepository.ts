@@ -5,10 +5,10 @@
 // dev/test seam over the original mock dataset — nothing in the app calls it,
 // but it stays available rather than being deleted.
 
-import type { Division, FrequencyType, JobRow } from '../domain/types';
+import type { Division, FrequencyType, JobLifecycleStatus, JobRow, JobVisitSummary } from '../domain/types';
 import { denormalizeJobRows } from '../mock/jobsData';
 import { supabase } from '../lib/supabaseClient';
-import { mapJobRow, FREQUENCY_TYPE_LABEL, type SupabaseJobRecord } from './mapJobRow';
+import { mapJobRow, mapVisitRow, FREQUENCY_TYPE_LABEL, type SupabaseJobRecord, type SupabaseVisit } from './mapJobRow';
 import { logCurrentUserActivity } from './activityEventsRepository';
 
 function formatMoney(n: number | null): string {
@@ -83,6 +83,11 @@ const JOB_SELECT = `
   price_per_visit,
   source_job_id,
   default_technician_id,
+  lifecycle_status,
+  lost_reason,
+  recontact_due_at,
+  recontact_notes,
+  recontact_interval_months,
   buildings (
     id,
     client_id,
@@ -134,6 +139,109 @@ export async function listJobRows(): Promise<JobRow[]> {
   }
 
   return ((data ?? []) as unknown as SupabaseJobRecord[]).map(mapJobRow);
+}
+
+/** The three lifecycle values Historical Jobs shows — deliberately excludes 'on_hold' (a job that may resume, not a historical one) and 'active'. See the reviewed Historical Jobs audit. */
+const HISTORICAL_LIFECYCLE_STATUSES: JobLifecycleStatus[] = ['completed', 'lost', 'cancelled'];
+
+/**
+ * Sibling to listJobRows() above — never a modification of it, and never
+ * called by anything listJobRows() itself feeds (All Live Jobs, Report
+ * Review, Ready for Accounts, Ready for Client, Month Matrix, Schedule all
+ * keep reading listJobRows() exactly as before). Reuses the identical
+ * JOB_SELECT/mapJobRow() so a historical JobRow has the exact same shape
+ * as a live one — only the lifecycle filter differs, matching an explicit
+ * allow-list of the three historical values rather than a broad `.neq()`
+ * (which would incorrectly also surface 'on_hold').
+ */
+export async function listHistoricalJobRows(): Promise<JobRow[]> {
+  const { data, error } = await supabase
+    .from('jobs')
+    .select(JOB_SELECT)
+    .in('lifecycle_status', HISTORICAL_LIFECYCLE_STATUSES)
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to load historical jobs: ${error.message}`);
+  }
+
+  return ((data ?? []) as unknown as SupabaseJobRecord[]).map(mapJobRow);
+}
+
+/** Same visit/report/invoice columns as JOB_SELECT's own `visits(...)` sub-select above — deliberately excludes buildings/clients/schedules, which the safeguards never look at. */
+const JOB_LIFECYCLE_SAFEGUARD_VISIT_SELECT = `
+  id, technician_id, scheduled_date, status, price_charged, completed_at,
+  technicians ( id, name, is_active ),
+  reports ( id, review_status, sent_to_client_at, sent_to_accounts_at ),
+  invoice_line_items ( invoice_id, invoices ( status ) )
+`;
+
+/**
+ * A fresh, job-scoped re-read of exactly the visit/report/invoice state
+ * JobLifecycleDialog's safeguards evaluate (isUnresolvedVisit()/
+ * hasIncompleteReportWork()) — called once, immediately before
+ * updateJobLifecycle(), to close the race window where the cached
+ * `jobRows` snapshot the dialog opened with could be stale (another
+ * session or a technician booked a visit, or a report's state changed,
+ * after that query ran but before Confirm was clicked). Returns the exact
+ * same JobVisitSummary shape as job.visits (via the shared mapVisitRow()),
+ * so the dialog's existing safeguard predicates apply unchanged to both
+ * the cached and the fresh result — one set of safeguard rules, never two.
+ */
+export async function getJobLifecycleSafeguardState(jobId: string): Promise<JobVisitSummary[]> {
+  const { data, error } = await supabase
+    .from('visits')
+    .select(JOB_LIFECYCLE_SAFEGUARD_VISIT_SELECT)
+    .eq('job_id', jobId);
+
+  if (error) {
+    throw new Error(`Failed to verify job status: ${error.message}`);
+  }
+
+  return ((data ?? []) as unknown as SupabaseVisit[]).map(mapVisitRow);
+}
+
+export type ActiveToHistoricalLifecycleStatus = 'completed' | 'lost' | 'cancelled';
+
+export interface UpdateJobLifecycleInput {
+  lifecycleStatus: ActiveToHistoricalLifecycleStatus;
+  /** Also used to store an optional cancellation reason (see UI layer) — there is no separate cancellation-reason column, and this phase does not change the schema. */
+  lostReason: string | null;
+  recontactDueAt: string | null;
+  recontactNotes: string | null;
+  recontactIntervalMonths: number | null;
+}
+
+/**
+ * The one write path for a lifecycle transition (Mark as Completed/Lost/
+ * Cancelled — see JobLifecycleDialog.tsx, the only caller). Updates ONLY
+ * the five lifecycle-related columns via a single targeted `.update()` —
+ * never job_summary/pricing/frequency/building_id/default_technician_id/
+ * anything else, and never touches visits/reports/invoices/photos/contacts.
+ * All safeguard checks (unresolved visits, in-flight report work) happen
+ * in the caller BEFORE this is ever invoked; this function itself performs
+ * no business-rule validation and trusts the caller completely, matching
+ * every other narrow, single-purpose mutation in this file (e.g.
+ * assignJobTechnician).
+ */
+export async function updateJobLifecycle(jobId: string, input: UpdateJobLifecycleInput): Promise<void> {
+  const { error } = await supabase
+    .from('jobs')
+    .update({
+      lifecycle_status: input.lifecycleStatus,
+      lost_reason: input.lostReason,
+      recontact_due_at: input.recontactDueAt,
+      recontact_notes: input.recontactNotes,
+      recontact_interval_months: input.recontactIntervalMonths,
+    })
+    .eq('id', jobId);
+
+  if (error) {
+    throw new Error(`Failed to update job status: ${error.message}`);
+  }
+
+  await logCurrentUserActivity('job', jobId, 'job_lifecycle_changed', `Status changed to ${input.lifecycleStatus}`);
 }
 
 /**

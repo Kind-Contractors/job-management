@@ -8,6 +8,7 @@ import { useAuth } from '../../auth/AuthProvider';
 import VisitRow from './VisitRow';
 import ScheduleEditor from './ScheduleEditor';
 import JobEditor from './JobEditor';
+import JobLifecycleDialog, { type JobLifecycleTransition } from './JobLifecycleDialog';
 import { describeSchedule, suggestNextDate } from '../../lib/scheduleFormat';
 import { getStatusPresentation } from '../../lib/statusPresentation';
 import StatusPill from './StatusPill';
@@ -49,6 +50,7 @@ export default function JobInspectorDrawer({
   const actor = session?.user.email ?? 'unknown';
   const [revealed, setRevealed] = useState(false);
   const [editingJob, setEditingJob] = useState(false);
+  const [lifecycleTransition, setLifecycleTransition] = useState<JobLifecycleTransition | null>(null);
   const [visitDate, setVisitDate] = useState(presetVisitDate ?? todayISO());
   const [visitTechnicianId, setVisitTechnicianId] = useState<string>(job.defaultTechnicianId ?? '');
   const [bookingMessage, setBookingMessage] = useState<string | null>(null);
@@ -96,6 +98,7 @@ export default function JobInspectorDrawer({
   ];
 
   return (
+    <>
     <aside className="hidden w-[344px] flex-none flex-col overflow-y-auto border-l border-divider bg-white lg:flex">
       <div className="border-b border-divider p-4">
         <div className="flex items-center gap-2 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
@@ -300,6 +303,37 @@ export default function JobInspectorDrawer({
         </div>
       )}
 
+      {job.lifecycleStatus === 'active' && (
+        <div className="m-3.5 border border-neutral-400 p-3">
+          <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
+            Job status
+          </div>
+          <div className="mt-1 text-[12px] leading-snug text-neutral-600">
+            Move this job out of the active workflow and into Historical Jobs.
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <button
+              onClick={() => setLifecycleTransition('completed')}
+              className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-700 hover:bg-neutral-100"
+            >
+              Mark as Completed
+            </button>
+            <button
+              onClick={() => setLifecycleTransition('lost')}
+              className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-700 hover:bg-neutral-100"
+            >
+              Mark as Lost
+            </button>
+            <button
+              onClick={() => setLifecycleTransition('cancelled')}
+              className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-700 hover:bg-neutral-100"
+            >
+              Mark as Cancelled
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="mt-auto flex flex-wrap gap-1.5 border-t border-divider p-3.5">
         <button
           onClick={() => navigate(`/buildings/${job.buildingId}`)}
@@ -315,5 +349,17 @@ export default function JobInspectorDrawer({
         </button>
       </div>
     </aside>
+    {lifecycleTransition && (
+      <JobLifecycleDialog
+        job={job}
+        transition={lifecycleTransition}
+        onClose={() => setLifecycleTransition(null)}
+        onSuccess={() => {
+          setLifecycleTransition(null);
+          onClose();
+        }}
+      />
+    )}
+    </>
   );
 }

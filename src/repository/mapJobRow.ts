@@ -12,6 +12,7 @@
 import type {
   Frequency,
   FrequencyType,
+  JobLifecycleStatus,
   JobRow,
   JobStatus,
   JobVisitSummary,
@@ -148,7 +149,7 @@ interface SupabaseInvoiceLineItem {
   invoices: SupabaseInvoice | SupabaseInvoice[] | null;
 }
 
-interface SupabaseVisit {
+export interface SupabaseVisit {
   id: string;
   technician_id: string | null;
   scheduled_date: string | null;
@@ -172,6 +173,11 @@ export interface SupabaseJobRecord {
   price_per_visit: number | null;
   source_job_id: string | null;
   default_technician_id: string | null;
+  lifecycle_status: JobLifecycleStatus;
+  lost_reason: string | null;
+  recontact_due_at: string | null;
+  recontact_notes: string | null;
+  recontact_interval_months: number | null;
   buildings: SupabaseBuilding | SupabaseBuilding[] | null;
   technicians: SupabaseTechnician | SupabaseTechnician[] | null;
   schedules: SupabaseSchedule | SupabaseSchedule[] | null;
@@ -288,6 +294,37 @@ export function deriveVisitState(visits: SupabaseVisit[], todayISO: string, sche
   return { status: 'unscheduled', nextDueLabel: 'Not yet scheduled' };
 }
 
+/**
+ * Maps one embedded Supabase visit row (with its nested report/invoice
+ * shape) onto a JobVisitSummary. Extracted out of mapJobRow()'s own visits
+ * list below so getJobLifecycleSafeguardState() (jobsRepository.ts) can
+ * build the identical shape from its own narrower, job-scoped visits
+ * query — letting both the cached job.visits list and the confirm-time
+ * fresh safeguard re-check evaluate through the exact same
+ * JobLifecycleDialog predicates, with no second copy of the report/invoice
+ * normalization logic.
+ */
+export function mapVisitRow(v: SupabaseVisit): JobVisitSummary {
+  const report = one(v.reports);
+  const invoiceLineItem = one(v.invoice_line_items);
+  const invoice = invoiceLineItem ? one(invoiceLineItem.invoices) : null;
+  return {
+    id: v.id,
+    scheduledDate: v.scheduled_date,
+    status: v.status,
+    technicianId: v.technician_id,
+    technicianName: one(v.technicians)?.name ?? null,
+    priceCharged: v.price_charged,
+    completedAt: v.completed_at,
+    reportId: report?.id ?? null,
+    reportReviewStatus: report?.review_status ?? null,
+    sentToClientAt: report?.sent_to_client_at ?? null,
+    sentToAccountsAt: report?.sent_to_accounts_at ?? null,
+    invoiceId: invoiceLineItem?.invoice_id ?? null,
+    invoiceStatus: invoice?.status ?? null,
+  };
+}
+
 export function mapJobRow(row: SupabaseJobRecord): JobRow {
   const building = one(row.buildings);
   const client = building ? one(building.clients) : null;
@@ -330,26 +367,7 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
 
   const visits: JobVisitSummary[] = [...rawVisits]
     .sort((a, b) => (a.scheduled_date ?? '').localeCompare(b.scheduled_date ?? ''))
-    .map((v) => {
-      const report = one(v.reports);
-      const invoiceLineItem = one(v.invoice_line_items);
-      const invoice = invoiceLineItem ? one(invoiceLineItem.invoices) : null;
-      return {
-        id: v.id,
-        scheduledDate: v.scheduled_date,
-        status: v.status,
-        technicianId: v.technician_id,
-        technicianName: one(v.technicians)?.name ?? null,
-        priceCharged: v.price_charged,
-        completedAt: v.completed_at,
-        reportId: report?.id ?? null,
-        reportReviewStatus: report?.review_status ?? null,
-        sentToClientAt: report?.sent_to_client_at ?? null,
-        sentToAccountsAt: report?.sent_to_accounts_at ?? null,
-        invoiceId: invoiceLineItem?.invoice_id ?? null,
-        invoiceStatus: invoice?.status ?? null,
-      };
-    });
+    .map(mapVisitRow);
 
   return {
     id: row.id,
@@ -370,6 +388,11 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
     schedulePattern: schedule ? describeScheduleShort(schedule) : frequencyRaw,
     schedule,
     visits,
+    lifecycleStatus: row.lifecycle_status,
+    lostReason: row.lost_reason,
+    recontactDueAt: row.recontact_due_at,
+    recontactNotes: row.recontact_notes,
+    recontactIntervalMonths: row.recontact_interval_months,
     buildingName,
     street: '',
     postcode: building?.postcode ?? '',

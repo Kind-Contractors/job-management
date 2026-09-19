@@ -13,6 +13,7 @@ import ReportReviewPage from './pages/ReportReviewPage';
 import ReadyForAccountsPage from './pages/ReadyForAccountsPage';
 import ReadyForClientPage from './pages/ReadyForClientPage';
 import UsersPage from './pages/UsersPage';
+import HistoricalJobsPage from './pages/HistoricalJobsPage';
 import TechnicianShell from './technician/TechnicianShell';
 import DayViewPage from './technician/DayViewPage';
 import JobFilePage from './technician/JobFilePage';
@@ -65,6 +66,7 @@ export default function App() {
         <Route path="/ready-for-accounts" element={<ReadyForAccountsPage />} />
         <Route path="/ready-for-client" element={<ReadyForClientPage />} />
         <Route path="/users" element={<UsersPage />} />
+        <Route path="/historical-jobs" element={<HistoricalJobsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/jobs" replace />} />
     </Routes>

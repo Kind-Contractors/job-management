@@ -137,6 +137,15 @@ export const jobs: Job[] = RAW.map((r) => ({
   visits: [],
   schedulePattern: SCHEDULE_PATTERNS[r.jobId] ?? r.frequency,
   schedule: null,
+  // Fictional mock data — every mock job is implicitly active, matching
+  // real listJobRows()'s own default; this dataset was never meant to
+  // represent a lost/historical job (see this function's own doc comment:
+  // nothing in the app actually calls it).
+  lifecycleStatus: 'active',
+  lostReason: null,
+  recontactDueAt: null,
+  recontactNotes: null,
+  recontactIntervalMonths: null,
 }));
 
 export function denormalizeJobRows(): JobRow[] {

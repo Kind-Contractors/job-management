@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useLocation, useSearchParams, useNavigate } from 'react-router-dom';
 import type { IconType } from 'react-icons';
 import {
+  HiOutlineArchiveBox,
   HiOutlineBanknotes,
   HiOutlineBriefcase,
   HiOutlineBuildingOffice2,
@@ -12,7 +13,7 @@ import {
   HiOutlineTableCells,
   HiOutlineUsers,
 } from 'react-icons/hi2';
-import { listJobRows } from '../../repository/jobsRepository';
+import { listHistoricalJobRows, listJobRows } from '../../repository/jobsRepository';
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import { listTechnicians } from '../../repository/techniciansRepository';
 import { listUsers } from '../../repository/usersRepository';
@@ -88,6 +89,7 @@ export default function NavRail() {
   const [collapsed, setCollapsed] = useState(false);
 
   const { data: jobRows = [] } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
+  const { data: historicalJobRows = [] } = useQuery({ queryKey: ['historicalJobRows'], queryFn: listHistoricalJobRows });
   const { data: buildingRows = [] } = useQuery({ queryKey: ['buildingRows'], queryFn: listBuildingRows });
   const { data: technicians = [] } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: listUsers });
@@ -102,6 +104,7 @@ export default function NavRail() {
   const onReadyForAccounts = pathname === '/ready-for-accounts';
   const onReadyForClient = pathname === '/ready-for-client';
   const onUsers = pathname === '/users';
+  const onHistoricalJobs = pathname === '/historical-jobs';
 
   const divisionFiltered = jobRows.filter((j) => division === 'Both' || j.division === division);
 
@@ -157,6 +160,14 @@ export default function NavRail() {
     { key: 'matrix', label: 'Month matrix', icon: HiOutlineTableCells, active: onMonthMatrix, count: divisionFiltered.length, onClick: () => navigate('/month-matrix') },
     { key: 'reviews', label: 'Report review', icon: HiOutlineClipboardDocumentCheck, active: onReportReview, count: reviewCount, onClick: () => navigate('/report-review') },
     { key: 'users', label: 'Users', icon: HiOutlineUsers, active: onUsers, count: users.filter((u) => u.isActive).length, onClick: () => navigate('/users') },
+    {
+      key: 'historical',
+      label: 'Historical jobs',
+      icon: HiOutlineArchiveBox,
+      active: onHistoricalJobs,
+      count: historicalJobRows.filter((j) => division === 'Both' || j.division === division).length,
+      onClick: () => navigate('/historical-jobs'),
+    },
   ];
 
   return (

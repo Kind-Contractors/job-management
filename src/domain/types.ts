@@ -62,6 +62,19 @@ export type JobStatus =
   | 'unscheduled'
   | 'overdue';
 
+/**
+ * The real `jobs.lifecycle_status` enum (Postgres type `job_lifecycle_status`,
+ * confirmed live: active/on_hold/completed/lost/cancelled). Not to be
+ * confused with `JobStatus` above — that's a derived, visit-based
+ * operational state recomputed on every read; this is a stored,
+ * manager-set field. `listJobRows()` only ever returns `'active'` jobs
+ * today (its own `.eq('lifecycle_status','active')` filter is unchanged by
+ * this type existing) — the other four values are surfaced here so a
+ * later Historical/Lost Jobs pass has something to read, but nothing in
+ * the app writes this field yet.
+ */
+export type JobLifecycleStatus = 'active' | 'on_hold' | 'completed' | 'lost' | 'cancelled';
+
 export interface Client {
   id: string;
   companyName: string;
@@ -132,6 +145,16 @@ export interface Job {
   schedule: Schedule | null;
   /** Every real visit for this job, sorted soonest-first — for the drawer's "Visits" history list. Never fabricated; `[]` when none exist. */
   visits: JobVisitSummary[];
+  /** `jobs.lifecycle_status` — `'active'` for every job returned today (see JobLifecycleStatus's own doc comment). Not yet written by any app code. */
+  lifecycleStatus: JobLifecycleStatus;
+  /** `jobs.lost_reason` — free text, only ever meaningful once `lifecycleStatus` is `'lost'`. `null` for every job today; nothing writes it yet. */
+  lostReason: string | null;
+  /** `jobs.recontact_due_at` — when to follow up about re-selling this job/client. `null` for every job today; nothing writes it yet. */
+  recontactDueAt: string | null;
+  /** `jobs.recontact_notes` — free text. `null` for every job today; nothing writes it yet. */
+  recontactNotes: string | null;
+  /** `jobs.recontact_interval_months` — e.g. 6/12/18/24, the cadence `recontactDueAt` was computed from. `null` for every job today; nothing writes it yet. */
+  recontactIntervalMonths: number | null;
 }
 
 export type ScheduleType = 'fixed_weekday' | 'fixed_date' | 'due_month' | 'ad_hoc';

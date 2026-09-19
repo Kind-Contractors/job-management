@@ -43,6 +43,25 @@ export function getStatusPresentation(status: JobStatus): StatusPresentation {
   return PRESENTATIONS[status];
 }
 
+/**
+ * Presentation for the three "Historical Jobs" lifecycle values only
+ * (completed/lost/cancelled) — 'active'/'on_hold' never reach this
+ * function, since Historical Jobs deliberately excludes both (see
+ * HistoricalJobsPage.tsx). Same restrained palette as PRESENTATIONS above:
+ * teal for a normal/positive outcome, missed(red) for a genuinely lost
+ * one, neutral grey for an administrative cancellation with no implied
+ * outcome either way.
+ */
+const HISTORICAL_LIFECYCLE_PRESENTATIONS: Record<'completed' | 'lost' | 'cancelled', StatusPresentation> = {
+  completed: { label: 'Completed', fg: 'text-teal-700', dot: 'bg-teal-700', border: 'border-teal-700', bg: 'bg-teal-700/10' },
+  lost: { label: 'Lost', fg: 'text-missed-fg', dot: 'bg-missed', border: 'border-missed', bg: 'bg-missed/10' },
+  cancelled: { label: 'Cancelled', fg: 'text-neutral-600', dot: 'bg-transparent', border: 'border-neutral-400', bg: 'bg-neutral-400/10' },
+};
+
+export function getHistoricalLifecycleStatusPresentation(status: 'completed' | 'lost' | 'cancelled'): StatusPresentation {
+  return HISTORICAL_LIFECYCLE_PRESENTATIONS[status];
+}
+
 export function dueColorClass(status: JobStatus, softDate: boolean): string {
   if (status === 'missed' || status === 'overdue') return 'text-missed-fg';
   if (softDate) return 'text-due-fg';
