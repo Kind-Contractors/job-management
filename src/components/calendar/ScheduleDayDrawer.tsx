@@ -102,7 +102,9 @@ export default function ScheduleDayDrawer({
   });
 
   return (
-    <div className="flex w-[380px] flex-none flex-col overflow-y-auto border-l border-neutral-300 bg-white shadow-[-2px_0_8px_rgba(0,0,0,0.04)]">
+    <>
+    <div className="fixed inset-0 z-40 bg-ink/30" onClick={onClose} />
+    <div className="fixed inset-y-0 right-0 z-50 flex w-[380px] flex-none flex-col overflow-y-auto border-l border-neutral-300 bg-white shadow-xl">
       <div className="flex items-start gap-2 border-b border-neutral-300 bg-teal-100 px-5 py-4">
         <div className="min-w-0">
           <div className="font-heading text-[10px] font-semibold tracking-[0.14em] text-teal-700 uppercase">Schedule</div>
@@ -246,5 +248,6 @@ export default function ScheduleDayDrawer({
         {saveMessage && <div className="text-[11.5px] text-neutral-700">{saveMessage}</div>}
       </div>
     </div>
+    </>
   );
 }

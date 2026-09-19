@@ -54,7 +54,9 @@ function HistoricalJobDetail({ job, onClose }: { job: JobRow; onClose: () => voi
   if (job.recontactNotes) recontactFacts.push(['Recontact notes', job.recontactNotes]);
 
   return (
-    <aside className="hidden w-[344px] flex-none flex-col overflow-y-auto border-l border-divider bg-white lg:flex">
+    <>
+    <div className="fixed inset-0 z-40 hidden bg-ink/30 lg:block" onClick={onClose} />
+    <aside className="fixed inset-y-0 right-0 z-50 hidden w-[344px] flex-none flex-col overflow-y-auto border-l border-divider bg-white shadow-xl lg:flex">
       <div className="border-b border-divider p-4">
         <div className="flex items-center gap-2 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
           Historical job · {job.id}
@@ -135,6 +137,7 @@ function HistoricalJobDetail({ job, onClose }: { job: JobRow; onClose: () => voi
         </button>
       </div>
     </aside>
+    </>
   );
 }
 
