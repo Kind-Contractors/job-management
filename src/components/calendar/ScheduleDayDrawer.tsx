@@ -4,6 +4,7 @@ import { createVisit } from '../../repository/techniciansRepository';
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import type { JobRow, Technician, WeekVisit } from '../../domain/types';
 import SearchableSelect from '../shared/SearchableSelect';
+import JobCreator from '../jobs/JobCreator';
 
 const DATE_HEADER_FORMAT = new Intl.DateTimeFormat('en-GB', {
   weekday: 'long',
@@ -27,6 +28,18 @@ const DATE_HEADER_FORMAT = new Intl.DateTimeFormat('en-GB', {
  * present on JobRow), reusing the exact query key BuildingsPage/
  * BuildingFilePage/JobCreator already populate, so it's typically already
  * cached rather than a fresh round trip.
+ *
+ * "+ Add new job for this building" (once a building is selected) opens
+ * the existing JobCreator in its building-preset mode as a small overlay
+ * on top of this drawer — no new job-creation form, no new repository
+ * function. Defaults its Frequency to 'one_off' (Luke's own stated
+ * scenario — a single one-off job like jet washing, not a recurring
+ * contract), still changeable in the form itself. On success, the new
+ * job's id is dropped straight into the existing `jobId` state (the
+ * already-selected date/technician are never touched by any of this), so
+ * the manager lands back in "Add booking" with the new job already
+ * selected and just clicks the same "Save booking" as any other job —
+ * booking itself still only ever calls `createVisit`, never a second job.
  */
 export default function ScheduleDayDrawer({
   dateISO,
@@ -69,6 +82,11 @@ export default function ScheduleDayDrawer({
   const [jobId, setJobId] = useState('');
   const [technicianId, setTechnicianId] = useState(initialTechnicianId ?? '');
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  // Toggles the "+ Add new job for this building" overlay — deliberately
+  // its own flag rather than reusing `jobId`, so opening/cancelling it
+  // never touches the already-selected client/building/date/technician
+  // state below.
+  const [creatingJob, setCreatingJob] = useState(false);
 
   const clients = useMemo(() => {
     const seen = new Map<string, string>();
@@ -208,6 +226,16 @@ export default function ScheduleDayDrawer({
           </select>
         </label>
 
+        <button
+          type="button"
+          onClick={() => setCreatingJob(true)}
+          disabled={!buildingId}
+          title={!buildingId ? 'Select a building first' : undefined}
+          className="cursor-pointer self-start border border-teal-700 px-2 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
+        >
+          + Add new job for this building
+        </button>
+
         <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
           Technician
           <select
@@ -248,6 +276,27 @@ export default function ScheduleDayDrawer({
         {saveMessage && <div className="text-[11.5px] text-neutral-700">{saveMessage}</div>}
       </div>
     </div>
+    {creatingJob && (
+      <div className="fixed inset-0 z-[60] flex justify-end bg-ink/30" onClick={() => setCreatingJob(false)}>
+        <div onClick={(e) => e.stopPropagation()}>
+          <JobCreator
+            buildingId={buildingId}
+            defaultFrequencyType="one_off"
+            onCreated={(newJobId) => {
+              // Building/date/technician are untouched by this whole
+              // overlay — only the newly created job is selected, so the
+              // manager lands straight back in "Add booking" with
+              // everything else exactly as they left it, ready for the
+              // same "Save booking" click as any other job.
+              setCreatingJob(false);
+              setJobId(newJobId);
+              setSaveMessage(null);
+            }}
+            onCancel={() => setCreatingJob(false)}
+          />
+        </div>
+      </div>
+    )}
     </>
   );
 }

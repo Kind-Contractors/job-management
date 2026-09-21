@@ -21,7 +21,7 @@ interface FormState {
   defaultTechnicianId: string;
 }
 
-function blankForm(presetBuildingId?: string): FormState {
+function blankForm(presetBuildingId?: string, defaultFrequencyType?: FrequencyType): FormState {
   return {
     buildingId: presetBuildingId ?? '',
     jobSummary: '',
@@ -29,7 +29,7 @@ function blankForm(presetBuildingId?: string): FormState {
     division: 'General',
     pricingType: 'fixed',
     pricePerVisit: '',
-    frequencyType: '',
+    frequencyType: defaultFrequencyType ?? '',
     defaultTechnicianId: '',
   };
 }
@@ -60,23 +60,27 @@ function toInput(form: FormState): JobCreateInput | null {
 }
 
 interface JobCreatorProps {
-  /** Preset and locked when opened from Building File — hides the building picker entirely. Editable via search when opened from All Live Jobs. */
+  /** Preset and locked when opened from Building File or Schedule — hides the building picker entirely. Editable via search when opened from All Live Jobs. */
   buildingId?: string;
+  /** Preselects the Frequency field (still changeable) — used by Schedule's "+ Add new job for this building" flow to default to 'one_off' for the one-off jobs it exists for, without hard-coding that assumption into this shared form for its other callers. */
+  defaultFrequencyType?: FrequencyType;
   onCreated: (jobId: string) => void;
   onCancel: () => void;
 }
 
 /**
- * The one job-creation form, shared by "+ New job" (All Live Jobs) and
- * "+ Add job here" (Building File) — see the reviewed plan for why this is
- * one implementation, not two. Existing-building selection only: no new
+ * The one job-creation form, shared by "+ New job" (All Live Jobs),
+ * "+ Add job here" (Building File), and "+ Add new job for this building"
+ * (Schedule's booking drawer) — see the reviewed plan for why this is one
+ * implementation, not several. Existing-building selection only: no new
  * building/client creation, no schedule (the existing ScheduleEditor
  * covers that immediately afterward, from the Job Inspector this returns
- * into via onCreated).
+ * into via onCreated — except from Schedule, which continues straight into
+ * booking a visit instead).
  */
-export default function JobCreator({ buildingId, onCreated, onCancel }: JobCreatorProps) {
+export default function JobCreator({ buildingId, defaultFrequencyType, onCreated, onCancel }: JobCreatorProps) {
   const queryClient = useQueryClient();
-  const [form, setForm] = useState<FormState>(() => blankForm(buildingId));
+  const [form, setForm] = useState<FormState>(() => blankForm(buildingId, defaultFrequencyType));
   const [buildingQuery, setBuildingQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
 
