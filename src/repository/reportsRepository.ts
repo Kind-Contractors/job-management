@@ -325,13 +325,15 @@ export interface ClientSendRecord {
   sentBy: string;
   errorMessage: string | null;
   createdAt: string;
+  /** Resend's own message id for this attempt — null until a send succeeds (and for any attempt made before this column existed). Useful for cross-referencing Resend's own dashboard/logs if a client reports a delivery issue. */
+  resendMessageId: string | null;
 }
 
 /** The most recent send attempt for a report, if any — lets the UI show "last attempt failed: ..." without a full send-history page. */
 export async function getLatestClientSend(reportId: string): Promise<ClientSendRecord | null> {
   const { data, error } = await supabase
     .from('report_client_sends')
-    .select('id, status, recipient_email, sent_by, error_message, created_at')
+    .select('id, status, recipient_email, sent_by, error_message, created_at, resend_message_id')
     .eq('report_id', reportId)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -346,5 +348,6 @@ export async function getLatestClientSend(reportId: string): Promise<ClientSendR
     sentBy: data.sent_by,
     errorMessage: data.error_message,
     createdAt: data.created_at,
+    resendMessageId: data.resend_message_id,
   };
 }

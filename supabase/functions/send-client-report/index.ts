@@ -21,22 +21,15 @@
 // visible in Ready for Client for the Manager to retry.
 //
 // Requires RESEND_API_KEY and RESEND_FROM_EMAIL as Supabase Edge Function
-// secrets — see this repo's setup notes. Never logs or returns either.
+// secrets (RESEND_FROM_EMAIL e.g. "Kind Contractors <reports@mail.kindcontractors.co.uk>",
+// on the now-verified mail.kindcontractors.co.uk domain). Never logs or
+// returns either.
 //
-// TEMPORARY DEMO/TEST MODE — remove once the real sending domain is
-// verified in Resend (see this repo's setup notes for the exact removal
-// steps). Controlled by a single secret, RESEND_TEST_RECIPIENT_EMAIL:
-// when it's SET, every send in this function is forced to
-// `from: onboarding@resend.dev` / `to: <that secret's value>` regardless
-// of which real contact the Manager selected — the report/contact
-// validation, approval check, and send-history recording all still run
-// exactly as normal against the REAL selected contact (recipient_contact_id
-// still records who the Manager actually chose), only the literal Resend
-// API call's from/to are overridden. When the secret is UNSET, this
-// function behaves exactly as originally built (RESEND_FROM_EMAIL, the
-// real contact's email, no restrictions) — there is no separate mode flag
-// to keep in sync, removing this one secret alone fully returns to
-// production behavior.
+// The previous temporary demo/test mode (forcing every send through
+// onboarding@resend.dev via a RESEND_TEST_RECIPIENT_EMAIL secret) has been
+// removed now that the real sending domain is verified in Resend — this
+// function sends to the real selected contact unconditionally. If that
+// secret is still set in this project, it is simply ignored.
 
 import { corsHeaders } from 'npm:@supabase/supabase-js@2/cors';
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
@@ -71,6 +64,7 @@ interface JobRow {
 
 interface VisitRow {
   id: string;
+  scheduled_date: string | null;
   jobs: JobRow | JobRow[] | null;
 }
 
@@ -85,6 +79,17 @@ interface ContactRow {
   client_id: string;
   name: string;
   email: string | null;
+}
+
+/** "15 September 2026" — matches the app's own en-GB date formatting elsewhere; 'Not set' is honest rather than fabricating a date the visit doesn't have. */
+function formatReportDate(scheduledDate: string | null): string {
+  if (!scheduledDate) return 'date not set';
+  return new Date(`${scheduledDate}T00:00:00Z`).toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
 }
 
 Deno.serve(async (req: Request) => {
@@ -142,7 +147,7 @@ Deno.serve(async (req: Request) => {
       .from('reports')
       .select(
         `id, review_status,
-         visits ( id, jobs ( id, job_summary, buildings ( id, name, client_id ) ) )`,
+         visits ( id, scheduled_date, jobs ( id, job_summary, buildings ( id, name, client_id ) ) )`,
       )
       .eq('id', reportId)
       .maybeSingle();
@@ -178,37 +183,20 @@ Deno.serve(async (req: Request) => {
 
     const resendApiKey = Deno.env.get('RESEND_API_KEY');
     const resendFromEmail = Deno.env.get('RESEND_FROM_EMAIL');
-    // See this file's header comment — presence of this one secret alone
-    // switches the function into demo/test mode.
-    const testRecipientEmail = Deno.env.get('RESEND_TEST_RECIPIENT_EMAIL');
-    const isTestMode = !!testRecipientEmail;
 
-    if (!resendApiKey || (!isTestMode && !resendFromEmail)) {
+    if (!resendApiKey || !resendFromEmail) {
       return await fail(
         'Email sending is not configured yet (RESEND_API_KEY/RESEND_FROM_EMAIL are missing from this project\'s Edge Function secrets).',
         contact.email,
       );
     }
 
-    // In test mode, Resend's own onboarding@resend.dev sender can only
-    // deliver to the Resend account's own verified email — never a real
-    // client address. Overriding both from/to here is what makes that
-    // safe: the Manager still exercises the full real workflow (contact
-    // selection, validation, approval check), only the literal delivery
-    // target changes.
-    const effectiveFrom = isTestMode ? 'onboarding@resend.dev' : resendFromEmail!;
-    const effectiveTo = isTestMode ? testRecipientEmail! : contact.email;
-
-    // recipient_email records where the message actually went (the test
-    // address, while in test mode) — recipient_contact_id still records
-    // who the Manager actually selected, so history stays honest about
-    // both "who was intended" and "where it really went" either way.
     const { data: sendRow, error: insertError } = await callerClient
       .from('report_client_sends')
       .insert({
         report_id: reportId,
         recipient_contact_id: contact.id,
-        recipient_email: effectiveTo,
+        recipient_email: contact.email,
         sent_by: actor,
         status: 'sending',
       })
@@ -218,10 +206,10 @@ Deno.serve(async (req: Request) => {
     if (insertError || !sendRow) throw new Error(insertError?.message ?? 'Failed to record send attempt.');
 
     const buildingName = building.name ?? 'your property';
-    const baseSubject = job?.job_summary
-      ? `Service report — ${buildingName} (${job.job_summary})`
-      : `Service report — ${buildingName}`;
-    const subject = isTestMode ? `[TEST] ${baseSubject}` : baseSubject;
+    const dateLabel = formatReportDate(visit?.scheduled_date ?? null);
+    const subject = job?.job_summary
+      ? `Service report — ${buildingName} (${job.job_summary}) — ${dateLabel}`
+      : `Service report — ${buildingName} — ${dateLabel}`;
 
     const emailResponse = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -230,10 +218,10 @@ Deno.serve(async (req: Request) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: effectiveFrom,
-        to: effectiveTo,
+        from: resendFromEmail,
+        to: contact.email,
         subject,
-        html: `<p>Hello ${contact.name},</p><p>Please find attached the service report for ${buildingName}.</p><p>Kind regards,<br/>Kind Contractors</p>`,
+        html: `<p>Hello ${contact.name},</p><p>Please find attached the service report for ${buildingName}, dated ${dateLabel}. This report is for your records.</p><p>Kind regards,<br/>Kind Contractors</p>`,
         attachments: [{ filename: 'service-report.pdf', content: pdfBase64 }],
       }),
     });
@@ -245,8 +233,22 @@ Deno.serve(async (req: Request) => {
       return json({ status: 'failed', error: message }, 502);
     }
 
+    // Resend's success body is `{ id: "<message id>" }` — best-effort parse;
+    // a malformed/unexpected body here must never turn an already-sent
+    // email into a reported failure.
+    let resendMessageId: string | null = null;
+    try {
+      const responseJson = await emailResponse.json();
+      resendMessageId = typeof responseJson?.id === 'string' ? responseJson.id : null;
+    } catch {
+      resendMessageId = null;
+    }
+
     const now = new Date().toISOString();
-    await callerClient.from('report_client_sends').update({ status: 'sent', updated_at: now }).eq('id', sendRow.id);
+    await callerClient
+      .from('report_client_sends')
+      .update({ status: 'sent', updated_at: now, resend_message_id: resendMessageId })
+      .eq('id', sendRow.id);
     await callerClient.from('reports').update({ sent_to_client_at: now, sent_to_client_by: actor }).eq('id', reportId);
 
     // The one, canonical place 'report_sent_to_client' is ever logged — only
