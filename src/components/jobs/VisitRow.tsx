@@ -27,12 +27,13 @@ interface VisitRowProps {
 
 export default function VisitRow({ job, visit, actor, technicians }: VisitRowProps) {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<'summary' | 'complete' | 'report'>('summary');
+  const [mode, setMode] = useState<'summary' | 'complete' | 'report' | 'cancel'>('summary');
   const [price, setPrice] = useState(job.pricePerVisit != null ? String(job.pricePerVisit) : '');
   const [completedAt, setCompletedAt] = useState(nowLocalDateTime());
   const [error, setError] = useState<string | null>(null);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [dateError, setDateError] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   /**
    * Manually moves THIS visit to a specific date — the exact same
@@ -83,9 +84,23 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
     onSuccess: () => invalidateAfterVisitChange(queryClient),
   });
 
+  /**
+   * Cancels THIS visit only (status -> 'cancelled') — never touches the
+   * job, schedules, reports, photos, or invoices; a single-column update
+   * exactly like every other visit mutation here. Gated in the JSX below
+   * to due/booked visits only (mirrors the existing "Mark cancelled"
+   * button's own guard), and requires the inline confirmation step below
+   * before firing — the destination `mode` always resets afterwards so a
+   * stale confirmation panel can't linger past the mutation completing.
+   */
   const cancelledMutation = useMutation({
     mutationFn: () => markVisitCancelled(visit.id, actor),
-    onSuccess: () => invalidateAfterVisitChange(queryClient),
+    onSuccess: () => {
+      invalidateAfterVisitChange(queryClient);
+      setMode('summary');
+      setCancelError(null);
+    },
+    onError: (err) => setCancelError(err instanceof Error ? err.message : 'Failed to cancel visit.'),
   });
 
   const dateLabel = visit.scheduledDate ? new Date(visit.scheduledDate).toLocaleDateString('en-GB') : 'No date set';
@@ -174,12 +189,40 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
             Mark missed
           </button>
           <button
-            onClick={() => cancelledMutation.mutate()}
-            disabled={cancelledMutation.isPending}
+            onClick={() => setMode('cancel')}
             className="cursor-pointer text-[11px] text-neutral-500 hover:underline"
           >
-            Mark cancelled
+            Cancel this visit
           </button>
+        </div>
+      )}
+
+      {mode === 'cancel' && (
+        <div className="mt-2 flex flex-col gap-1.5 border border-neutral-300 bg-neutral-100 p-2.5">
+          <div className="text-[11.5px] leading-relaxed text-ink">
+            Cancel the visit on {dateLabel}? This only cancels this one visit — it does <strong>not</strong> delete
+            the job, and any other visits, reports, photos, or invoices for this job are unaffected.
+          </div>
+          {cancelError && <div className="text-[11px] text-missed-fg">{cancelError}</div>}
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => cancelledMutation.mutate()}
+              disabled={cancelledMutation.isPending}
+              className="cursor-pointer bg-missed px-2.5 py-1 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {cancelledMutation.isPending ? 'Cancelling…' : 'Yes, cancel this visit'}
+            </button>
+            <button
+              onClick={() => {
+                setMode('summary');
+                setCancelError(null);
+              }}
+              disabled={cancelledMutation.isPending}
+              className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-600 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Back
+            </button>
+          </div>
         </div>
       )}
 
