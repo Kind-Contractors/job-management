@@ -1,0 +1,21 @@
+-- Allow jobs.frequency_type to be NULL.
+--
+-- Verified against the live schema before writing this: frequency_type is
+-- currently NOT NULL with no default, and no CHECK constraint references it
+-- (confirmed via information_schema.columns and pg_constraint). This is
+-- therefore the minimum possible change -- one column, no default added, no
+-- new enum value, nothing else touched.
+--
+-- Why: live data review (docs/data-migration-plan.md, chat record
+-- 2026-08-29) found 42 otherwise-migratable jobs with no defensible
+-- frequency_type value -- 39 with a genuinely ambiguous or out-of-range raw
+-- frequency (e.g. "Six-Weekly", "BI-Monthly", "Four-Monthly", "Two visits
+-- per week", "5x per week", "Irregular", "Quarterly (ask)") and 3 with no
+-- frequency recorded at all (e.g. Bentley Priory). None of these values map
+-- confidently onto the existing 8-value job_frequency_type enum, and no
+-- explicit business decision authorizes guessing one. frequency_raw is
+-- untouched and keeps the original text in every case.
+--
+-- THIS FILE HAS NOT BEEN APPLIED.
+
+ALTER TABLE public.jobs ALTER COLUMN frequency_type DROP NOT NULL;
