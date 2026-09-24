@@ -6,3 +6,14 @@ dist-ssr
 
 .vscode/*
 !.vscode/settings.json
+
+# supabase/production-only-migrations/ holds SQL already applied to
+# production exactly once. Most of it is real customer/business data
+# (client names, addresses, contacts, job records) recovered from
+# production's own supabase_migrations.schema_migrations for historical
+# reference only — never git-committed, never replayed anywhere.
+# Regenerate on demand straight from production if ever genuinely needed
+# (see supabase/migrations/MIGRATION_README.md for the exact method) —
+# do not treat a local copy as the source of truth.
+supabase/production-only-migrations/*
+!supabase/production-only-migrations/20260911173353_restrict_staging_tables_to_service_role.sql
