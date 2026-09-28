@@ -97,6 +97,7 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
   const [returnError, setReturnError] = useState<string | null>(null);
   const [showReturnForm, setShowReturnForm] = useState(false);
   const [editWork, setEditWork] = useState<string | null>(null);
+  const [editIssues, setEditIssues] = useState<string | null>(null);
   const [editNotes, setEditNotes] = useState<string | null>(null);
 
   const { data: report } = useQuery({
@@ -111,10 +112,16 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
   };
 
   const saveEditsMutation = useMutation({
-    mutationFn: () => updateReport(reportId, { workCarriedOut: editWork ?? undefined, technicianNotes: editNotes ?? undefined }),
+    mutationFn: () =>
+      updateReport(reportId, {
+        workCarriedOut: editWork ?? undefined,
+        issues: editIssues ?? undefined,
+        technicianNotes: editNotes ?? undefined,
+      }),
     onSuccess: () => {
       invalidate();
       setEditWork(null);
+      setEditIssues(null);
       setEditNotes(null);
     },
   });
@@ -176,7 +183,16 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
             />
           </label>
           <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-            Notes
+            Notes / Issues
+            <textarea
+              value={editIssues ?? report.issues ?? ''}
+              onChange={(e) => setEditIssues(e.target.value)}
+              rows={2}
+              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
+            Optional notes
             <textarea
               value={editNotes ?? report.technicianNotes ?? ''}
               onChange={(e) => setEditNotes(e.target.value)}
@@ -184,7 +200,7 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
               className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
             />
           </label>
-          {(editWork !== null || editNotes !== null) && (
+          {(editWork !== null || editIssues !== null || editNotes !== null) && (
             <button
               onClick={() => saveEditsMutation.mutate()}
               disabled={saveEditsMutation.isPending}
