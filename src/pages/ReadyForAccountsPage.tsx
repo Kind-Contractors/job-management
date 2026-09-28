@@ -83,7 +83,9 @@ export default function ReadyForAccountsPage() {
         if (isVisitReadyForAccounts(visit) || visit.invoiceId) list.push({ job, visit });
       }
     }
-    return list.sort((a, b) => (a.visit.scheduledDate ?? '').localeCompare(b.visit.scheduledDate ?? ''));
+    // Most recent first — was oldest-first ascending; only the compare
+    // operands are swapped, everything else about this list is unchanged.
+    return list.sort((a, b) => (b.visit.scheduledDate ?? '').localeCompare(a.visit.scheduledDate ?? ''));
   }, [jobRows]);
 
   const selected = rows.find((r) => r.visit.id === selectedVisitId);
