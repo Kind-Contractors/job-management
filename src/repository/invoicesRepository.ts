@@ -189,10 +189,15 @@ export interface SendInvoiceResult {
  * contact if needed, creates the invoice AUTHORISED, and emails it, all in
  * one manager action (per Luke's explicit requirement — never a separate
  * "now go find it in Xero and send it" step).
+ *
+ * `contactId` (a local `contacts.id`) is the recipient the manager selected
+ * — required for a fresh send; omit when retrying an invoice that already
+ * has a Xero invoice (its Xero Contact is already fixed, so the Edge
+ * Function ignores contactId for that case regardless).
  */
-export async function sendInvoice(invoiceId: string): Promise<SendInvoiceResult> {
+export async function sendInvoice(invoiceId: string, contactId?: string): Promise<SendInvoiceResult> {
   const { data, error } = await supabase.functions.invoke<SendInvoiceResult>('xero-create-invoice', {
-    body: { invoiceId },
+    body: { invoiceId, contactId },
   });
   if (error) throw new Error(error.message);
   if (!data) throw new Error('No response from xero-create-invoice.');

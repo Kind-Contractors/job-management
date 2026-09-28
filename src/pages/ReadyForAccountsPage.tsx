@@ -327,7 +327,12 @@ export default function ReadyForAccountsPage() {
             </div>
 
             {openInvoiceId ? (
-              <InvoiceEditor invoiceId={openInvoiceId} onClose={() => setOpenInvoiceId(null)} />
+              <InvoiceEditor
+                invoiceId={openInvoiceId}
+                onClose={() => setOpenInvoiceId(null)}
+                clientId={selected.job.clientId}
+                clientContacts={selected.job.clientContacts}
+              />
             ) : selected.visit.invoiceId ? (
               <div className="mt-3 border border-neutral-300 bg-white p-3">
                 <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">Invoice</div>

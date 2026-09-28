@@ -1,14 +1,28 @@
-// Creates and sends a Xero sales invoice for an existing local draft
-// invoice — the only place this app ever writes to Xero. POST only,
-// manager-gated (see ../_shared/auth.ts), body: { invoiceId: string }.
+// Creates OR updates and sends a Xero sales invoice for an existing local
+// draft invoice — the only place this app ever writes to Xero. POST only,
+// manager-gated (see ../_shared/auth.ts), body:
+// { invoiceId: string; contactId?: string }. contactId is the LOCAL
+// contacts.id the manager selected as this invoice's recipient — always
+// honoured, whether this is the first send or a subsequent send/retry of
+// an invoice Xero already has (falls back to that invoice's currently-
+// assigned Xero Contact only if contactId is omitted entirely).
+//
+// A Send action always reflects whatever is CURRENTLY saved on the local
+// invoice row at the moment this runs (description/works_order_number/
+// due_date/line items) — the frontend persists the editor's current state
+// before ever calling this function (see invoicesRepository.sendInvoice's
+// caller), so this never needs to guess between "current" and "saved".
 //
 // Never creates a second Xero invoice for the same draft on retry: the
 // draft is atomically claimed (status draft/failed -> sending) before any
-// Xero call, and the Idempotency-Key sent to Xero is derived from the
-// actual request content (see ../_shared/xeroClient.ts's
+// Xero call, and once a xero_invoice_id already exists, every subsequent
+// Send UPDATES that exact Xero invoice (POST /Invoices/{InvoiceID} — see
+// createOrUpdateAuthorisedInvoice in xeroClient.ts) rather than creating a
+// new one. The Idempotency-Key sent to Xero is derived from the actual
+// request content (see ../_shared/xeroClient.ts's
 // computeInvoiceIdempotencyKey) — stable across a retry of an unchanged
-// request (so a retry after a timeout returns Xero's original invoice
-// instead of creating a new one), but different whenever the request
+// request (so a retry after a timeout returns Xero's original result
+// instead of creating a duplicate), but different whenever the request
 // genuinely changes (e.g. a field is fixed after a 400), since Xero
 // rejects reusing a key against a different body.
 //
@@ -39,7 +53,7 @@ import { corsHeaders } from 'npm:@supabase/supabase-js@2/cors';
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import { assertManager, UnauthorizedError } from '../_shared/auth.ts';
 import {
-  createAuthorisedInvoice,
+  createOrUpdateAuthorisedInvoice,
   createContact,
   emailInvoice,
   find20PercentSalesTaxRate,
@@ -79,11 +93,17 @@ interface InvoiceRow {
       clients: {
         id: string;
         company_name: string;
-        xero_contact_id: string | null;
-        contacts: { email: string | null; is_accounts_contact: boolean }[] | null;
       } | null;
     } | null;
   } | null;
+}
+
+interface ContactRow {
+  id: string;
+  client_id: string;
+  name: string;
+  email: string | null;
+  xero_contact_id: string | null;
 }
 
 function one<T>(value: T | T[] | null | undefined): T | null {
@@ -116,6 +136,69 @@ async function updateInvoiceRow(
   if (!data) {
     throw new Error(`${contextMessage}: the local invoice record no longer exists (it may have been discarded while this was in progress).`);
   }
+}
+
+/**
+ * Resolves (and, if needed, creates) the Xero Contact for one specific
+ * LOCAL contact — never the client as a whole — so an invoice's Xero
+ * Contact, and therefore Xero's own automatic invoice email, targets
+ * exactly the person the manager selected.
+ *
+ * `contact.xero_contact_id` is authoritative once set: reused directly,
+ * never re-searched. Only a contact with no Xero Contact yet reaches the
+ * search/create step below.
+ *
+ * The search/create name is deliberately qualified as
+ * "<contact name> (<client company name>)", NOT the bare contact name.
+ * Xero's contact search matches by exact Name across the WHOLE connected
+ * organisation, with no per-client scoping of its own — two different
+ * local clients each having a contact named e.g. "Jane Smith" would
+ * otherwise resolve to (and forever after reuse) the SAME Xero Contact,
+ * silently sending one client's invoices to the other's Jane Smith.
+ * Qualifying the name with the client's own company name keeps the
+ * existing search-then-create shape (still guards against creating a
+ * duplicate Xero contact if a previous attempt created one but failed to
+ * persist the id locally) while making that specific collision
+ * effectively impossible — the only residual case (two clients sharing
+ * both an identical company name AND an identically-named contact) is
+ * negligible for this organisation's real client roster.
+ */
+async function resolveXeroContactId(
+  client: SupabaseClient,
+  accessToken: string,
+  contact: ContactRow,
+  clientCompanyName: string,
+): Promise<string> {
+  if (contact.xero_contact_id) return contact.xero_contact_id;
+
+  const qualifiedName = `${contact.name} (${clientCompanyName})`;
+  const existing = await findContactByName(accessToken, qualifiedName);
+  const xeroContactId = existing ? existing.ContactID : (await createContact(accessToken, qualifiedName, contact.email)).ContactID;
+
+  const { error } = await client.from('contacts').update({ xero_contact_id: xeroContactId }).eq('id', contact.id);
+  if (error) throw new Error(`Resolved Xero contact but failed to save it on the contact: ${error.message}`);
+
+  return xeroContactId;
+}
+
+/**
+ * Fetches the given contact by id and verifies it genuinely belongs to
+ * this invoice's client — never trusts the request body alone for that,
+ * same defensive pattern as send-client-report's contact/client check.
+ */
+async function loadInvoiceRecipientContact(client: SupabaseClient, contactId: string, expectedClientId: string): Promise<ContactRow> {
+  const { data, error } = await client
+    .from('contacts')
+    .select('id, client_id, name, email, xero_contact_id')
+    .eq('id', contactId)
+    .maybeSingle();
+
+  if (error) throw new Error(`Failed to load the selected recipient: ${error.message}`);
+  const contact = data as ContactRow | null;
+  if (!contact || contact.client_id !== expectedClientId) {
+    throw new Error('The selected recipient does not belong to this invoice\'s client.');
+  }
+  return contact;
 }
 
 /**
@@ -182,10 +265,17 @@ Deno.serve(async (req: Request) => {
   }
 
   let invoiceId: string;
+  let contactId: string | undefined;
   try {
     const body = await req.json();
     invoiceId = body.invoiceId;
     if (!invoiceId || typeof invoiceId !== 'string') throw new Error('Missing invoiceId.');
+    // Optional in the body's shape, but effectively always required in
+    // practice — the frontend always supplies it. If genuinely omitted and
+    // this invoice already has a Xero invoice, the currently-assigned Xero
+    // Contact is reused as a fallback rather than failing outright.
+    if (body.contactId !== undefined && typeof body.contactId !== 'string') throw new Error('contactId must be a string.');
+    contactId = body.contactId || undefined;
   } catch (err) {
     return json({ error: `Invalid request body: ${errorMessage(err)}` }, 400);
   }
@@ -212,7 +302,7 @@ Deno.serve(async (req: Request) => {
       .select(
         `id, description, works_order_number, due_date, xero_invoice_id, xero_invoice_number,
          invoice_line_items ( id, description, quantity, unit_amount ),
-         jobs ( id, buildings ( client_id, clients ( id, company_name, xero_contact_id, contacts ( email, is_accounts_contact ) ) ) )`,
+         jobs ( id, buildings ( client_id, clients ( id, company_name ) ) )`,
       )
       .eq('id', invoiceId)
       .single();
@@ -224,63 +314,44 @@ Deno.serve(async (req: Request) => {
 
     const accessToken = await getXeroAccessToken();
 
-    // Resolved before the retry branch below (not just the normal-creation
-    // path) — a retry needs client.xero_contact_id too, to verify its email
-    // before calling /Email again.
     const job = one(row.jobs);
     const building = job ? one(job.buildings) : null;
     const client = building ? one(building.clients) : null;
     if (!client) throw new Error('Could not resolve the client for this invoice.');
 
-    // A Xero invoice already exists for this row (a previous attempt got
-    // past POST /Invoices but failed on the email step, e.g. the contact
-    // had no email address) — never create a second one. Skip contact/
-    // account/VAT resolution and createAuthorisedInvoice entirely; just
-    // retry emailing the invoice Xero already has.
-    if (row.xero_invoice_id) {
-      if (!client.xero_contact_id) {
+    // Resolve the Xero Contact for the SPECIFIC recipient the manager
+    // currently has selected — on a first send AND on a subsequent send/
+    // retry alike, so a reselected recipient is always respected, never
+    // silently ignored in favour of whatever Xero already has on file.
+    // contactId is a local contacts.id, verified to actually belong to
+    // this invoice's client before it's ever passed to Xero. Falls back to
+    // the invoice's already-assigned Xero Contact only if contactId was
+    // omitted entirely (defensive — the UI always supplies one).
+    let xeroContactId: string;
+    if (contactId) {
+      const recipientContact = await loadInvoiceRecipientContact(callerClient, contactId, client.id);
+      xeroContactId = await resolveXeroContactId(callerClient, accessToken, recipientContact, client.company_name);
+    } else if (row.xero_invoice_id) {
+      const existingInvoice = await xeroGet<{ Invoices: { Contact?: { ContactID: string } }[] }>(
+        accessToken,
+        `/Invoices/${row.xero_invoice_id}`,
+      );
+      const existingContactId = existingInvoice.Invoices?.[0]?.Contact?.ContactID;
+      if (!existingContactId) {
         throw new Error(
-          "This invoice already has a Xero invoice, but this client's Xero contact could not be re-resolved locally to check its email — check the contact directly in Xero.",
+          "This invoice already has a Xero invoice, but its Xero Contact could not be read back from Xero — check the invoice directly in Xero.",
         );
       }
-      await assertXeroContactHasEmail(accessToken, client.xero_contact_id);
-      await emailInvoiceOrExplain(accessToken, row.xero_invoice_id);
-
-      await updateInvoiceRow(
-        callerClient,
-        invoiceId,
-        { status: 'sent', sent_at: new Date().toISOString() },
-        'Invoice sent but failed to record it locally',
-      );
-
-      return json({ status: 'sent', xeroInvoiceId: row.xero_invoice_id, xeroInvoiceNumber: row.xero_invoice_number }, 200);
-    }
-
-    // Resolve the Xero contact — reuse if already matched/created for this
-    // client, otherwise search by name, otherwise create one. Persisted
-    // immediately on the client row so this never happens twice for the
-    // same client, even if a later step fails.
-    let xeroContactId = client.xero_contact_id;
-    if (!xeroContactId) {
-      const existing = await findContactByName(accessToken, client.company_name);
-      if (existing) {
-        xeroContactId = existing.ContactID;
-      } else {
-        const accountsContact = (client.contacts ?? []).find((c) => c.is_accounts_contact && c.email);
-        const anyContactEmail = (client.contacts ?? []).find((c) => c.email)?.email ?? null;
-        const email = accountsContact?.email ?? anyContactEmail;
-        const created = await createContact(accessToken, client.company_name, email);
-        xeroContactId = created.ContactID;
-      }
-      const { error: contactSaveError } = await callerClient
-        .from('clients')
-        .update({ xero_contact_id: xeroContactId })
-        .eq('id', client.id);
-      if (contactSaveError) throw new Error(`Resolved Xero contact but failed to save it: ${contactSaveError.message}`);
+      xeroContactId = existingContactId;
+    } else {
+      throw new Error('Select a recipient contact before sending this invoice.');
     }
 
     // Resolve Sales AccountCode / 20% VAT TaxType live — never hardcoded,
-    // never assumed from a previous run.
+    // never assumed from a previous run. Re-resolved on every send
+    // (including an update of an already-created invoice) since it's cheap
+    // and keeps this correct even if the connected organisation's chart of
+    // accounts/tax rates changed between attempts.
     const [accountsResult, taxRatesResult] = await Promise.all([
       xeroGet<{ Accounts: XeroAccount[] }>(accessToken, '/Accounts'),
       xeroGet<{ TaxRates: XeroTaxRate[] }>(accessToken, '/TaxRates'),
@@ -303,6 +374,10 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Built from `row`, which was just fetched fresh from the database —
+    // the frontend always persists the editor's current description/
+    // works_order_number/due_date/line items before calling this function,
+    // so this reflects whatever Luke currently sees, not a stale save.
     const lineItems: XeroInvoiceLineItemInput[] = row.invoice_line_items.map((li) => ({
       Description: li.description,
       Quantity: li.quantity,
@@ -311,24 +386,33 @@ Deno.serve(async (req: Request) => {
       TaxType: resolvedTaxRate.taxRate.taxType,
     }));
 
-    const createdInvoice = await createAuthorisedInvoice(accessToken, {
-      contactId: xeroContactId,
-      reference: row.works_order_number,
-      dueDate: row.due_date,
-      lineItems,
-    });
+    // Creates a new Xero invoice when row.xero_invoice_id is absent, or
+    // UPDATES that exact existing one (POST /Invoices/{InvoiceID} — never
+    // the bare /Invoices collection endpoint, which would create a second
+    // invoice) when it's already present. Either way, the result reflects
+    // the current contact/line items/dates/reference above.
+    const createdOrUpdatedInvoice = await createOrUpdateAuthorisedInvoice(
+      accessToken,
+      {
+        contactId: xeroContactId,
+        reference: row.works_order_number,
+        dueDate: row.due_date,
+        lineItems,
+      },
+      row.xero_invoice_id ?? undefined,
+    );
 
     // Persisted before attempting the email step — if emailing fails, a
-    // retry must not recreate the invoice, only retry the send.
+    // retry must not create/duplicate anything, only retry the send.
     await updateInvoiceRow(
       callerClient,
       invoiceId,
-      { xero_invoice_id: createdInvoice.InvoiceID, xero_invoice_number: createdInvoice.InvoiceNumber },
-      `Invoice created in Xero (${createdInvoice.InvoiceNumber}) but failed to save locally`,
+      { xero_invoice_id: createdOrUpdatedInvoice.InvoiceID, xero_invoice_number: createdOrUpdatedInvoice.InvoiceNumber },
+      `Invoice ${row.xero_invoice_id ? 'updated' : 'created'} in Xero (${createdOrUpdatedInvoice.InvoiceNumber}) but failed to save locally`,
     );
 
     await assertXeroContactHasEmail(accessToken, xeroContactId);
-    await emailInvoiceOrExplain(accessToken, createdInvoice.InvoiceID);
+    await emailInvoiceOrExplain(accessToken, createdOrUpdatedInvoice.InvoiceID);
 
     await updateInvoiceRow(
       callerClient,
@@ -337,7 +421,10 @@ Deno.serve(async (req: Request) => {
       'Invoice sent but failed to record it locally',
     );
 
-    return json({ status: 'sent', xeroInvoiceId: createdInvoice.InvoiceID, xeroInvoiceNumber: createdInvoice.InvoiceNumber }, 200);
+    return json(
+      { status: 'sent', xeroInvoiceId: createdOrUpdatedInvoice.InvoiceID, xeroInvoiceNumber: createdOrUpdatedInvoice.InvoiceNumber },
+      200,
+    );
   } catch (err) {
     const message = errorMessage(err);
     await markFailed(callerClient, invoiceId, message);

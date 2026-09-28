@@ -206,22 +206,45 @@ export async function computeInvoiceIdempotencyKey(request: XeroInvoiceRequest):
 }
 
 /**
- * Creates a sales invoice, AUTHORISED immediately (never left as DRAFT) —
- * per Luke's explicit requirement that Send both creates and sends the
- * invoice in one action, and because an invoice must be AUTHORISED before
- * it can be emailed at all. The idempotency key is always derived from
- * `input` itself (see computeInvoiceIdempotencyKey) — callers never supply
- * one, so it can't drift out of sync with the payload it's meant to guard.
+ * Creates a sales invoice AUTHORISED immediately (never left as DRAFT) —
+ * per Luke's explicit requirement that Send both creates/updates and sends
+ * the invoice in one action, and because an invoice must be AUTHORISED
+ * before it can be emailed at all. The idempotency key is always derived
+ * from `input` itself (see computeInvoiceIdempotencyKey) — callers never
+ * supply one, so it can't drift out of sync with the payload it's meant to
+ * guard.
+ *
+ * `existingInvoiceId`, when given, UPDATES that specific Xero invoice
+ * instead of creating a new one — this app's own Send action can be
+ * clicked again on an invoice it already created (e.g. the email step
+ * failed the first time, or Luke changed the amount/recipient before
+ * retrying), and must never produce a second Xero invoice for the same
+ * local draft.
+ *
+ * Verified directly against the official xero-node SDK's own source
+ * (which exposes a distinct `updateInvoice(tenantId, invoiceId, ...)`
+ * method, separate from bulk `createInvoices`/`updateOrCreateInvoices`)
+ * rather than assumed: Xero's update path is `POST /Invoices/{InvoiceID}`
+ * — the ID goes in the URL, not merely included in the body of a POST to
+ * the bare `/Invoices` collection endpoint. Posting to the bare endpoint
+ * always creates; only the ID-scoped path updates the specific invoice —
+ * getting this wrong is exactly what would risk a duplicate invoice.
  */
-export async function createAuthorisedInvoice(accessToken: string, input: XeroInvoiceRequest): Promise<XeroCreatedInvoice> {
+export async function createOrUpdateAuthorisedInvoice(
+  accessToken: string,
+  input: XeroInvoiceRequest,
+  existingInvoiceId?: string,
+): Promise<XeroCreatedInvoice> {
   const idempotencyKey = await computeInvoiceIdempotencyKey(input);
+  const path = existingInvoiceId ? `/Invoices/${existingInvoiceId}` : '/Invoices';
   const result = await xeroPost<{ Invoices: XeroCreatedInvoice[] }>(
     accessToken,
-    '/Invoices',
+    path,
     {
       Invoices: [
         {
           Type: 'ACCREC',
+          ...(existingInvoiceId ? { InvoiceID: existingInvoiceId } : {}),
           Contact: { ContactID: input.contactId },
           LineItems: input.lineItems,
           Status: 'AUTHORISED',
@@ -233,7 +256,7 @@ export async function createAuthorisedInvoice(accessToken: string, input: XeroIn
     idempotencyKey,
   );
   const invoice = result.Invoices?.[0];
-  if (!invoice) throw new Error('Xero did not return the created invoice.');
+  if (!invoice) throw new Error(`Xero did not return the ${existingInvoiceId ? 'updated' : 'created'} invoice.`);
   return invoice;
 }
 

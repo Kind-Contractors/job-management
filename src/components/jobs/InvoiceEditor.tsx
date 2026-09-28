@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { InvoiceLineItem } from '../../domain/types';
+import type { InvoiceLineItem, JobContactSummary } from '../../domain/types';
 import {
   discardInvoiceDraft,
   getInvoice,
@@ -8,14 +8,26 @@ import {
   updateInvoiceDraft,
   updateInvoiceLineItem,
 } from '../../repository/invoicesRepository';
+import { createContactForClient } from '../../repository/contactsRepository';
+import { resolveDisplayContact } from '../../lib/contactDisplay';
 
 function money(n: number): string {
   return `£${n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+/** Deliberately simple — good enough to catch a typo before it reaches Xero, not a full RFC 5322 validator. */
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+const ADD_NEW_CONTACT_VALUE = '__add_new__';
+
 interface InvoiceEditorProps {
   invoiceId: string;
   onClose: () => void;
+  clientId: string;
+  /** The client's contacts with a stored email — same list ContactPopover/JobsGrid already use, passed down so this never needs its own fetch. */
+  clientContacts: JobContactSummary[];
 }
 
 /**
@@ -25,7 +37,7 @@ interface InvoiceEditorProps {
  * manager-selected visits) cases identically: both are just however many
  * line items the invoice was created with.
  */
-export default function InvoiceEditor({ invoiceId, onClose }: InvoiceEditorProps) {
+export default function InvoiceEditor({ invoiceId, onClose, clientId, clientContacts }: InvoiceEditorProps) {
   const queryClient = useQueryClient();
   const { data: invoice, isLoading } = useQuery({ queryKey: ['invoice', invoiceId], queryFn: () => getInvoice(invoiceId) });
 
@@ -36,7 +48,17 @@ export default function InvoiceEditor({ invoiceId, onClose }: InvoiceEditorProps
   const [error, setError] = useState<string | null>(null);
   const [sendResult, setSendResult] = useState<{ ok: boolean; message: string } | null>(null);
 
-  // Seed local editable state once the invoice loads (or reloads after a save/send).
+  // Only a contact with a stored email is a valid invoice recipient.
+  const emailableContacts = clientContacts.filter((c) => !!c.email);
+
+  // '' = nothing chosen yet; ADD_NEW_CONTACT_VALUE = the "+ Add another
+  // email address" option is showing its own inputs below; anything else
+  // is an existing contact's id.
+  const [selectedContactId, setSelectedContactId] = useState<string>('');
+  const [newContactName, setNewContactName] = useState('');
+  const [newContactEmail, setNewContactEmail] = useState('');
+
+  // Seed local editable state once the invoice loads (or reloads after a send).
   useEffect(() => {
     if (!invoice) return;
     setDescription(invoice.description ?? '');
@@ -44,6 +66,24 @@ export default function InvoiceEditor({ invoiceId, onClose }: InvoiceEditorProps
     setDueDate(invoice.dueDate);
     setLines(invoice.lineItems);
   }, [invoice]);
+
+  // Recipient selection is per-invoice — switching to a different invoice
+  // (InvoiceEditor is reused across opens, not remounted) must not carry
+  // over a previously selected/typed recipient.
+  useEffect(() => {
+    setSelectedContactId('');
+    setNewContactName('');
+    setNewContactEmail('');
+  }, [invoiceId]);
+
+  // Default the recipient selector to a sensible single/primary contact
+  // when there's an unambiguous one — same resolution rule JobsGrid's
+  // Contact column and ContactPopover's default-open contact already use.
+  useEffect(() => {
+    if (selectedContactId) return;
+    const display = resolveDisplayContact(emailableContacts);
+    if (display.kind === 'single' || display.kind === 'primary') setSelectedContactId(display.contact.id);
+  }, [clientContacts, selectedContactId]);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
@@ -58,21 +98,17 @@ export default function InvoiceEditor({ invoiceId, onClose }: InvoiceEditorProps
   // second one. Discard is only ever safe when no Xero invoice exists yet.
   const canDiscard = editable && !invoice?.xeroInvoiceId;
 
-  const saveMutation = useMutation({
-    mutationFn: async () => {
-      await updateInvoiceDraft(invoiceId, { description: description || null, worksOrderNumber: worksOrderNumber || null, dueDate });
-      await Promise.all(
-        lines.map((line) =>
-          updateInvoiceLineItem(line.id, { description: line.description, quantity: line.quantity, unitAmount: line.unitAmount }),
-        ),
-      );
-    },
-    onSuccess: () => {
-      invalidate();
-      setError(null);
-    },
-    onError: (err) => setError(err instanceof Error ? err.message : 'Failed to save changes.'),
-  });
+  // No separate "Save Changes" step — Send invoice always persists the
+  // entire current editor state itself, first, before doing anything else.
+  // Luke edits freely and Send is the only action he ever needs to take.
+  const persistCurrentDraft = async () => {
+    await updateInvoiceDraft(invoiceId, { description: description || null, worksOrderNumber: worksOrderNumber || null, dueDate });
+    await Promise.all(
+      lines.map((line) =>
+        updateInvoiceLineItem(line.id, { description: line.description, quantity: line.quantity, unitAmount: line.unitAmount }),
+      ),
+    );
+  };
 
   const discardMutation = useMutation({
     mutationFn: () => discardInvoiceDraft(invoiceId),
@@ -83,8 +119,33 @@ export default function InvoiceEditor({ invoiceId, onClose }: InvoiceEditorProps
     onError: (err) => setError(err instanceof Error ? err.message : 'Failed to discard invoice.'),
   });
 
+  const addingNewContact = selectedContactId === ADD_NEW_CONTACT_VALUE;
+  const newContactValid = newContactName.trim().length > 0 && isValidEmail(newContactEmail);
+  // A selected recipient is required on every send — first send or a
+  // later retry alike; xero-create-invoice now honours it either way.
+  const recipientValid = addingNewContact ? newContactValid : !!selectedContactId;
+
   const sendMutation = useMutation({
-    mutationFn: () => sendInvoice(invoiceId),
+    mutationFn: async () => {
+      // Persist current editor state FIRST — xero-create-invoice reads the
+      // invoice straight from the database, so whatever's on screen must
+      // already be saved before it runs, every time.
+      await persistCurrentDraft();
+
+      let contactId: string;
+      if (addingNewContact) {
+        const created = await createContactForClient(clientId, {
+          name: newContactName.trim(),
+          email: newContactEmail.trim(),
+          phoneNumber: null,
+          isPrimary: false,
+        });
+        contactId = created.id;
+      } else {
+        contactId = selectedContactId;
+      }
+      return sendInvoice(invoiceId, contactId);
+    },
     onSuccess: (result) => {
       invalidate();
       if (result.status === 'sent') {
@@ -96,10 +157,10 @@ export default function InvoiceEditor({ invoiceId, onClose }: InvoiceEditorProps
     onError: (err) => setSendResult({ ok: false, message: err instanceof Error ? err.message : 'Failed to send.' }),
   });
 
-  // Save/Send/Discard are mutually exclusive — while any one is running, the
-  // other two must not be startable (a Discard landing mid-Send could leave
-  // a real Xero invoice with no local record at all).
-  const anyMutationPending = saveMutation.isPending || sendMutation.isPending || discardMutation.isPending;
+  // Send/Discard are mutually exclusive — while one is running, the other
+  // must not be startable (a Discard landing mid-Send could leave a real
+  // Xero invoice with no local record at all).
+  const anyMutationPending = sendMutation.isPending || discardMutation.isPending;
 
   if (isLoading || !invoice) {
     return (
@@ -131,7 +192,10 @@ export default function InvoiceEditor({ invoiceId, onClose }: InvoiceEditorProps
           <div className="font-semibold">
             Xero invoice {invoice.xeroInvoiceNumber} was created, but sending it failed.
           </div>
-          <div className="mt-1 text-neutral-600">Sending "Send" again will retry emailing this same invoice — it will not create another one.</div>
+          <div className="mt-1 text-neutral-600">
+            Clicking "Send invoice" again will update this same Xero invoice with any changes below and retry emailing it — it will not create
+            another one.
+          </div>
           {invoice.lastError && <div className="mt-1">{invoice.lastError}</div>}
         </div>
       )}
@@ -246,6 +310,62 @@ export default function InvoiceEditor({ invoiceId, onClose }: InvoiceEditorProps
           </div>
         </div>
 
+        {editable && (
+          <div className="flex flex-col gap-1.5 border-t border-divider pt-2">
+            <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
+              Send invoice to
+              <select
+                value={selectedContactId}
+                onChange={(e) => setSelectedContactId(e.target.value)}
+                disabled={anyMutationPending}
+                className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-100 disabled:text-neutral-500"
+              >
+                <option value="" disabled>
+                  Choose a recipient…
+                </option>
+                {emailableContacts.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} — {c.email}
+                  </option>
+                ))}
+                <option value={ADD_NEW_CONTACT_VALUE}>+ Add another email address</option>
+              </select>
+            </label>
+
+            {addingNewContact && (
+              <div className="flex gap-1.5">
+                <label className="flex flex-1 flex-col gap-1 text-[11px] text-neutral-600">
+                  Name
+                  <input
+                    value={newContactName}
+                    onChange={(e) => setNewContactName(e.target.value)}
+                    disabled={anyMutationPending}
+                    className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-100 disabled:text-neutral-500"
+                  />
+                </label>
+                <label className="flex flex-1 flex-col gap-1 text-[11px] text-neutral-600">
+                  Email
+                  <input
+                    type="email"
+                    value={newContactEmail}
+                    onChange={(e) => setNewContactEmail(e.target.value)}
+                    disabled={anyMutationPending}
+                    className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-100 disabled:text-neutral-500"
+                  />
+                </label>
+              </div>
+            )}
+            {addingNewContact && newContactEmail.trim() && !isValidEmail(newContactEmail) && (
+              <div className="text-[11px] text-missed-fg">Enter a valid email address.</div>
+            )}
+            <div className="text-[10px] text-neutral-400">
+              {addingNewContact
+                ? 'Saved to this client\'s contacts, then used as this invoice\'s Xero recipient.'
+                : 'Xero creates and emails this invoice to the selected contact automatically.'}
+            </div>
+          </div>
+        )}
+
         {error && <div className="text-[11.5px] text-missed-fg">{error}</div>}
         {sendResult && (
           <div className={`text-[11.5px] ${sendResult.ok ? 'text-teal-700' : 'text-missed-fg'}`}>{sendResult.message}</div>
@@ -255,21 +375,14 @@ export default function InvoiceEditor({ invoiceId, onClose }: InvoiceEditorProps
           {editable && (
             <>
               <button
-                onClick={() => saveMutation.mutate()}
-                disabled={anyMutationPending}
-                className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-700 disabled:opacity-60"
-              >
-                {saveMutation.isPending ? 'Saving…' : 'Save changes'}
-              </button>
-              <button
                 onClick={() => {
                   setSendResult(null);
                   sendMutation.mutate();
                 }}
-                disabled={anyMutationPending || lines.length === 0}
+                disabled={anyMutationPending || lines.length === 0 || !recipientValid}
                 className="cursor-pointer bg-teal px-2.5 py-1 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {sendMutation.isPending ? 'Sending…' : 'Send'}
+                {sendMutation.isPending ? 'Sending…' : 'Send invoice'}
               </button>
               <button
                 onClick={() => discardMutation.mutate()}
