@@ -105,7 +105,14 @@ export async function xeroPost<T>(
     throw new Error(`Xero API request to ${path} failed (HTTP ${response.status}): ${responseBody}`);
   }
 
-  return (await response.json()) as T;
+  // Some successful Xero responses (e.g. POST /Invoices/{id}/Email) return an
+  // empty body — response.json() throws "Unexpected end of JSON input" on
+  // that, even though the request genuinely succeeded. Callers that don't
+  // need a return value (emailInvoice) never see this; callers that do
+  // (createAuthorisedInvoice) already have their own check for a missing
+  // expected field.
+  const responseText = await response.text();
+  return (responseText ? JSON.parse(responseText) : {}) as T;
 }
 
 /** Escapes a value for use inside a Xero `where` query-string clause (e.g. `where=Name=="value"`). */
