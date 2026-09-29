@@ -16,9 +16,11 @@ import {
 import { isReportReadyForClient } from '../lib/statusPresentation';
 import { resolveDisplayContact } from '../lib/contactDisplay';
 import { buildClientReportModel, type ClientReportModel } from '../lib/clientReportModel';
-import { generateClientReportPdf } from '../lib/clientReportPdf';
+import { FOOTER_CONTACT_LINE, ISSUE_HELPER_TEXT, generateClientReportPdf, prepareClientReportPhotos, type PreparedReportPhotos } from '../lib/clientReportPdf';
+import { PHOTO_CELL_ASPECT, PHOTO_GRID_COLUMNS, photoTag, planPhotoLayout, type OrderedPhotoEntry } from '../lib/clientReportPhotoLayout';
 import type { JobContactSummary } from '../domain/types';
 import kindContractorsLogo from '../assets/kind_Contractors_logo.png';
+import kindLeaf from '../assets/kind_leaf.png';
 
 /** Strips the `data:...;base64,` prefix a data URL carries — the email provider wants raw base64 content, not a data URL. */
 function blobToBase64(blob: Blob): Promise<string> {
@@ -93,6 +95,39 @@ function SendConfirmDialog({ model, contact, isSending, onCancel, onConfirm }: S
   );
 }
 
+interface SkippedPhotosDialogProps {
+  count: number;
+  action: 'download' | 'send';
+  onCancel: () => void;
+  onContinue: () => void;
+}
+
+/** Shown before Download/Send when some photos couldn't be read — the report is never sent or downloaded until the manager explicitly chooses to continue without them. */
+function SkippedPhotosDialog({ count, action, onCancel, onContinue }: SkippedPhotosDialogProps) {
+  const noun = count === 1 ? 'photo' : 'photos';
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/30" onClick={onCancel}>
+      <div onClick={(e) => e.stopPropagation()} className="w-[420px] border border-missed bg-white p-4">
+        <div className="font-heading text-[10px] font-semibold tracking-[0.16em] text-missed-fg uppercase">
+          {count} {noun} can't be included
+        </div>
+        <div className="mt-2 text-[12.5px] text-ink">
+          {count} {noun} couldn't be read, so {count === 1 ? 'it' : 'they'} will be missing from this report. You can{' '}
+          {action === 'send' ? 'send' : 'download'} the report without {count === 1 ? 'it' : 'them'}, or cancel and try again.
+        </div>
+        <div className="mt-3.5 flex gap-1.5">
+          <button onClick={onContinue} className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white">
+            {action === 'send' ? 'Send without them' : 'Download without them'}
+          </button>
+          <button onClick={onCancel} className="cursor-pointer border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface ClientReportRow {
   job: JobRow;
   visit: JobVisitSummary;
@@ -101,98 +136,144 @@ interface ClientReportRow {
 const PHASE_LABEL: Record<ReportPhoto['phase'], string> = { before: 'Before', during: 'During', after: 'After' };
 
 /**
- * Styled to read as a physical page sitting on the workspace (letterhead
- * accent bar, shadow, generous margin) rather than another app panel — the
- * surrounding wrapper in the main return gives it a soft backdrop to sit
- * on. Purely presentational: the content model/fields are unchanged from
- * before, so this still shows exactly what generateClientReportPdf() puts
- * in the real attachment, nothing more — the branding below (logo, teal
- * section markers, spec-status banner, footer) deliberately mirrors that
- * PDF's own layout so the preview stops understating what's actually sent.
+ * Styled to read as a physical page sitting on the workspace (shadow,
+ * generous margin) rather than another app panel — the surrounding wrapper in
+ * the main return gives it a soft backdrop to sit on. Purely presentational:
+ * the content model/fields are unchanged, so this still shows exactly what
+ * generateClientReportPdf() puts in the real attachment, nothing more — and
+ * its layout (dark teal header with the leaf watermark and logo, facts strip,
+ * status card, underlined section headings, issues call-out, and a large
+ * Before/After pair followed by a photo grid) deliberately mirrors that PDF's
+ * page 1 so the preview does not misrepresent what is sent.
  */
 function ClientReportPreview({ model }: { model: ClientReportModel }) {
   const sectionHeading = (label: string) => (
-    <div className="flex items-center gap-1.5 font-heading text-[10px] font-semibold tracking-[0.1em] text-teal-700 uppercase">
-      <span className="h-2 w-2 flex-none bg-teal" />
-      {label}
+    <div className="inline-block border-b-[3px] border-green pb-1 font-heading text-[15px] leading-none font-semibold text-ink">{label}</div>
+  );
+
+  const facts: [string, string][] = [
+    ['Visit date', model.visitDateLabel],
+    ['Service', model.jobSummary],
+  ];
+  if (model.photos.length > 0) facts.push(['Photos', `${model.photos.length} ${model.photos.length === 1 ? 'photo' : 'photos'}`]);
+
+  const plan = planPhotoLayout(model.photos);
+
+  const photoFrame = (entry: OrderedPhotoEntry<ClientReportModel['photos'][number]>, size: 'large' | 'small') => (
+    <div
+      key={entry.photo.id}
+      className={`relative overflow-hidden bg-neutral-200 ${size === 'large' ? 'rounded-xl' : 'rounded-md'}`}
+      style={{ aspectRatio: PHOTO_CELL_ASPECT }}
+    >
+      {/* "contain" on a soft mat — the photo is never cropped or stretched. */}
+      <img src={entry.photo.url} alt={photoTag(entry)} className="h-full w-full object-contain" />
+      <span
+        className={`absolute rounded-full font-heading font-semibold text-teal ${
+          size === 'large' ? 'top-2.5 left-2.5 px-3 py-1 text-[11px]' : 'top-1.5 left-1.5 px-2 py-0.5 text-[9px]'
+        } ${entry.phase === 'after' ? 'bg-green' : entry.phase === 'during' ? 'bg-green-light' : 'bg-white'}`}
+      >
+        {photoTag(entry)}
+      </span>
     </div>
   );
 
   return (
-    <div className="mx-auto max-w-[380px] border border-neutral-200 bg-white shadow-md">
-      <div className="h-1.5 bg-teal" />
-      <div className="p-6">
-        <div className="font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">
-          Client-facing preview
+    <div className="mx-auto max-w-[380px]">
+      <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">Client-facing preview</div>
+      <div className="overflow-hidden border border-neutral-200 bg-white shadow-md">
+        {/* The logo artwork is pale green lettering — it needs the dark header to be visible at all. */}
+        <div className="relative overflow-hidden bg-teal px-5 pt-4 pb-5">
+          <img src={kindLeaf} alt="" aria-hidden className="pointer-events-none absolute -top-6 -right-6 h-[210px] w-auto opacity-10" />
+          <div className="relative flex items-start justify-between gap-2">
+            <img src={kindContractorsLogo} alt="Kind Contractors" className="h-12 w-auto object-contain" />
+            <div className="pt-1 font-heading text-[12px] font-semibold text-white">Service report</div>
+          </div>
+          <div className="relative mt-4 font-heading text-[11px] font-semibold text-green">{model.jobSummary}</div>
+          <h3 className="relative mt-1 font-heading text-[26px] leading-tight font-semibold text-white">{model.buildingName}</h3>
+          <div className="relative mt-1 text-[12px] text-green-light">Prepared for {model.clientName}</div>
+        </div>
+        <div className="grid bg-[#2c6257] px-5 py-3" style={{ gridTemplateColumns: `repeat(${facts.length}, minmax(0, 1fr))` }}>
+          {facts.map(([label, value], i) => (
+            <div key={label} className={i > 0 ? 'border-l border-white/25 pl-3' : ''}>
+              <div className="text-[9px] text-[#c0d9c6]">{label}</div>
+              <div className="mt-0.5 truncate text-[12px] font-semibold text-white">{value}</div>
+            </div>
+          ))}
         </div>
 
-        <div className="mt-3 flex items-center justify-between gap-2">
-          <img src={kindContractorsLogo} alt="Kind Contractors" className="h-6 w-auto object-contain" />
-          <div className="font-heading text-[9px] font-semibold tracking-[0.13em] text-teal-700 uppercase">Service report</div>
-        </div>
-        <div className="mt-2 border-t-2 border-teal" />
-
-        <div className="mt-3 border border-teal-700/15 bg-teal-100 p-3">
-          <h3 className="font-heading text-lg font-semibold text-teal-700">{model.buildingName}</h3>
-          <div className="mt-0.5 text-[12.5px] text-neutral-600">
-            {model.clientName} - {model.jobSummary}
+        <div className="p-5">
+          <div
+            className={`flex items-center gap-3 rounded-lg px-3.5 py-3 text-[13px] font-semibold ${
+              model.specMet ? 'bg-neutral-100 text-ink' : 'bg-[#fbf4e4] text-due-fg'
+            }`}
+          >
+            <span className={`flex h-8 w-8 flex-none items-center justify-center rounded-full ${model.specMet ? 'bg-green text-teal' : 'bg-[#d69228] text-white'}`}>
+              {model.specMet ? (
+                <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 8.4 6.4 11.8 13 4.6" />
+                </svg>
+              ) : (
+                <span className="text-[15px] leading-none font-bold">!</span>
+              )}
+            </span>
+            {model.specMet ? 'Specification completed as agreed.' : 'Part of the specification was not fully completed.'}
           </div>
-          <div className="mt-1.5 text-[11px] text-neutral-600">
-            <span className="font-heading font-semibold tracking-[0.08em] text-teal-700 uppercase">Visit date </span>
-            {model.visitDateLabel}
-          </div>
-        </div>
 
-        {model.workCarriedOut && (
-          <div className="mt-4">
-            {sectionHeading('Work carried out')}
-            <div className="mt-1 text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{model.workCarriedOut}</div>
-          </div>
-        )}
-
-        {model.notes && (
-          <div className="mt-4">
-            {sectionHeading('Notes')}
-            <div className="mt-1 text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{model.notes}</div>
-          </div>
-        )}
-
-        {model.issues && (
-          <div className="mt-4">
-            {sectionHeading('Issues flagged')}
-            <div className="mt-1 text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{model.issues}</div>
-          </div>
-        )}
-
-        <div
-          className={`mt-4 border-l-4 px-3 py-2 text-[12.5px] font-semibold ${
-            model.specMet ? 'border-teal-700 bg-teal-100 text-teal-700' : 'border-missed bg-missed/10 text-missed-fg'
-          }`}
-        >
-          {model.specMet ? 'Specification completed as agreed.' : 'Part of the specification was not fully completed.'}
-        </div>
-
-        {model.photos.length > 0 && (
-          <div className="mt-4 flex flex-col gap-3">
-            {(['before', 'during', 'after'] as const).map((phase) => {
-              const phasePhotos = model.photos.filter((p) => p.phase === phase);
-              if (phasePhotos.length === 0) return null;
-              return (
-                <div key={phase}>
-                  {sectionHeading(`${PHASE_LABEL[phase]} (${phasePhotos.length})`)}
-                  <div className="mt-1 flex flex-wrap gap-1.5">
-                    {phasePhotos.map((p) => (
-                      <img key={p.id} src={p.url} alt="" className="h-16 w-16 border border-neutral-300 object-cover" />
-                    ))}
-                  </div>
+          {(model.workCarriedOut || model.notes) && (
+            <div className={`mt-5 grid gap-x-5 gap-y-5 ${model.workCarriedOut && model.notes ? 'grid-cols-2' : 'grid-cols-1'}`}>
+              {model.workCarriedOut && (
+                <div>
+                  {sectionHeading('Work carried out')}
+                  <div className="mt-2.5 text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink">{model.workCarriedOut}</div>
                 </div>
-              );
-            })}
-          </div>
-        )}
+              )}
+              {model.notes && (
+                <div>
+                  {sectionHeading('Notes')}
+                  <div className="mt-2.5 text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink">{model.notes}</div>
+                </div>
+              )}
+            </div>
+          )}
 
-        <div className="mt-5 border-t border-divider pt-2 text-center font-heading text-[9px] font-semibold tracking-[0.12em] text-neutral-400 uppercase">
-          Kind Contractors
+          {model.issues && (
+            <div className="mt-5 overflow-hidden rounded-lg border-l-4 border-[#d69228] bg-[#fbf4e4] px-3.5 py-3">
+              <div className="text-[12px] font-semibold text-due-fg">Flagged for your attention</div>
+              <div className="mt-1 text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink">{model.issues}</div>
+              <div className="mt-1.5 text-[10px] text-neutral-600">{ISSUE_HELPER_TEXT}</div>
+            </div>
+          )}
+
+          {plan.hero && (
+            <div className="mt-6">
+              <div className="flex items-end justify-between gap-2">
+                {sectionHeading('Before and after')}
+                <div className="text-[10px] text-neutral-500">Photos taken on site</div>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                {photoFrame(plan.hero.before, 'large')}
+                {photoFrame(plan.hero.after, 'large')}
+              </div>
+            </div>
+          )}
+
+          {plan.rest.length > 0 && (
+            <div className="mt-6">
+              <div className="flex items-end justify-between gap-2">
+                {sectionHeading(plan.hero ? 'More photos' : 'Site photographs')}
+                <div className="text-[10px] text-neutral-500">Photos taken on site</div>
+              </div>
+              {/* Same grid as the PDF: 3 across, Before -> During -> After. */}
+              <div className="mt-3 grid gap-2" style={{ gridTemplateColumns: `repeat(${PHOTO_GRID_COLUMNS}, minmax(0, 1fr))` }}>
+                {plan.rest.map((entry) => photoFrame(entry, 'small'))}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-6 border-t border-divider pt-3 font-heading text-[12px] font-semibold text-teal">
+            Thank you for choosing Kind Contractors
+            <div className="mt-1 font-body text-[10px] font-normal text-neutral-600">{FOOTER_CONTACT_LINE}</div>
+          </div>
         </div>
       </div>
     </div>
@@ -218,6 +299,8 @@ export default function ReadyForClientPage() {
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // Set when photo preparation couldn't include every photo — holds the already-prepared photos so continuing doesn't redo the work.
+  const [skippedWarning, setSkippedWarning] = useState<{ action: 'download' | 'send'; prepared: PreparedReportPhotos } | null>(null);
 
   const { data: jobRows = [], isLoading, isError, error } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
 
@@ -325,25 +408,45 @@ export default function ReadyForClientPage() {
    * download (Blob URL + a throwaway <a download>); nothing is uploaded,
    * emailed, or recorded as sent — sent_to_client_at is never touched here.
    */
-  const handleDownloadPdf = async () => {
-    if (!model) return;
+  const downloadPdf = async (m: ClientReportModel, prepared: PreparedReportPhotos) => {
+    const blob = await generateClientReportPdf(m, prepared);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${m.buildingName.replace(/[^a-z0-9]+/gi, '-')}-report.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const runDownload = async (work: () => Promise<void>) => {
     setPdfError(null);
     setIsGeneratingPdf(true);
     try {
-      const blob = await generateClientReportPdf(model);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${model.buildingName.replace(/[^a-z0-9]+/gi, '-')}-report.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      await work();
     } catch (err) {
       setPdfError(err instanceof Error ? err.message : 'Failed to generate PDF.');
     } finally {
       setIsGeneratingPdf(false);
     }
+  };
+
+  /**
+   * Photos are resized first so the manager can be told — before anything is
+   * downloaded — if any couldn't be included. Nothing is downloaded until
+   * they choose to continue (see the skipped-photos dialog below).
+   */
+  const handleDownloadPdf = async () => {
+    if (!model) return;
+    await runDownload(async () => {
+      const prepared = await prepareClientReportPhotos(model);
+      if (prepared.skippedCount > 0) {
+        setSkippedWarning({ action: 'download', prepared });
+        return;
+      }
+      await downloadPdf(model, prepared);
+    });
   };
 
   /**
@@ -355,26 +458,55 @@ export default function ReadyForClientPage() {
    * ['jobRows'] on success moves this report out of the queue — a failed
    * attempt leaves everything exactly as it was, ready to retry.
    */
-  const handleConfirmSend = async () => {
-    if (!model || !selected || !reportId || !selectedContact?.email) return;
+  const sendPrepared = async (m: ClientReportModel, prepared: PreparedReportPhotos, id: string, contactId: string) => {
+    const blob = await generateClientReportPdf(m, prepared);
+    const pdfBase64 = await blobToBase64(blob);
+    const result = await sendClientReport({ reportId: id, contactId, pdfBase64 });
+    queryClient.invalidateQueries({ queryKey: ['clientSend', id] });
+    if (result.status === 'sent') {
+      setShowConfirmDialog(false);
+      queryClient.invalidateQueries({ queryKey: ['jobRows'] });
+    } else {
+      setSendError(result.error ?? 'Failed to send.');
+    }
+  };
+
+  const runSend = async (work: () => Promise<void>) => {
     setIsSending(true);
     setSendError(null);
     try {
-      const blob = await generateClientReportPdf(model);
-      const pdfBase64 = await blobToBase64(blob);
-      const result = await sendClientReport({ reportId, contactId: selectedContact.id, pdfBase64 });
-      queryClient.invalidateQueries({ queryKey: ['clientSend', reportId] });
-      if (result.status === 'sent') {
-        setShowConfirmDialog(false);
-        queryClient.invalidateQueries({ queryKey: ['jobRows'] });
-      } else {
-        setSendError(result.error ?? 'Failed to send.');
-      }
+      await work();
     } catch (err) {
       setSendError(err instanceof Error ? err.message : 'Failed to send.');
       queryClient.invalidateQueries({ queryKey: ['clientSend', reportId] });
     } finally {
       setIsSending(false);
+    }
+  };
+
+  /** If any photo can't be included, nothing is sent — the skipped-photos dialog lets the manager choose to send without them or cancel. */
+  const handleConfirmSend = async () => {
+    if (!model || !selected || !reportId || !selectedContact?.email) return;
+    const contactId = selectedContact.id;
+    await runSend(async () => {
+      const prepared = await prepareClientReportPhotos(model);
+      if (prepared.skippedCount > 0) {
+        setSkippedWarning({ action: 'send', prepared });
+        return;
+      }
+      await sendPrepared(model, prepared, reportId, contactId);
+    });
+  };
+
+  const handleContinueDespiteSkipped = async () => {
+    if (!skippedWarning || !model) return;
+    const { action, prepared } = skippedWarning;
+    setSkippedWarning(null);
+    if (action === 'download') {
+      await runDownload(() => downloadPdf(model, prepared));
+    } else if (selected && reportId && selectedContact?.email) {
+      const contactId = selectedContact.id;
+      await runSend(() => sendPrepared(model, prepared, reportId, contactId));
     }
   };
 
@@ -705,6 +837,15 @@ export default function ReadyForClientPage() {
           isSending={isSending}
           onCancel={() => (isSending ? null : setShowConfirmDialog(false))}
           onConfirm={() => void handleConfirmSend()}
+        />
+      )}
+
+      {skippedWarning && (
+        <SkippedPhotosDialog
+          count={skippedWarning.prepared.skippedCount}
+          action={skippedWarning.action}
+          onCancel={() => setSkippedWarning(null)}
+          onContinue={() => void handleContinueDespiteSkipped()}
         />
       )}
     </div>
