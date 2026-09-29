@@ -104,14 +104,18 @@ export async function listTodayVisits(): Promise<TechnicianVisitSummary[]> {
 }
 
 /**
- * This technician's own future-scheduled visits (scheduled_date strictly
- * after today), soonest first — see technician_upcoming_visits(). Same
- * technician-safe column set and ownership check as listTodayVisits();
- * only the date condition and sort differ.
+ * This technician's own earlier visits (scheduled_date strictly before
+ * today), newest first, capped at the 200 most recent — see
+ * technician_past_visits(). Same technician-safe column set and ownership
+ * check as listTodayVisits(); only the date condition, sort and cap differ.
+ * Lets a technician open an earlier job to add photos/a report late (e.g.
+ * the following day) through the exact same Job File -> Report flow, whose
+ * server-side rules (ownership, no double-submit, photo checks) are the
+ * same regardless of the visit's date.
  */
-export async function listUpcomingVisits(): Promise<TechnicianVisitSummary[]> {
-  const { data, error } = await supabase.rpc('technician_upcoming_visits');
-  if (error) throw new Error(`Failed to load upcoming visits: ${error.message}`);
+export async function listPastVisits(): Promise<TechnicianVisitSummary[]> {
+  const { data, error } = await supabase.rpc('technician_past_visits');
+  if (error) throw new Error(`Failed to load past visits: ${error.message}`);
 
   return ((data ?? []) as RpcTodayVisitRow[]).map((row) => ({
     visitId: row.visit_id,

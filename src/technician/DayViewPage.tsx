@@ -4,8 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import {
   jobTypeLabel,
   listNeedsCorrection,
+  listPastVisits,
   listTodayVisits,
-  listUpcomingVisits,
   retryUnlessOffline,
   type TechnicianCorrectionSummary,
   type TechnicianVisitSummary,
@@ -31,9 +31,13 @@ function pollWhileOnline(): number | false {
   return navigator.onLine ? POLL_INTERVAL_MS : false;
 }
 
-type Tab = 'today' | 'upcoming' | 'returned';
+type Tab = 'today' | 'past' | 'correction';
 
-const UPCOMING_DATE_FORMAT = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+// Module-level so the selected tab survives opening a job and coming back
+// (this page unmounts on navigation); resets to Today on a full reload.
+let lastSelectedTab: Tab = 'today';
+
+const PAST_DATE_FORMAT = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 
 /**
  * The next stop is the only one that carries visual weight (per the
@@ -41,8 +45,8 @@ const UPCOMING_DATE_FORMAT = new Intl.DateTimeFormat('en-GB', { weekday: 'short'
  * stays neutral. `isNext` is true only for the first non-completed visit in
  * the (already office-ordered) list; done stops fade regardless of position.
  *
- * `dateLabel`, when given (the Upcoming tab only), replaces the numbered
- * stop-order circle with a plain date badge instead — Upcoming spans many
+ * `dateLabel`, when given (the Past tab only), replaces the numbered
+ * stop-order circle with a plain date badge instead — Past spans many
  * different days, so a "1/2/3" sequence badge would wrongly imply an
  * office-set running order the way it genuinely does within a single day
  * on Today. No reordering affordance exists here or anywhere else in this
@@ -119,8 +123,8 @@ function OfflineEmptyState({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-/** Reuses the same row shape as StopRow — no sequence badge (order doesn't apply here), a due-toned accent instead of teal, and the manager's return reason shown beneath the address. */
-function ReturnedRow({ item, onSelect }: { item: TechnicianCorrectionSummary; onSelect: () => void }) {
+/** Reuses the same row shape as StopRow — no sequence badge (order doesn't apply here), a due-toned accent instead of teal, and the office's reason for sending the report back shown beneath the address. */
+function CorrectionRow({ item, onSelect }: { item: TechnicianCorrectionSummary; onSelect: () => void }) {
   return (
     <div
       onClick={onSelect}
@@ -135,7 +139,7 @@ function ReturnedRow({ item, onSelect }: { item: TechnicianCorrectionSummary; on
         <div className="mt-0.5 font-heading text-[10px] font-semibold tracking-[0.1em] text-neutral-500 uppercase">
           {jobTypeLabel(item.jobType)}, {item.jobSummary}
         </div>
-        {item.returnReason && <div className="mt-1 truncate text-[12px] text-due-fg">Returned: {item.returnReason}</div>}
+        {item.returnReason && <div className="mt-1 truncate text-[12px] text-due-fg">Reason: {item.returnReason}</div>}
       </div>
       <span className="text-neutral-400">›</span>
     </div>
@@ -144,7 +148,11 @@ function ReturnedRow({ item, onSelect }: { item: TechnicianCorrectionSummary; on
 
 export default function DayViewPage() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<Tab>('today');
+  const [tab, setTabState] = useState<Tab>(lastSelectedTab);
+  const setTab = (next: Tab) => {
+    lastSelectedTab = next;
+    setTabState(next);
+  };
 
   const { online } = useSyncStatus();
 
@@ -186,30 +194,34 @@ export default function DayViewPage() {
   const needsCorrection = needsCorrectionData ?? [];
   const correctionOfflineWithNoData = needsCorrectionData === undefined && !online;
 
+  // Past jobs change only when a report is submitted or a visit's date/
+  // assignment is edited by the office — not something worth the 60s poll
+  // Today/Needs correction use. Fetched on demand (when the tab is opened,
+  // on manual refresh, and via TechnicianShell's foreground/reconnect and
+  // report-synced invalidation, which already covers this key).
   const {
-    data: upcomingVisitsData,
-    isLoading: upcomingLoading,
-    isFetching: upcomingFetching,
-    isError: upcomingError,
-    error: upcomingErrorObj,
-    refetch: refetchUpcoming,
+    data: pastVisitsData,
+    isLoading: pastLoading,
+    isFetching: pastFetching,
+    isError: pastError,
+    error: pastErrorObj,
+    refetch: refetchPast,
   } = useQuery({
-    queryKey: ['technician', 'upcomingVisits'],
-    queryFn: listUpcomingVisits,
-    enabled: tab === 'upcoming',
+    queryKey: ['technician', 'pastVisits'],
+    queryFn: listPastVisits,
+    enabled: tab === 'past',
     staleTime: VISIT_LIST_STALE_TIME_MS,
     retry: retryUnlessOffline,
-    refetchInterval: pollWhileOnline,
   });
-  const upcomingVisits = upcomingVisitsData ?? [];
-  const upcomingOfflineWithNoData = upcomingVisitsData === undefined && !online;
+  const pastVisits = pastVisitsData ?? [];
+  const pastOfflineWithNoData = pastVisitsData === undefined && !online;
 
-  const isManuallyRefreshing = isFetching || correctionFetching || upcomingFetching;
+  const isManuallyRefreshing = isFetching || correctionFetching || pastFetching;
   const handleManualRefresh = () => {
     if (!online) return;
     void refetch();
     void refetchCorrection();
-    if (tab === 'upcoming') void refetchUpcoming();
+    if (tab === 'past') void refetchPast();
   };
 
   const doneCount = visits.filter((v) => v.status === 'completed' || v.reportSubmitted).length;
@@ -218,7 +230,7 @@ export default function DayViewPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-none items-center justify-between border-b border-divider bg-neutral-200 px-4 py-3">
-        <h1 className="font-heading text-xl font-semibold">{tab === 'returned' ? 'Returned' : 'Your day'}</h1>
+        <h1 className="font-heading text-xl font-semibold">{tab === 'correction' ? 'Needs correction' : tab === 'past' ? 'Past jobs' : 'Your day'}</h1>
         <div className="flex items-center gap-2.5">
           {tab === 'today' && !isLoading && !isError && (
             <span className="text-[12px] text-neutral-600 tabular-nums">
@@ -285,49 +297,49 @@ export default function DayViewPage() {
             </div>
           ))}
 
-        {tab === 'upcoming' &&
-          (upcomingOfflineWithNoData ? (
-            <OfflineEmptyState onRetry={() => void refetchUpcoming()} />
-          ) : upcomingLoading ? (
+        {tab === 'past' &&
+          (pastOfflineWithNoData ? (
+            <OfflineEmptyState onRetry={() => void refetchPast()} />
+          ) : pastLoading ? (
             <div className="p-4">
               <div className="font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">Loading…</div>
             </div>
-          ) : upcomingError ? (
+          ) : pastError ? (
             <div className="p-4">
               <div className="border border-missed bg-missed/10 p-4">
                 <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-missed-fg uppercase">
-                  Couldn't load upcoming visits
+                  Couldn't load past jobs
                 </div>
                 <div className="mt-1.5 text-[13px] text-ink">
-                  {upcomingErrorObj instanceof Error ? upcomingErrorObj.message : 'Something went wrong.'}
+                  {pastErrorObj instanceof Error ? pastErrorObj.message : 'Something went wrong.'}
                 </div>
               </div>
             </div>
-          ) : upcomingVisits.length === 0 ? (
+          ) : pastVisits.length === 0 ? (
             <div className="p-4">
               <div className="border border-neutral-300 bg-white px-5 py-10 text-center">
                 <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
-                  Nothing scheduled yet
+                  No past jobs
                 </div>
-                <div className="mt-1.5 text-[13px] text-neutral-600">No future visits assigned to you at the moment.</div>
+                <div className="mt-1.5 text-[13px] text-neutral-600">Earlier jobs assigned to you will appear here.</div>
               </div>
             </div>
           ) : (
             <div>
-              {upcomingVisits.map((visit, index) => (
+              {pastVisits.map((visit, index) => (
                 <StopRow
                   key={visit.visitId}
                   visit={visit}
                   index={index}
                   isNext={false}
-                  dateLabel={UPCOMING_DATE_FORMAT.format(new Date(`${visit.scheduledDate}T00:00:00`))}
+                  dateLabel={PAST_DATE_FORMAT.format(new Date(`${visit.scheduledDate}T00:00:00`))}
                   onSelect={() => navigate(`/technician/visits/${visit.visitId}`)}
                 />
               ))}
             </div>
           ))}
 
-        {tab === 'returned' &&
+        {tab === 'correction' &&
           (correctionOfflineWithNoData ? (
             <OfflineEmptyState onRetry={() => void refetchCorrection()} />
           ) : correctionLoading ? (
@@ -337,7 +349,7 @@ export default function DayViewPage() {
           ) : correctionError ? (
             <div className="p-4">
               <div className="border border-missed bg-missed/10 p-4">
-                <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-missed-fg uppercase">Couldn't load returned reports</div>
+                <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-missed-fg uppercase">Couldn't load reports needing correction</div>
                 <div className="mt-1.5 text-[13px] text-ink">
                   {correctionErrorObj instanceof Error ? correctionErrorObj.message : 'Something went wrong.'}
                 </div>
@@ -346,13 +358,13 @@ export default function DayViewPage() {
           ) : needsCorrection.length === 0 ? (
             <div className="p-4">
               <div className="border border-neutral-300 bg-white px-5 py-10 text-center">
-                <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">Nothing returned</div>
+                <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">Nothing needs correction</div>
               </div>
             </div>
           ) : (
             <div>
               {needsCorrection.map((item) => (
-                <ReturnedRow key={item.reportId} item={item} onSelect={() => navigate(`/technician/visits/${item.visitId}`)} />
+                <CorrectionRow key={item.reportId} item={item} onSelect={() => navigate(`/technician/visits/${item.visitId}`)} />
               ))}
             </div>
           ))}
@@ -362,14 +374,14 @@ export default function DayViewPage() {
         {(
           [
             { key: 'today', label: 'Today' },
-            { key: 'upcoming', label: 'Upcoming' },
-            { key: 'returned', label: `Returned${needsCorrection.length > 0 ? ` · ${needsCorrection.length}` : ''}` },
+            { key: 'past', label: 'Past' },
+            { key: 'correction', label: `Needs correction${needsCorrection.length > 0 ? ` · ${needsCorrection.length}` : ''}` },
           ] as { key: Tab; label: string }[]
         ).map(({ key, label }) => (
           <button
             key={key}
             onClick={() => setTab(key)}
-            className={`cursor-pointer border-t-2 py-2.5 font-heading text-[10.5px] font-semibold tracking-[0.1em] uppercase ${
+            className={`cursor-pointer flex min-h-[44px] items-center justify-center border-t-2 px-1 py-2 text-center leading-tight font-heading text-[10.5px] font-semibold tracking-[0.1em] uppercase ${
               tab === key ? 'border-teal text-teal-700' : 'border-transparent text-neutral-500 hover:text-ink'
             }`}
           >

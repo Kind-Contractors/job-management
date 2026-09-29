@@ -17,3 +17,9 @@ dist-ssr
 # do not treat a local copy as the source of truth.
 supabase/production-only-migrations/*
 !supabase/production-only-migrations/20260911173353_restrict_staging_tables_to_service_role.sql
+
+# Generated PWA/service worker files
+dev-dist/
+
+# Supabase CLI temporary files
+supabase/.temp/

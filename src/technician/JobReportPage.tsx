@@ -385,7 +385,7 @@ export default function JobReportPage() {
 
           {isResubmitMode && (
             <div className="m-3.5 border border-due bg-due/10 p-3">
-              <div className="font-heading text-[11px] font-semibold tracking-[0.11em] text-due-fg uppercase">Returned for correction</div>
+              <div className="font-heading text-[11px] font-semibold tracking-[0.11em] text-due-fg uppercase">Needs correction</div>
               {visit.reportReturnReason && <div className="mt-1 text-[12.5px] leading-snug text-due-fg">{visit.reportReturnReason}</div>}
             </div>
           )}

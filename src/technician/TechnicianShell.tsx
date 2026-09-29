@@ -15,7 +15,7 @@ import kindContractorsLogo from '../assets/kind_Contractors_logo.png';
  */
 const VISIT_LIST_QUERY_KEYS: readonly (readonly string[])[] = [
   ['technician', 'todayVisits'],
-  ['technician', 'upcomingVisits'],
+  ['technician', 'pastVisits'],
   ['technician', 'needsCorrection'],
 ];
 
