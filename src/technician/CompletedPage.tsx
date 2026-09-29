@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { getVisitDetail, listTodayVisits } from './api';
 import { getDraft, getVisitPhotos, subscribeSyncEngine, trySubmitIfReady } from './offline/syncEngine';
 import type { DraftReport, PendingPhoto } from './offline/db';
+import { technicianKeys, useTechnicianUserId } from './queryKeys';
 
 interface CompletedNavState {
   photoCount?: number;
@@ -18,6 +19,7 @@ export default function CompletedPage() {
   const { visitId } = useParams<{ visitId: string }>();
   const location = useLocation();
   const state = (location.state as CompletedNavState | null) ?? {};
+  const userId = useTechnicianUserId();
 
   // The server-confirmed source of truth — unchanged from before.
   const {
@@ -25,9 +27,9 @@ export default function CompletedPage() {
     isLoading,
     isError,
   } = useQuery({
-    queryKey: ['technician', 'visitDetail', visitId],
+    queryKey: technicianKeys.visitDetail(userId, visitId),
     queryFn: () => getVisitDetail(visitId!),
-    enabled: !!visitId,
+    enabled: !!visitId && userId !== '',
   });
 
   // The LOCAL source of truth for "did I already complete this, even if
@@ -61,7 +63,11 @@ export default function CompletedPage() {
   }, [visitId]);
 
   // Best-effort only, exactly like Job File's own "Stop N" — renders correctly with or without it.
-  const { data: todayVisits } = useQuery({ queryKey: ['technician', 'todayVisits'], queryFn: listTodayVisits });
+  const { data: todayVisits } = useQuery({
+    queryKey: technicianKeys.todayVisits(userId),
+    queryFn: listTodayVisits,
+    enabled: userId !== '',
+  });
   const nextStop = todayVisits?.find((v) => v.visitId !== visitId && v.status !== 'completed' && !v.reportSubmitted);
 
   const isSyncedToServer = !!visit?.reportId;

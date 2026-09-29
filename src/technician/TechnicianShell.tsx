@@ -5,19 +5,16 @@ import { useAuth } from '../auth/AuthProvider';
 import ChangePasswordDialog from '../auth/ChangePasswordDialog';
 import { startSyncEngine, subscribeReportSynced, useSyncStatus } from './offline/syncEngine';
 import { getCurrentTechnician } from './api';
+import { technicianKeys, useTechnicianUserId, visitListQueryKeys } from './queryKeys';
 import kindContractorsLogo from '../assets/kind_Contractors_logo.png';
 
-/**
- * The three list queries a newly booked/assigned visit, or a newly
- * synced/returned report, could affect — invalidated together below rather
- * than a broader "invalidate everything technician" so an unrelated cache
- * entry (e.g. technicianWhoAmI) is never forced to refetch by this.
- */
-const VISIT_LIST_QUERY_KEYS: readonly (readonly string[])[] = [
-  ['technician', 'todayVisits'],
-  ['technician', 'pastVisits'],
-  ['technician', 'needsCorrection'],
-];
+// The three list queries a newly booked/assigned visit, or a newly
+// synced/returned report, could affect are invalidated together below
+// (see visitListQueryKeys) rather than a broader "invalidate everything
+// technician" so an unrelated cache entry (e.g. the whoAmI identity) is never
+// forced to refetch by this.
+
+const WHOAMI_STALE_TIME_MS = 5 * 60 * 1000;
 
 const dateFormatter = new Intl.DateTimeFormat('en-GB', {
   weekday: 'short',
@@ -36,13 +33,17 @@ export default function TechnicianShell() {
   const sync = useSyncStatus();
   const queryClient = useQueryClient();
   const [changingPassword, setChangingPassword] = useState(false);
-  // Cached indefinitely for the session — a technician's own name never
-  // changes mid-session, so there's no reason to refetch it on every
-  // navigation the way visit data does.
+  const userId = useTechnicianUserId();
+  // Keyed by the authenticated user, in a per-user cache, and NEVER cached
+  // indefinitely: it used to be staleTime: Infinity, which is what let a
+  // previous technician's name persist in the header after a different
+  // technician signed in. A short staleTime just avoids refetching the
+  // name on every navigation; a different user can't reach it regardless.
   const { data: technician } = useQuery({
-    queryKey: ['technicianWhoAmI'],
+    queryKey: technicianKeys.whoAmI(userId),
     queryFn: getCurrentTechnician,
-    staleTime: Infinity,
+    enabled: userId !== '',
+    staleTime: WHOAMI_STALE_TIME_MS,
   });
 
   // Started once, here — every technician screen mounts under this shell,
@@ -68,7 +69,7 @@ export default function TechnicianShell() {
   // reads these keys is mounted.
   useEffect(() => {
     const refreshVisitLists = () => {
-      for (const queryKey of VISIT_LIST_QUERY_KEYS) {
+      for (const queryKey of visitListQueryKeys(userId)) {
         void queryClient.invalidateQueries({ queryKey: [...queryKey] });
       }
     };
@@ -81,7 +82,7 @@ export default function TechnicianShell() {
       window.removeEventListener('online', refreshVisitLists);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [queryClient]);
+  }, [queryClient, userId]);
 
   // The targeted bridge from the (deliberately framework-agnostic) offline
   // sync engine to TanStack Query — fires only for a genuine server-
@@ -94,12 +95,12 @@ export default function TechnicianShell() {
   // staleTime.
   useEffect(() => {
     return subscribeReportSynced((visitId) => {
-      void queryClient.invalidateQueries({ queryKey: ['technician', 'visitDetail', visitId] });
-      for (const queryKey of VISIT_LIST_QUERY_KEYS) {
+      void queryClient.invalidateQueries({ queryKey: [...technicianKeys.visitDetail(userId, visitId)] });
+      for (const queryKey of visitListQueryKeys(userId)) {
         void queryClient.invalidateQueries({ queryKey: [...queryKey] });
       }
     });
-  }, [queryClient]);
+  }, [queryClient, userId]);
 
   const hasPending = sync.pendingPhotoCount > 0 || sync.failedDraftCount > 0;
 

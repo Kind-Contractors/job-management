@@ -22,13 +22,25 @@
 // - A photo is NEVER deleted just because an upload attempt failed — only
 //   after the owning report has been positively confirmed submitted by
 //   the server.
+//
+// Ownership: every queued draft/photo belongs to one authenticated user
+// (see db.ts). This engine only ever lists, uploads and submits records
+// whose ownerId is the CURRENT user (auth/currentUser.ts) — so another
+// user's queued work, and its failure state, is invisible here — and
+// re-checks that the current user is still the record's owner immediately
+// before each network call, so a user switch mid-retry can't send one
+// user's work under another user's session. Signing out, or in as someone
+// else, never deletes anyone's queued work; it is simply left untouched
+// until its owner is signed in again.
 
 import { useEffect, useState } from 'react';
+import { getCurrentUserId, subscribeCurrentUser } from '../../auth/currentUser';
 import {
+  countUnattributedRecords,
   countUnuploadedPhotos,
   deleteDraft,
   deletePhotosForVisit,
-  getDraft,
+  getDraft as getDraftForOwner,
   listAllDrafts,
   listPhotosForVisit,
   listReadyDraftVisitIds,
@@ -101,17 +113,35 @@ function isPermanentSubmitError(err: unknown): boolean {
 }
 
 const uploadingIds = new Set<string>();
-const submittingVisitIds = new Set<string>();
+const submittingKeys = new Set<string>();
+
+/** The signed-in user's ID, or a thrown error — for actions that CREATE queued work, which must always belong to someone. */
+function requireCurrentUserId(): string {
+  const userId = getCurrentUserId();
+  if (!userId) throw new Error('You are not signed in.');
+  return userId;
+}
+
+/** True only while `ownerId` is still the signed-in user — checked right before every network call made on a queued record's behalf. */
+function isStillCurrentOwner(ownerId: string): boolean {
+  return getCurrentUserId() === ownerId;
+}
 
 async function attemptUploadPhoto(photo: PendingPhoto): Promise<void> {
   if (photo.status === 'uploaded' || uploadingIds.has(photo.id)) return;
   if (!navigator.onLine) return;
+  if (!isStillCurrentOwner(photo.ownerId)) return;
 
   uploadingIds.add(photo.id);
   try {
     await putPhoto({ ...photo, status: 'uploading' });
     notify();
     try {
+      if (!isStillCurrentOwner(photo.ownerId)) {
+        // The user changed between claiming this photo and uploading it — put it back untouched for its owner's next retry.
+        await putPhoto(photo);
+        return;
+      }
       await uploadVisitPhotoToPath(photo.storagePath, photo.blob);
       await putPhoto({ ...photo, status: 'uploaded', lastError: null });
     } catch (err) {
@@ -122,7 +152,7 @@ async function attemptUploadPhoto(photo: PendingPhoto): Promise<void> {
     uploadingIds.delete(photo.id);
   }
 
-  await trySubmitIfReady(photo.visitId);
+  await submitIfReadyForOwner(photo.ownerId, photo.visitId);
 }
 
 /**
@@ -131,24 +161,39 @@ async function attemptUploadPhoto(photo: PendingPhoto): Promise<void> {
  * often as you like; it's a no-op unless the draft is ready, not already
  * mid-submit, online, fully uploaded, and — since a permanently-rejected
  * draft can never succeed by retrying — not already marked
- * `permanentFailure` (see isPermanentSubmitError()).
+ * `permanentFailure` (see isPermanentSubmitError()). Always acts for the
+ * currently signed-in user; a no-op when nobody is.
  */
 export async function trySubmitIfReady(visitId: string): Promise<void> {
-  if (submittingVisitIds.has(visitId)) return;
-  const draft = await getDraft(visitId);
+  const ownerId = getCurrentUserId();
+  if (!ownerId) return;
+  await submitIfReadyForOwner(ownerId, visitId);
+}
+
+async function submitIfReadyForOwner(ownerId: string, visitId: string): Promise<void> {
+  const submitKey = `${ownerId}:${visitId}`;
+  if (submittingKeys.has(submitKey)) return;
+  if (!isStillCurrentOwner(ownerId)) return;
+  const draft = await getDraftForOwner(ownerId, visitId);
   if (!draft || !draft.readyToSubmit || draft.submitting || draft.permanentFailure) return;
   if (!navigator.onLine) return;
 
-  const photos = await listPhotosForVisit(visitId);
+  const photos = await listPhotosForVisit(ownerId, visitId);
   if (photos.length === 0) return;
   if (photos.some((p) => p.status !== 'uploaded')) return;
 
-  submittingVisitIds.add(visitId);
+  submittingKeys.add(submitKey);
   try {
+    if (!isStillCurrentOwner(ownerId)) return;
     await putDraft({ ...draft, submitting: true, submitError: null });
     notify();
 
     try {
+      // Last check before the network: never submit one user's work under another user's session.
+      if (!isStillCurrentOwner(ownerId)) {
+        await putDraft({ ...draft, submitting: false });
+        return;
+      }
       if (draft.mode === 'submit') {
         await submitReport({
           visitId: draft.visitId,
@@ -173,8 +218,8 @@ export async function trySubmitIfReady(visitId: string): Promise<void> {
 
       // Positively confirmed by the server — only now is it safe to clear
       // the local queue. Never delete a photo's blob before this point.
-      await deleteDraft(visitId);
-      await deletePhotosForVisit(visitId);
+      await deleteDraft(ownerId, visitId);
+      await deletePhotosForVisit(ownerId, visitId);
       notifyReportSynced(visitId);
     } catch (err) {
       if (isAlreadyExistsError(err)) {
@@ -187,8 +232,8 @@ export async function trySubmitIfReady(visitId: string): Promise<void> {
         // duplicate outright and tell the UI to treat this visit as
         // synced, exactly like a genuine success — never touches the
         // existing server-side report.
-        await deleteDraft(visitId);
-        await deletePhotosForVisit(visitId);
+        await deleteDraft(ownerId, visitId);
+        await deletePhotosForVisit(ownerId, visitId);
         notifyReportSynced(visitId);
       } else if (isPermanentSubmitError(err)) {
         // A definitive server rejection that retrying can never fix (e.g.
@@ -216,7 +261,7 @@ export async function trySubmitIfReady(visitId: string): Promise<void> {
       }
     }
   } finally {
-    submittingVisitIds.delete(visitId);
+    submittingKeys.delete(submitKey);
     notify();
   }
 }
@@ -224,9 +269,13 @@ export async function trySubmitIfReady(visitId: string): Promise<void> {
 /** Retries every queued photo and every ready draft across every visit — the one function every retry trigger below calls. */
 async function retryEverything(): Promise<void> {
   if (!navigator.onLine) return;
-  const visitIds = await listReadyDraftVisitIds();
+  // Only the signed-in user's own queued work — nobody signed in, nothing to retry.
+  const ownerId = getCurrentUserId();
+  if (!ownerId) return;
+  const visitIds = await listReadyDraftVisitIds(ownerId);
   for (const visitId of visitIds) {
-    const photos = await listPhotosForVisit(visitId);
+    if (!isStillCurrentOwner(ownerId)) return;
+    const photos = await listPhotosForVisit(ownerId, visitId);
     for (const photo of photos) {
       // 'uploading' is deliberately retried too, not just 'pending'/'failed'
       // — a photo can be left stuck at 'uploading' forever if the page
@@ -242,7 +291,7 @@ async function retryEverything(): Promise<void> {
         await attemptUploadPhoto(photo);
       }
     }
-    await trySubmitIfReady(visitId);
+    await submitIfReadyForOwner(ownerId, visitId);
   }
 }
 
@@ -252,6 +301,19 @@ let engineStarted = false;
 export function startSyncEngine(): void {
   if (engineStarted) return;
   engineStarted = true;
+
+  // Queued work from before ownership existed (schema v1) can't be attributed
+  // to anyone, so it is preserved but hidden from and never synced by every
+  // account — flagged here, once, so it isn't invisible to a developer.
+  void countUnattributedRecords()
+    .then(({ drafts, photos }) => {
+      if (drafts > 0 || photos > 0) {
+        console.warn(
+          `[offline queue] ${drafts} draft(s) and ${photos} photo(s) queued before per-user ownership are preserved but not attributed to any account, so they are not shown or synced.`,
+        );
+      }
+    })
+    .catch(() => undefined);
 
   window.addEventListener('online', () => {
     void retryEverything();
@@ -273,9 +335,11 @@ export function startSyncEngine(): void {
  * for it (capture must never block on the network).
  */
 export async function enqueuePhoto(visitId: string, phase: PhotoPhase, file: File): Promise<PendingPhoto> {
+  const ownerId = requireCurrentUserId();
   const storagePath = newVisitPhotoStoragePath(visitId, phase, file.name);
   const photo: PendingPhoto = {
     id: crypto.randomUUID(),
+    ownerId,
     visitId,
     phase,
     blob: file,
@@ -305,10 +369,12 @@ export interface DraftSeed {
 
 /** Rehydrates an existing draft, or creates a fresh one seeded from the visit's real data — called once on JobReportPage mount. */
 export async function getOrInitDraft(visitId: string, seed: DraftSeed): Promise<DraftReport> {
-  const existing = await getDraft(visitId);
+  const ownerId = requireCurrentUserId();
+  const existing = await getDraftForOwner(ownerId, visitId);
   if (existing) return existing;
 
   const draft: DraftReport = {
+    ownerId,
     visitId,
     mode: seed.mode,
     reportId: seed.reportId,
@@ -332,7 +398,8 @@ export async function updateDraftFields(
   visitId: string,
   fields: Partial<Pick<DraftReport, 'workCarriedOut' | 'technicianNotes' | 'issues' | 'specMet'>>,
 ): Promise<void> {
-  const draft = await getDraft(visitId);
+  const ownerId = requireCurrentUserId();
+  const draft = await getDraftForOwner(ownerId, visitId);
   if (!draft || draft.readyToSubmit) return; // never edit a draft that's already queued for submission
   await putDraft({ ...draft, ...fields, updatedAt: new Date().toISOString() });
 }
@@ -345,7 +412,8 @@ export async function updateDraftFields(
  * photo has finished uploading and the device is online.
  */
 export async function markReadyToSubmit(visitId: string): Promise<DraftReport> {
-  const draft = await getDraft(visitId);
+  const ownerId = requireCurrentUserId();
+  const draft = await getDraftForOwner(ownerId, visitId);
   if (!draft) throw new Error('No draft found for this visit.');
   const updated: DraftReport = {
     ...draft,
@@ -359,8 +427,10 @@ export async function markReadyToSubmit(visitId: string): Promise<DraftReport> {
   return updated;
 }
 
+/** The signed-in user's own queued photos for this visit (empty when nobody is signed in). */
 export async function getVisitPhotos(visitId: string): Promise<PendingPhoto[]> {
-  return listPhotosForVisit(visitId);
+  const ownerId = getCurrentUserId();
+  return ownerId ? listPhotosForVisit(ownerId, visitId) : [];
 }
 
 export interface SyncStatus {
@@ -369,8 +439,11 @@ export interface SyncStatus {
   failedDraftCount: number;
 }
 
+/** Counts only the signed-in user's own queued work — another user's failed draft never shows up here. */
 async function computeSyncStatus(): Promise<SyncStatus> {
-  const [pendingPhotoCount, drafts] = await Promise.all([countUnuploadedPhotos(), listAllDrafts()]);
+  const ownerId = getCurrentUserId();
+  if (!ownerId) return { online: navigator.onLine, pendingPhotoCount: 0, failedDraftCount: 0 };
+  const [pendingPhotoCount, drafts] = await Promise.all([countUnuploadedPhotos(ownerId), listAllDrafts(ownerId)]);
   return {
     online: navigator.onLine,
     pendingPhotoCount,
@@ -391,11 +464,14 @@ export function useSyncStatus(): SyncStatus {
     };
     refresh();
     const unsubscribe = subscribeSyncEngine(refresh);
+    // Re-count immediately when the signed-in user changes, so the badge can't keep showing the previous user's numbers.
+    const unsubscribeUser = subscribeCurrentUser(refresh);
     window.addEventListener('online', refresh);
     window.addEventListener('offline', refresh);
     return () => {
       cancelled = true;
       unsubscribe();
+      unsubscribeUser();
       window.removeEventListener('online', refresh);
       window.removeEventListener('offline', refresh);
     };
@@ -404,4 +480,8 @@ export function useSyncStatus(): SyncStatus {
   return status;
 }
 
-export { getDraft } from './db';
+/** The signed-in user's own draft for this visit — undefined when there is none, or nobody is signed in. Never returns another user's draft. */
+export async function getDraft(visitId: string): Promise<DraftReport | undefined> {
+  const ownerId = getCurrentUserId();
+  return ownerId ? getDraftForOwner(ownerId, visitId) : undefined;
+}

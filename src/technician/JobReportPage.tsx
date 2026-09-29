@@ -14,6 +14,7 @@ import {
   useSyncStatus,
 } from './offline/syncEngine';
 import type { PendingPhoto } from './offline/db';
+import { technicianKeys, useTechnicianUserId } from './queryKeys';
 
 /** See JobFilePage.tsx's identical constant — same query key, same value, so the two screens never disagree about how long this visit stays fresh-enough-to-skip-a-refetch. */
 const VISIT_DETAIL_STALE_TIME_MS = 5 * 60 * 1000;
@@ -76,6 +77,7 @@ function photoDisplay(photo: PendingPhoto, online: boolean): { label: string; st
 export default function JobReportPage() {
   const navigate = useNavigate();
   const { visitId } = useParams<{ visitId: string }>();
+  const userId = useTechnicianUserId();
 
   const {
     data: visit,
@@ -84,9 +86,9 @@ export default function JobReportPage() {
     error,
     refetch,
   } = useQuery({
-    queryKey: ['technician', 'visitDetail', visitId],
+    queryKey: technicianKeys.visitDetail(userId, visitId),
     queryFn: () => getVisitDetail(visitId!),
-    enabled: !!visitId,
+    enabled: !!visitId && userId !== '',
     staleTime: VISIT_DETAIL_STALE_TIME_MS,
     retry: retryUnlessOffline,
   });

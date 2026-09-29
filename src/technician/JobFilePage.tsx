@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { getVisitDetail, jobTypeLabel, listTodayVisits, retryUnlessOffline } from './api';
 import { useSyncStatus } from './offline/syncEngine';
+import { technicianKeys, useTechnicianUserId } from './queryKeys';
 
 /**
  * Reusing the exact same query key JobReportPage.tsx uses for the same
@@ -14,6 +15,7 @@ const VISIT_DETAIL_STALE_TIME_MS = 5 * 60 * 1000;
 export default function JobFilePage() {
   const navigate = useNavigate();
   const { visitId } = useParams<{ visitId: string }>();
+  const userId = useTechnicianUserId();
 
   const {
     data: visit,
@@ -22,9 +24,9 @@ export default function JobFilePage() {
     error,
     refetch,
   } = useQuery({
-    queryKey: ['technician', 'visitDetail', visitId],
+    queryKey: technicianKeys.visitDetail(userId, visitId),
     queryFn: () => getVisitDetail(visitId!),
-    enabled: !!visitId,
+    enabled: !!visitId && userId !== '',
     staleTime: VISIT_DETAIL_STALE_TIME_MS,
     retry: retryUnlessOffline,
   });
@@ -40,7 +42,11 @@ export default function JobFilePage() {
   // Best-effort only — the page must render correctly even if this hasn't
   // loaded, has never been fetched (direct navigation to this URL), or
   // errors. Never gates the page's own render on this query.
-  const { data: todayVisits } = useQuery({ queryKey: ['technician', 'todayVisits'], queryFn: listTodayVisits });
+  const { data: todayVisits } = useQuery({
+    queryKey: technicianKeys.todayVisits(userId),
+    queryFn: listTodayVisits,
+    enabled: userId !== '',
+  });
   const stopNumber = todayVisits && visitId ? todayVisits.findIndex((v) => v.visitId === visitId) + 1 : 0;
 
   return (

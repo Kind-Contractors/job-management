@@ -8,6 +8,8 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
+import { purgePersistedQueryCache } from '../lib/userQueryCache';
+import { setCurrentUserId } from './currentUser';
 
 /**
  * 'check_failed' is distinct from 'unauthorized': it means the app_users
@@ -70,6 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async function resolve(nextSession: Session | null) {
       if (!nextSession) {
         if (!cancelled) {
+          setCurrentUserId(null);
           setSession(null);
           setStatus('signed_out');
           setRole(null);
@@ -82,6 +85,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const result = await checkAuthorization(nextSession.user.id);
 
       if (cancelled) return;
+      // Only an authorized identity may own offline-queue work (see auth/currentUser.ts).
+      setCurrentUserId(result.status === 'authorized' ? nextSession.user.id : null);
       setSession(nextSession);
       setStatus(result.status);
       setRole(result.role);
@@ -119,6 +124,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(nextSession);
         return;
       }
+      // A different identity (or none) is taking over: nobody owns the
+      // offline queue until the new user is confirmed authorized in resolve(),
+      // so a background sync tick can't run the previous user's work under
+      // the incoming user's token in the meantime.
+      setCurrentUserId(null);
       setStatus('loading');
       currentStatus = 'loading';
       resolve(nextSession);
@@ -130,15 +140,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  /**
+   * An explicit sign-out also removes THIS user's persisted read cache from
+   * this browser (their jobs, visit details incl. access notes). It touches
+   * only that user's own localStorage entry — never another user's cache, and
+   * never the IndexedDB offline queue, so unsynced drafts/photos survive and
+   * are still there when the same user signs back in.
+   */
   const signOut = async () => {
-    await supabase.auth.signOut();
+    const userId = session?.user.id;
+    const { error } = await supabase.auth.signOut();
+    if (!error && userId) purgePersistedQueryCache(userId);
   };
 
   /** Only ever called from the 'check_failed' screen — re-checks the same, already-known session, never signs in as anyone new. */
   const recheck = () => {
     if (!session) return;
     setStatus('loading');
-    checkAuthorization(session.user.id).then((result) => {
+    const userId = session.user.id;
+    checkAuthorization(userId).then((result) => {
+      setCurrentUserId(result.status === 'authorized' ? userId : null);
       setStatus(result.status);
       setRole(result.role);
     });

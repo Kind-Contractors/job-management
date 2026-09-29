@@ -11,6 +11,7 @@ import {
   type TechnicianVisitSummary,
 } from './api';
 import { useSyncStatus } from './offline/syncEngine';
+import { technicianKeys, useTechnicianUserId } from './queryKeys';
 
 /** Same reasoning/value as JobFilePage.tsx/JobReportPage.tsx's identical constant — a technician re-opening Today's Jobs seconds after it was already loaded shouldn't force a new round trip. Left unchanged — newly booked/assigned jobs reaching this screen promptly is instead handled by POLL_INTERVAL_MS below plus TechnicianShell.tsx's online/foreground invalidation, not by shortening this. */
 const VISIT_LIST_STALE_TIME_MS = 5 * 60 * 1000;
@@ -155,6 +156,7 @@ export default function DayViewPage() {
   };
 
   const { online } = useSyncStatus();
+  const userId = useTechnicianUserId();
 
   const {
     data: visitsData,
@@ -164,8 +166,9 @@ export default function DayViewPage() {
     error,
     refetch,
   } = useQuery({
-    queryKey: ['technician', 'todayVisits'],
+    queryKey: technicianKeys.todayVisits(userId),
     queryFn: listTodayVisits,
+    enabled: userId !== '',
     staleTime: VISIT_LIST_STALE_TIME_MS,
     retry: retryUnlessOffline,
     refetchInterval: pollWhileOnline,
@@ -185,8 +188,9 @@ export default function DayViewPage() {
     error: correctionErrorObj,
     refetch: refetchCorrection,
   } = useQuery({
-    queryKey: ['technician', 'needsCorrection'],
+    queryKey: technicianKeys.needsCorrection(userId),
     queryFn: listNeedsCorrection,
+    enabled: userId !== '',
     staleTime: VISIT_LIST_STALE_TIME_MS,
     retry: retryUnlessOffline,
     refetchInterval: pollWhileOnline,
@@ -207,9 +211,9 @@ export default function DayViewPage() {
     error: pastErrorObj,
     refetch: refetchPast,
   } = useQuery({
-    queryKey: ['technician', 'pastVisits'],
+    queryKey: technicianKeys.pastVisits(userId),
     queryFn: listPastVisits,
-    enabled: tab === 'past',
+    enabled: userId !== '' && tab === 'past',
     staleTime: VISIT_LIST_STALE_TIME_MS,
     retry: retryUnlessOffline,
   });

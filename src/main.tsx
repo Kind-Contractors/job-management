@@ -1,38 +1,35 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import { QueryClient } from '@tanstack/react-query';
-import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
-import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
 import { ModuleRegistry, AllCommunityModule } from 'ag-grid-community';
 import './styles/global.css';
 import App from './App';
 import { AuthProvider } from './auth/AuthProvider';
+import { UserScopedQueryProvider } from './auth/UserScopedQueryProvider';
+import { removeLegacySharedQueryCache } from './lib/userQueryCache';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
-const queryClient = new QueryClient();
+// The old implementation persisted ONE query cache shared by every user of
+// this browser under this key. It's never read again — removing it here means
+// its stale, cross-user data can't be restored by anything. Only this one key
+// is touched; the IndexedDB offline queue and Supabase's auth token are not.
+removeLegacySharedQueryCache();
 
-// Persists the query cache (jobRows/visits/technician visit-detail/etc.)
-// to localStorage and rehydrates it on load — the read-side half of the
-// Technician App's offline-first requirement: a previously-fetched job
-// stays viewable even after a reload with no connectivity. Deliberately
-// separate from the write-side offline queue (src/technician/offline/),
-// which is IndexedDB-backed for the same reason it isn't handled here:
-// photo Blobs aren't JSON-serializable, and a queue needs per-item status,
-// not just "the last known read." maxAge caps how stale a rehydrated
-// cache entry is allowed to be treated as fresh-enough-to-show; TanStack
-// Query still refetches in the background the moment it's actually online.
-const persister = createAsyncStoragePersister({ storage: window.localStorage, key: 'kind-contractors-query-cache' });
-
+// Read-side offline access (a previously-fetched job stays viewable after a
+// reload with no connectivity) still comes from the persisted TanStack Query
+// cache — now one client + one localStorage entry PER authenticated user, see
+// UserScopedQueryProvider/userQueryCache. Deliberately separate from the
+// write-side offline queue (src/technician/offline/), which is IndexedDB-backed
+// (photo Blobs aren't JSON-serializable) and is owner-scoped there.
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <PersistQueryClientProvider client={queryClient} persistOptions={{ persister, maxAge: 1000 * 60 * 60 * 24 }}>
-      <BrowserRouter>
-        <AuthProvider>
+    <BrowserRouter>
+      <AuthProvider>
+        <UserScopedQueryProvider>
           <App />
-        </AuthProvider>
-      </BrowserRouter>
-    </PersistQueryClientProvider>
+        </UserScopedQueryProvider>
+      </AuthProvider>
+    </BrowserRouter>
   </StrictMode>,
 );
