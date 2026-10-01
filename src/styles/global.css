@@ -71,6 +71,36 @@ body {
   box-sizing: border-box;
 }
 
+/*
+ * Every scrollbar in the app (page panes, drawers, dropdown lists, AG Grid)
+ * uses the primary-button teal, on the neutral track. Standard properties for
+ * Firefox and current Chromium; the ::-webkit-scrollbar rules only apply where
+ * scrollbar-color is unsupported (older Chromium/Safari), because browsers
+ * that support scrollbar-color ignore them.
+ */
+* {
+  scrollbar-color: var(--color-teal) var(--color-neutral-200);
+}
+
+@supports not (scrollbar-color: auto) {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--color-neutral-200);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-teal);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-teal-700);
+  }
+  ::-webkit-scrollbar-corner {
+    background: var(--color-neutral-200);
+  }
+}
+
 /* Blueprint visual language: square corners everywhere, hairline borders. */
 button,
 input,

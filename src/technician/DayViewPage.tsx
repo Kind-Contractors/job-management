@@ -2,11 +2,14 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
+  isSharedVisit,
+  isVisitDoneForMe,
   jobTypeLabel,
   listNeedsCorrection,
   listPastVisits,
   listTodayVisits,
   retryUnlessOffline,
+  sharedVisitLabel,
   type TechnicianCorrectionSummary,
   type TechnicianVisitSummary,
 } from './api';
@@ -66,7 +69,7 @@ function StopRow({
   dateLabel?: string;
   onSelect: () => void;
 }) {
-  const done = visit.status === 'completed' || visit.reportSubmitted;
+  const done = isVisitDoneForMe(visit);
   return (
     <div
       onClick={onSelect}
@@ -98,6 +101,12 @@ function StopRow({
         <div className="mt-0.5 font-heading text-[10px] font-semibold tracking-[0.1em] text-neutral-500 uppercase">
           {jobTypeLabel(visit.jobType)}, {visit.jobSummary}
         </div>
+        {isSharedVisit(visit) && (
+          <div className="mt-0.5 text-[11px] text-teal-700">
+            {sharedVisitLabel(visit.assignedCount)}
+            {!visit.reportSubmitted && ' · your part is still to do'}
+          </div>
+        )}
       </div>
       <span className="text-neutral-400">›</span>
     </div>
@@ -228,8 +237,8 @@ export default function DayViewPage() {
     if (tab === 'past') void refetchPast();
   };
 
-  const doneCount = visits.filter((v) => v.status === 'completed' || v.reportSubmitted).length;
-  const nextIndex = visits.findIndex((v) => v.status !== 'completed' && !v.reportSubmitted);
+  const doneCount = visits.filter(isVisitDoneForMe).length;
+  const nextIndex = visits.findIndex((v) => !isVisitDoneForMe(v));
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -379,17 +388,30 @@ export default function DayViewPage() {
           [
             { key: 'today', label: 'Today' },
             { key: 'past', label: 'Past' },
-            { key: 'correction', label: `Needs correction${needsCorrection.length > 0 ? ` · ${needsCorrection.length}` : ''}` },
-          ] as { key: Tab; label: string }[]
-        ).map(({ key, label }) => (
+            { key: 'correction', label: 'Needs correction', badge: needsCorrection.length },
+          ] as { key: Tab; label: string; badge?: number }[]
+        ).map(({ key, label, badge }) => (
           <button
             key={key}
             onClick={() => setTab(key)}
             className={`cursor-pointer flex min-h-[44px] items-center justify-center border-t-2 px-1 py-2 text-center leading-tight font-heading text-[10.5px] font-semibold tracking-[0.1em] uppercase ${
-              tab === key ? 'border-teal text-teal-700' : 'border-transparent text-neutral-500 hover:text-ink'
+              tab === key
+                ? 'border-teal text-teal-700'
+                : badge
+                  ? 'border-transparent text-due-fg hover:text-ink'
+                  : 'border-transparent text-neutral-500 hover:text-ink'
             }`}
           >
             {label}
+            {/* A solid badge rather than plain text, so a returned report is noticed straight away from any tab. */}
+            {badge ? (
+              <span
+                aria-label={`${badge} need correction`}
+                className="ml-1.5 inline-flex min-w-[20px] flex-none items-center justify-center rounded-full bg-due px-1.5 py-0.5 text-[11px] leading-none font-bold text-white tabular-nums"
+              >
+                {badge}
+              </span>
+            ) : null}
           </button>
         ))}
       </div>

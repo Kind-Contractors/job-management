@@ -1,5 +1,6 @@
 import { Fragment } from 'react';
 import type { JobRow, Technician, VisitStatus, WeekVisit } from '../../domain/types';
+import { isVisitParticipant, visitTechnicianNames } from '../../lib/visitTechnicians';
 
 const DAY_LABEL = new Intl.DateTimeFormat('en-GB', { weekday: 'short' });
 const DAY_NUM = new Intl.DateTimeFormat('en-GB', { day: 'numeric' });
@@ -49,6 +50,7 @@ export default function ScheduleTechnicianGrid({
   onDrop: (technicianId: string, dateISO: string) => (e: React.DragEvent) => void;
   onToggleTechnicianActive: (id: string, isActive: boolean) => void;
 }) {
+  const technicianById = new Map(technicians.map((t) => [t.id, t]));
   const toISODate = (d: Date) => {
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
@@ -86,8 +88,9 @@ export default function ScheduleTechnicianGrid({
         })}
 
         {technicians.map((technician) => {
-          const technicianVisits = visits.filter((v) => v.technicianId === technician.id);
-          const technicianDisplayVisits = displayVisits.filter((v) => v.technicianId === technician.id);
+          // A multi-technician visit appears in EVERY participant's row (primary and additional alike).
+          const technicianVisits = visits.filter((v) => isVisitParticipant(v, technician.id));
+          const technicianDisplayVisits = displayVisits.filter((v) => isVisitParticipant(v, technician.id));
           return (
             <Fragment key={technician.id}>
               <div
@@ -155,6 +158,8 @@ export default function ScheduleTechnicianGrid({
                           // Only 'due'/'booked' visits can be dragged to a
                           // different day — see MonthGrid.tsx's identical rule.
                           const draggableChip = v.status === 'due' || v.status === 'booked';
+                          const teamNames = visitTechnicianNames(v, technicianById);
+                          const isMulti = teamNames.length > 1;
                           return (
                             <div
                               key={v.id}
@@ -172,9 +177,14 @@ export default function ScheduleTechnicianGrid({
                                 onSelectVisit(v.jobId);
                               }}
                               className={`truncate border px-1.5 py-1 text-[11px] leading-tight ${draggableChip ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${visitStatusStyle[v.status]}`}
-                              title={job ? `${job.jobSummary} · ${job.buildingName}` : v.jobId}
+                              title={`${job ? `${job.jobSummary} · ${job.buildingName}` : v.jobId}${isMulti ? ` · With: ${teamNames.join(', ')}` : ''}`}
                             >
                               {job ? job.buildingName : 'Job'}
+                              {isMulti && (
+                                <span className="ml-1 border border-current px-1 text-[9.5px] font-semibold opacity-80">
+                                  {teamNames.length} techs
+                                </span>
+                              )}
                             </div>
                           );
                         })}

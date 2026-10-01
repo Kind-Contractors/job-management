@@ -35,7 +35,7 @@ export async function listTechnicians(): Promise<Technician[]> {
 export async function listVisitsForRange(startDate: string, endDate: string): Promise<WeekVisit[]> {
   const { data, error } = await supabase
     .from('visits')
-    .select('id, job_id, technician_id, scheduled_date, status')
+    .select('id, job_id, technician_id, scheduled_date, status, visit_technicians ( technician_id )')
     .gte('scheduled_date', startDate)
     .lte('scheduled_date', endDate);
 
@@ -47,6 +47,7 @@ export async function listVisitsForRange(startDate: string, endDate: string): Pr
     id: row.id,
     jobId: row.job_id,
     technicianId: row.technician_id,
+    additionalTechnicianIds: (row.visit_technicians ?? []).map((vt: { technician_id: string }) => vt.technician_id),
     scheduledDate: row.scheduled_date,
     status: row.status,
   }));
@@ -86,7 +87,34 @@ export async function setTechnicianActive(technicianId: string, isActive: boolea
  * unassigned and assigned later (Luke: "I won't even assign the job until
  * the day before or the day of").
  */
-export async function createVisit(jobId: string, technicianId: string | null, scheduledDate: string): Promise<void> {
+export async function createVisit(
+  jobId: string,
+  technicianId: string | null,
+  scheduledDate: string,
+  additionalTechnicianIds: string[] = [],
+): Promise<void> {
+  // Additional technicians: one atomic database call creates the visit AND every
+  // assignment, or nothing at all. The no-extras path below is the original
+  // plain insert, unchanged.
+  if (additionalTechnicianIds.length > 0) {
+    const { data: visitId, error: rpcError } = await supabase.rpc('create_visit_with_technicians', {
+      p_job_id: jobId,
+      p_technician_id: technicianId,
+      p_scheduled_date: scheduledDate,
+      p_additional_technician_ids: additionalTechnicianIds,
+    });
+
+    if (rpcError) {
+      throw new Error(`Failed to book visit: ${rpcError.message}`);
+    }
+
+    await logCurrentUserActivity('visit', visitId as string, 'visit_created');
+    for (const extraId of additionalTechnicianIds) {
+      await logCurrentUserActivity('visit', visitId as string, 'visit_technician_added', await technicianName(extraId));
+    }
+    return;
+  }
+
   const { data, error } = await supabase
     .from('visits')
     .insert({
@@ -164,4 +192,43 @@ export async function assignVisitTechnician(visitId: string, technicianId: strin
   const afterName = technicianId ? (namesById.get(technicianId) ?? 'Unknown') : 'Unassigned';
   const eventType = !beforeId ? 'visit_technician_assigned' : !technicianId ? 'visit_technician_unassigned' : 'visit_technician_changed';
   await logCurrentUserActivity('visit', visitId, eventType, `${beforeName} → ${afterName}`);
+}
+
+async function technicianName(technicianId: string): Promise<string> {
+  const { data } = await supabase.from('technicians').select('name').eq('id', technicianId).maybeSingle();
+  return data?.name ?? 'Unknown';
+}
+
+/**
+ * Adds an additional technician to a visit (`visit_technicians`) — any number
+ * can be added; the primary `visits.technician_id` is untouched. The database
+ * refuses inactive technicians and duplicates, and the UI also filters both out.
+ */
+export async function addVisitTechnician(visitId: string, technicianId: string): Promise<void> {
+  const { error } = await supabase.from('visit_technicians').insert({ visit_id: visitId, technician_id: technicianId });
+
+  if (error) {
+    throw new Error(`Failed to add technician: ${error.message}`);
+  }
+
+  await logCurrentUserActivity('visit', visitId, 'visit_technician_added', await technicianName(technicianId));
+}
+
+/**
+ * Removes an additional technician from a visit. The database refuses this once
+ * the technician has contributed to (or been waived from) the visit's report.
+ */
+export async function removeVisitTechnician(visitId: string, technicianId: string): Promise<void> {
+  const name = await technicianName(technicianId);
+  const { error } = await supabase
+    .from('visit_technicians')
+    .delete()
+    .eq('visit_id', visitId)
+    .eq('technician_id', technicianId);
+
+  if (error) {
+    throw new Error(`Failed to remove technician: ${error.message}`);
+  }
+
+  await logCurrentUserActivity('visit', visitId, 'visit_technician_removed', name);
 }

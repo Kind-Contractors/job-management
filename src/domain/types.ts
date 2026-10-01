@@ -189,6 +189,18 @@ export type ReportReviewStatus = 'awaiting_review' | 'approved' | 'returned_for_
 /** Local invoice lifecycle state (`invoices.status`) — independent of any Xero-side status. */
 export type LocalInvoiceStatus = 'draft' | 'sending' | 'sent' | 'failed';
 
+/** A technician's own contribution state on a visit's report — 'pending' until they submit or the office waives them. */
+export type ContributionState = 'pending' | 'submitted' | 'waived';
+
+/** An additional (non-primary) technician on a visit — a `visit_technicians` row. No cap on how many a visit can have. */
+export interface VisitExtraTechnician {
+  technicianId: string;
+  name: string;
+  isActive: boolean;
+  /** Once anything other than 'pending', the database refuses to remove them from the visit. */
+  contribution: ContributionState;
+}
+
 export interface JobVisitSummary {
   id: string;
   scheduledDate: string | null;
@@ -196,6 +208,12 @@ export interface JobVisitSummary {
   /** `visits.technician_id` — the real id backing `technicianName`, needed to drive an assignment select. Independent of `job.defaultTechnicianId`: reassigning one visit never touches the job's default. */
   technicianId: string | null;
   technicianName: string | null;
+  /** `visit_technicians` — every technician on this visit besides the primary above. Empty for an ordinary single-technician visit. */
+  additionalTechnicians: VisitExtraTechnician[];
+  /** True once the report has any `report_contributions` rows (multi-technician "contribution mode"). False for legacy/single-technician reports. */
+  reportHasContributions: boolean;
+  /** The primary technician's own contribution state — only meaningful when `reportHasContributions`. */
+  primaryContribution: ContributionState;
   /** Set once the visit is marked completed — see CLAUDE.md section 14.2/the visit-completion plan. */
   priceCharged: number | null;
   completedAt: string | null;
@@ -374,6 +392,8 @@ export interface WeekVisit {
   id: string;
   jobId: string;
   technicianId: string | null;
+  /** Ids of the visit's additional technicians (`visit_technicians`); empty for a single-technician visit. */
+  additionalTechnicianIds: string[];
   scheduledDate: string | null;
   status: VisitStatus;
 }

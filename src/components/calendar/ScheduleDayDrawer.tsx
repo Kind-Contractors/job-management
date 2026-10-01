@@ -1,8 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createVisit } from '../../repository/techniciansRepository';
+import VisitTechnicianPicker from '../jobs/VisitTechnicianPicker';
+import { activeSelection, splitPrimary } from '../../lib/visitTechnicianSelection';
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import type { JobRow, Technician, WeekVisit } from '../../domain/types';
+import { visitTechnicianNames } from '../../lib/visitTechnicians';
 import SearchableSelect from '../shared/SearchableSelect';
 import JobCreator from '../jobs/JobCreator';
 
@@ -80,7 +83,8 @@ export default function ScheduleDayDrawer({
   const [clientId, setClientId] = useState('');
   const [buildingId, setBuildingId] = useState('');
   const [jobId, setJobId] = useState('');
-  const [technicianId, setTechnicianId] = useState(initialTechnicianId ?? '');
+  // Selected technician ids in selection order; the first becomes the visit's primary (see createVisit).
+  const [technicianIds, setTechnicianIds] = useState<string[]>(initialTechnicianId ? [initialTechnicianId] : []);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   // Toggles the "+ Add new job for this building" overlay — deliberately
   // its own flag rather than reusing `jobId`, so opening/cancelling it
@@ -108,13 +112,16 @@ export default function ScheduleDayDrawer({
   const selectedBuilding = buildingId ? buildingById.get(buildingId) : undefined;
 
   const bookMutation = useMutation({
-    mutationFn: () => createVisit(jobId, technicianId || null, dateISO),
+    mutationFn: () => {
+      const { primaryId, additionalIds } = splitPrimary(activeSelection(technicianIds, technicians));
+      return createVisit(jobId, primaryId, dateISO, additionalIds);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['jobRows'] });
       queryClient.invalidateQueries({ queryKey: ['visits'] });
       setSaveMessage('Visit booked.');
       setJobId('');
-      setTechnicianId('');
+      setTechnicianIds([]);
     },
     onError: (err) => setSaveMessage(err instanceof Error ? err.message : 'Failed to book visit.'),
   });
@@ -150,7 +157,7 @@ export default function ScheduleDayDrawer({
           <div className="flex flex-col gap-1.5">
             {dayVisits.map((v) => {
               const job = jobById.get(v.jobId);
-              const technician = v.technicianId ? technicianById.get(v.technicianId) : undefined;
+              const technicianNames = visitTechnicianNames(v, technicianById);
               return (
                 <button
                   key={v.id}
@@ -159,7 +166,7 @@ export default function ScheduleDayDrawer({
                 >
                   <span className="truncate font-semibold">{job ? job.buildingName : 'Job'}</span>
                   <span className="truncate text-[11px] opacity-80">
-                    {job?.jobSummary ?? '—'} · {technician ? technician.name : 'Unassigned'}
+                    {job?.jobSummary ?? '—'} · {technicianNames.length > 0 ? technicianNames.join(', ') : 'Unassigned'}
                   </span>
                 </button>
               );
@@ -236,23 +243,7 @@ export default function ScheduleDayDrawer({
           + Add new job for this building
         </button>
 
-        <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-          Technician
-          <select
-            value={technicianId}
-            onChange={(e) => setTechnicianId(e.target.value)}
-            className="border border-neutral-300 px-2 py-1.5 text-[12.5px] text-ink outline-none focus:border-teal"
-          >
-            <option value="">Unassigned</option>
-            {technicians
-              .filter((t) => t.isActive)
-              .map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-          </select>
-        </label>
+        <VisitTechnicianPicker technicians={technicians} selectedIds={technicianIds} onChange={setTechnicianIds} />
 
         {selectedBuilding?.siteInstructions && (
           <div className="border border-neutral-300 bg-neutral-100 p-2 text-[11.5px] text-neutral-600">

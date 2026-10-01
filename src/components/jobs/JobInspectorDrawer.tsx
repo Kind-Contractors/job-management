@@ -6,6 +6,8 @@ import { listTechnicians, createVisit } from '../../repository/techniciansReposi
 import { assignJobTechnician } from '../../repository/jobsRepository';
 import { useAuth } from '../../auth/AuthProvider';
 import VisitRow from './VisitRow';
+import VisitTechnicianPicker from './VisitTechnicianPicker';
+import { activeSelection, splitPrimary } from '../../lib/visitTechnicianSelection';
 import ScheduleEditor from './ScheduleEditor';
 import JobEditor from './JobEditor';
 import JobLifecycleDialog, { type JobLifecycleTransition } from './JobLifecycleDialog';
@@ -52,7 +54,8 @@ export default function JobInspectorDrawer({
   const [editingJob, setEditingJob] = useState(false);
   const [lifecycleTransition, setLifecycleTransition] = useState<JobLifecycleTransition | null>(null);
   const [visitDate, setVisitDate] = useState(presetVisitDate ?? todayISO());
-  const [visitTechnicianId, setVisitTechnicianId] = useState<string>(job.defaultTechnicianId ?? '');
+  // Selected technician ids in selection order; the job's default technician (if any) is the initial selection and, being first, the visit's primary.
+  const [visitTechnicianIds, setVisitTechnicianIds] = useState<string[]>(job.defaultTechnicianId ? [job.defaultTechnicianId] : []);
   const [bookingMessage, setBookingMessage] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
@@ -65,7 +68,10 @@ export default function JobInspectorDrawer({
   });
 
   const bookVisitMutation = useMutation({
-    mutationFn: () => createVisit(job.id, visitTechnicianId || null, visitDate),
+    mutationFn: () => {
+      const { primaryId, additionalIds } = splitPrimary(activeSelection(visitTechnicianIds, technicians));
+      return createVisit(job.id, primaryId, visitDate, additionalIds);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['jobRows'] });
       queryClient.invalidateQueries({ queryKey: ['visits'] });
@@ -78,7 +84,7 @@ export default function JobInspectorDrawer({
       // chosen, so an accidental second click can't silently resubmit the
       // same booking again.
       setVisitDate('');
-      setVisitTechnicianId(job.defaultTechnicianId ?? '');
+      setVisitTechnicianIds(job.defaultTechnicianId ? [job.defaultTechnicianId] : []);
     },
     onError: (err) => setBookingMessage(err instanceof Error ? err.message : 'Failed to book visit.'),
   });
@@ -186,21 +192,7 @@ export default function JobInspectorDrawer({
                 className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
               />
             </label>
-            <label className="flex flex-col gap-1 text-[11.5px] text-neutral-600">
-              Technician
-              <select
-                value={visitTechnicianId}
-                onChange={(e) => setVisitTechnicianId(e.target.value)}
-                className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
-              >
-                <option value="">Unassigned</option>
-                {activeTechnicians.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <VisitTechnicianPicker technicians={technicians} selectedIds={visitTechnicianIds} onChange={setVisitTechnicianIds} />
             <button
               onClick={() => {
                 setBookingMessage(null);

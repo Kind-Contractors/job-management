@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   approveReport,
+  getReportContributionOverview,
   getReport,
   listPhotosForReport,
   resubmitReport,
@@ -11,6 +12,8 @@ import {
   type ReportPhoto,
 } from '../../repository/reportsRepository';
 import { getReportReviewStatusPresentation } from '../../lib/statusPresentation';
+import { getApprovalBlockers } from '../../lib/approvalBlockers';
+import ReportContributionsSection from './ReportContributionsSection';
 import StatusPill from './StatusPill';
 
 const PHOTO_PHASE_LABEL: Record<ReportPhoto['phase'], string> = { before: 'Before', during: 'During', after: 'After' };
@@ -106,7 +109,16 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
     enabled: expanded,
   });
 
+  const { data: contributionOverview } = useQuery({
+    queryKey: ['reportContributions', reportId],
+    queryFn: () => getReportContributionOverview(reportId),
+    enabled: expanded,
+  });
+  const approvalBlockers = getApprovalBlockers(contributionOverview);
+  const approvalBlocked = approvalBlockers.length > 0;
+
   const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['reportContributions', reportId] });
     queryClient.invalidateQueries({ queryKey: ['report', reportId] });
     queryClient.invalidateQueries({ queryKey: ['jobRows'] });
   };
@@ -153,6 +165,15 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
           <div className="text-[11px] text-neutral-500">
             Submitted by {report.submittedBy} · {new Date(report.submittedAt).toLocaleString('en-GB')}
           </div>
+
+          {contributionOverview?.contributionMode && (
+            <ReportContributionsSection
+              reportId={reportId}
+              reviewStatus={report.reviewStatus}
+              actor={actor}
+              overview={contributionOverview}
+            />
+          )}
 
           {report.specMet ? (
             <div className="text-[11.5px] text-neutral-500">Specification: Completed</div>
@@ -215,8 +236,9 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
               <>
                 <button
                   onClick={() => approveMutation.mutate()}
-                  disabled={approveMutation.isPending}
-                  className="cursor-pointer bg-teal px-2.5 py-1 text-[11px] font-semibold text-white"
+                  disabled={approveMutation.isPending || approvalBlocked}
+                  title={approvalBlocked ? approvalBlockers.join(' ') : undefined}
+                  className="cursor-pointer bg-teal px-2.5 py-1 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Approve
                 </button>
@@ -230,23 +252,41 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
             )}
             {report.reviewStatus === 'returned_for_correction' && (
               <>
-                <button
-                  onClick={() => resubmitMutation.mutate()}
-                  disabled={resubmitMutation.isPending}
-                  className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-700"
-                >
-                  Resubmit
-                </button>
+                {/* In a multi-technician report each technician resubmits their own part; a whole-report Resubmit would leave flagged contributions behind. */}
+                {!contributionOverview?.contributionMode && (
+                  <button
+                    onClick={() => resubmitMutation.mutate()}
+                    disabled={resubmitMutation.isPending}
+                    className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-700"
+                  >
+                    Resubmit
+                  </button>
+                )}
                 <button
                   onClick={() => approveMutation.mutate()}
-                  disabled={approveMutation.isPending}
-                  className="cursor-pointer bg-teal px-2.5 py-1 text-[11px] font-semibold text-white"
+                  disabled={approveMutation.isPending || approvalBlocked}
+                  title={approvalBlocked ? approvalBlockers.join(' ') : undefined}
+                  className="cursor-pointer bg-teal px-2.5 py-1 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Approve directly
                 </button>
               </>
             )}
           </div>
+
+          {approvalBlocked && reviewStatus !== 'approved' && (
+            <div className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg">
+              <div className="font-semibold">Cannot approve yet</div>
+              {approvalBlockers.map((b) => (
+                <div key={b}>{b}</div>
+              ))}
+            </div>
+          )}
+          {approveMutation.error && (
+            <div className="text-[11px] text-missed-fg">
+              {approveMutation.error instanceof Error ? approveMutation.error.message : 'Failed to approve.'}
+            </div>
+          )}
 
           {showReturnForm && (
             <div className="mt-1 flex flex-col gap-1.5 border border-due bg-due/10 p-2">

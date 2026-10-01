@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { getVisitDetail, listTodayVisits } from './api';
+import { getVisitDetail, isVisitDoneForMe, listTodayVisits } from './api';
 import { getDraft, getVisitPhotos, subscribeSyncEngine, trySubmitIfReady } from './offline/syncEngine';
 import type { DraftReport, PendingPhoto } from './offline/db';
 import { technicianKeys, useTechnicianUserId } from './queryKeys';
@@ -68,7 +68,7 @@ export default function CompletedPage() {
     queryFn: listTodayVisits,
     enabled: userId !== '',
   });
-  const nextStop = todayVisits?.find((v) => v.visitId !== visitId && v.status !== 'completed' && !v.reportSubmitted);
+  const nextStop = todayVisits?.find((v) => v.visitId !== visitId && !isVisitDoneForMe(v));
 
   const isSyncedToServer = !!visit?.reportId;
   const isWaitingToSync = !isSyncedToServer && !!draft?.readyToSubmit;

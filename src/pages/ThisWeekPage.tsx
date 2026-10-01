@@ -13,6 +13,7 @@ import {
 import { listJobRows } from '../repository/jobsRepository';
 import { setUserActive } from '../repository/usersRepository';
 import type { JobRow, WeekVisit } from '../domain/types';
+import { isVisitParticipant, visitTechnicianNames } from '../lib/visitTechnicians';
 import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
 import MonthGrid, { type MonthGridDay } from '../components/calendar/MonthGrid';
 import ScheduleTechnicianGrid from '../components/calendar/ScheduleTechnicianGrid';
@@ -397,8 +398,7 @@ export default function ThisWeekPage() {
       const job = jobById.get(v.jobId);
       if (division !== 'Both' && job?.division !== division) return false;
       if (!q) return true;
-      const technician = v.technicianId ? technicianById.get(v.technicianId) : undefined;
-      const haystack = `${job?.buildingName ?? ''} ${job?.jobSummary ?? ''} ${technician?.name ?? ''}`.toLowerCase();
+      const haystack = `${job?.buildingName ?? ''} ${job?.jobSummary ?? ''} ${visitTechnicianNames(v, technicianById).join(' ')}`.toLowerCase();
       return haystack.includes(q);
     });
   }, [visits, q, division, jobById, technicianById]);
@@ -450,7 +450,8 @@ export default function ThisWeekPage() {
       const visit = visits.find((v) => v.id === visitId);
       if (!visit) return; // stale drag payload (e.g. visit removed mid-drag) — nothing to act on
       const dateChanged = visit.scheduledDate !== dateISO;
-      const technicianChanged = visit.technicianId !== technicianId;
+      // Dropping onto any technician already on the visit (primary OR additional) is only ever a date change.
+      const technicianChanged = !isVisitParticipant(visit, technicianId);
 
       if (!technicianChanged) {
         // Dropped back onto its own current technician's row — same as
