@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getVisitDetail, jobTypeLabel, listTodayVisits, retryUnlessOffline } from './api';
+import { getVisitDetail, isSharedVisit, jobTypeLabel, listTodayVisits, retryUnlessOffline, sharedVisitLabel } from './api';
 import { useSyncStatus } from './offline/syncEngine';
 import { technicianKeys, useTechnicianUserId } from './queryKeys';
 
@@ -115,6 +115,14 @@ export default function JobFilePage() {
             <div className="mt-1.5 font-heading text-[10px] font-semibold tracking-[0.1em] text-neutral-500 uppercase">
               {jobTypeLabel(visit.jobType)}, {visit.jobSummary}
             </div>
+            {isSharedVisit(visit) && (
+              <div className="mt-2 border border-teal bg-teal-100 px-2.5 py-1.5 text-[12px] text-teal-700">
+                <span className="font-semibold">{sharedVisitLabel(visit.assignedCount)}</span>
+                <span className="block text-[11.5px]">
+                  You add your own part; it is combined with your colleagues into one report. You only see your own contribution.
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="border-b border-divider px-4 py-3">

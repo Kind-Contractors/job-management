@@ -71,7 +71,7 @@ export default function ScheduleToolbar({
         className="border border-neutral-300 bg-white px-2 py-1.5 text-xs text-ink outline-none focus:border-teal"
       />
 
-      <div className="flex border border-neutral-300 bg-white">
+      <div className="segmented flex border border-neutral-300 bg-white">
         <button
           onClick={() => onModeChange('day')}
           className={`px-3 py-1.5 text-xs cursor-pointer ${mode === 'day' ? 'bg-teal font-semibold text-white' : 'text-neutral-700 hover:bg-neutral-100'}`}

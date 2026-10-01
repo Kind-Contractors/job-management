@@ -13,6 +13,7 @@ export const technicianKeys = {
   pastVisits: (userId: string) => ['technician', userId, 'pastVisits'] as const,
   needsCorrection: (userId: string) => ['technician', userId, 'needsCorrection'] as const,
   visitDetail: (userId: string, visitId: string | undefined) => ['technician', userId, 'visitDetail', visitId] as const,
+  myPhotos: (userId: string, visitId: string | undefined) => ['technician', userId, 'myPhotos', visitId] as const,
 };
 
 /** The three list queries a newly booked/assigned visit or a newly synced/returned report could affect. */

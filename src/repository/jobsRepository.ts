@@ -106,7 +106,8 @@ const JOB_SELECT = `
   visits (
     id, technician_id, scheduled_date, status, price_charged, completed_at,
     technicians ( id, name, is_active ),
-    reports ( id, review_status, sent_to_client_at, sent_to_accounts_at ),
+    visit_technicians ( technician_id, technicians ( id, name, is_active ) ),
+    reports ( id, review_status, sent_to_client_at, sent_to_accounts_at, report_contributions ( technician_id, submitted_at, waived_at ) ),
     invoice_line_items ( invoice_id, invoices ( status ) )
   )
 `;
@@ -173,7 +174,8 @@ export async function listHistoricalJobRows(): Promise<JobRow[]> {
 const JOB_LIFECYCLE_SAFEGUARD_VISIT_SELECT = `
   id, technician_id, scheduled_date, status, price_charged, completed_at,
   technicians ( id, name, is_active ),
-  reports ( id, review_status, sent_to_client_at, sent_to_accounts_at ),
+  visit_technicians ( technician_id, technicians ( id, name, is_active ) ),
+  reports ( id, review_status, sent_to_client_at, sent_to_accounts_at, report_contributions ( technician_id, submitted_at, waived_at ) ),
   invoice_line_items ( invoice_id, invoices ( status ) )
 `;
 

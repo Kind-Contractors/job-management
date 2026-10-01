@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { JobRow, JobVisitSummary, Technician } from '../../domain/types';
 import { completeVisit, createReport, markVisitCancelled, markVisitMissed } from '../../repository/reportsRepository';
-import { assignVisitTechnician, rescheduleVisit } from '../../repository/techniciansRepository';
+import { addVisitTechnician, assignVisitTechnician, removeVisitTechnician, rescheduleVisit } from '../../repository/techniciansRepository';
 import { getReportReviewStatusPresentation, getVisitStatusPresentation } from '../../lib/statusPresentation';
 import StatusPill from './StatusPill';
 
@@ -33,6 +33,7 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
   const [error, setError] = useState<string | null>(null);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [dateError, setDateError] = useState<string | null>(null);
+  const [extraError, setExtraError] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
 
   /**
@@ -69,6 +70,30 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
     onError: (err) => setAssignError(err instanceof Error ? err.message : 'Failed to assign technician.'),
   });
 
+  /**
+   * Additional technicians (`visit_technicians`) — any number, alongside the
+   * unchanged primary above. Same invalidation pair as every other visit
+   * mutation; the database independently refuses inactive technicians,
+   * duplicates, and removing someone who has already contributed/been waived.
+   */
+  const addTechnicianMutation = useMutation({
+    mutationFn: (technicianId: string) => addVisitTechnician(visit.id, technicianId),
+    onSuccess: () => {
+      invalidateAfterVisitChange(queryClient);
+      setExtraError(null);
+    },
+    onError: (err) => setExtraError(err instanceof Error ? err.message : 'Failed to add technician.'),
+  });
+
+  const removeTechnicianMutation = useMutation({
+    mutationFn: (technicianId: string) => removeVisitTechnician(visit.id, technicianId),
+    onSuccess: () => {
+      invalidateAfterVisitChange(queryClient);
+      setExtraError(null);
+    },
+    onError: (err) => setExtraError(err instanceof Error ? err.message : 'Failed to remove technician.'),
+  });
+
   const completeMutation = useMutation({
     mutationFn: () => completeVisit(visit.id, Number(price), new Date(completedAt).toISOString(), actor),
     onSuccess: () => {
@@ -103,6 +128,23 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
     onError: (err) => setCancelError(err instanceof Error ? err.message : 'Failed to cancel visit.'),
   });
 
+  // `?? []`: job rows restored from a cache written before multi-technician visits have no additionalTechnicians.
+  const additionalTechnicians = visit.additionalTechnicians ?? [];
+
+  // A legacy (non-contribution) report has no per-technician tracking, so an
+  // extra technician could never submit into it; an approved report is final.
+  const extrasLocked =
+    (visit.reportId != null && !visit.reportHasContributions) || visit.reportReviewStatus === 'approved';
+  const extrasLockedReason =
+    visit.reportReviewStatus === 'approved'
+      ? 'This visit’s report is already approved.'
+      : 'A single-technician report has already been submitted for this visit.';
+  const showExtras = visit.status !== 'cancelled' && visit.status !== 'missed';
+  const assignedIds = new Set([visit.technicianId, ...additionalTechnicians.map((t) => t.technicianId)]);
+  const addableTechnicians = technicians.filter((t) => t.isActive && !assignedIds.has(t.id));
+  const extraIds = new Set(additionalTechnicians.map((t) => t.technicianId));
+  const primaryOptions = technicians.filter((t) => !extraIds.has(t.id));
+
   const dateLabel = visit.scheduledDate ? new Date(visit.scheduledDate).toLocaleDateString('en-GB') : 'No date set';
 
   return (
@@ -110,13 +152,62 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
       <div className="flex items-center justify-between gap-3">
         <span className="flex items-center gap-1.5">
           <StatusPill presentation={getVisitStatusPresentation(visit.status)} />
-          <span className="text-neutral-500"> · {visit.technicianName ?? 'Unassigned'}</span>
+          <span className="text-neutral-500">
+            {' '}
+            · {visit.technicianName ?? 'Unassigned'}
+            {additionalTechnicians.length > 0 && ` + ${additionalTechnicians.length} more`}
+          </span>
           {visit.priceCharged != null && (
             <span className="text-neutral-500"> · £{visit.priceCharged.toLocaleString('en-GB')}</span>
           )}
         </span>
         <span className="tabular-nums text-neutral-600">{dateLabel}</span>
       </div>
+
+      {showExtras && mode === 'summary' && (additionalTechnicians.length > 0 || !extrasLocked) && (
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-neutral-600">
+          <span>Also on this visit:</span>
+          {additionalTechnicians.length === 0 && <span className="text-neutral-400">nobody else</span>}
+          {additionalTechnicians.map((t) => {
+            const locked = t.contribution !== 'pending';
+            return (
+              <span key={t.technicianId} className="inline-flex items-center gap-1 border border-neutral-300 px-1.5 py-0.5 text-ink">
+                {t.name}
+                {t.contribution === 'submitted' && <span className="text-done-fg">· submitted</span>}
+                {t.contribution === 'waived' && <span className="text-neutral-500">· waived</span>}
+                <button
+                  onClick={() => removeTechnicianMutation.mutate(t.technicianId)}
+                  disabled={locked || removeTechnicianMutation.isPending}
+                  title={locked ? "Can't be removed — they have already contributed to (or been waived from) this report." : `Remove ${t.name} from this visit`}
+                  aria-label={`Remove ${t.name}`}
+                  className="cursor-pointer text-neutral-500 hover:text-missed-fg disabled:cursor-not-allowed disabled:text-neutral-300"
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
+          {!extrasLocked && (
+            <select
+              value=""
+              onChange={(e) => e.target.value && addTechnicianMutation.mutate(e.target.value)}
+              disabled={addTechnicianMutation.isPending || addableTechnicians.length === 0}
+              aria-label="Add another technician to this visit"
+              className="cursor-pointer border border-neutral-300 px-1.5 py-0.5 text-[11px] text-ink outline-none focus:border-teal disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400"
+            >
+              <option value="">{addableTechnicians.length === 0 ? 'No one else to add' : '+ Add technician'}</option>
+              {addableTechnicians.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          )}
+          {extrasLocked && <span className="text-neutral-500">{extrasLockedReason} Additional technicians can't be added.</span>}
+          {(addTechnicianMutation.isPending || removeTechnicianMutation.isPending) && <span className="text-neutral-500">Saving…</span>}
+          {extraError && <span className="text-missed-fg">{extraError}</span>}
+        </div>
+      )}
 
       {(visit.status === 'due' || visit.status === 'booked') && mode === 'summary' && (
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -151,7 +242,7 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
               className="cursor-pointer border border-neutral-300 px-1.5 py-0.5 text-[11px] text-ink outline-none focus:border-teal disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400"
             >
               <option value="">Unassigned</option>
-              {technicians.map((t) => (
+              {primaryOptions.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
                 </option>

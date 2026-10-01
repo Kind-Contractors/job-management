@@ -191,7 +191,7 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
       </div>
 
       <div className="flex flex-col gap-2 p-4">
-        <div className="flex border border-neutral-300">
+        <div className="segmented flex border border-neutral-300">
           <button
             type="button"
             onClick={() => setClientMode('existing')}

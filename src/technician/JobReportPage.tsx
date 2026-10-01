@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getVisitDetail, retryUnlessOffline, type PhotoPhase } from './api';
+import { getVisitDetail, isSharedVisit, retryUnlessOffline, sharedVisitLabel, type PhotoPhase } from './api';
 import {
   enqueuePhoto,
   getOrInitDraft,
   getVisitPhotos,
   markReadyToSubmit,
+  removeQueuedPhoto,
   retryPhoto,
   subscribeSyncEngine,
   trySubmitIfReady,
@@ -15,6 +16,8 @@ import {
 } from './offline/syncEngine';
 import type { PendingPhoto } from './offline/db';
 import { technicianKeys, useTechnicianUserId } from './queryKeys';
+import ExistingReportPhotos from './ExistingReportPhotos';
+import PhotoDeleteButton from './PhotoDeleteButton';
 
 /** See JobFilePage.tsx's identical constant — same query key, same value, so the two screens never disagree about how long this visit stays fresh-enough-to-skip-a-refetch. */
 const VISIT_DETAIL_STALE_TIME_MS = 5 * 60 * 1000;
@@ -82,6 +85,7 @@ export default function JobReportPage() {
   const navigate = useNavigate();
   const { visitId } = useParams<{ visitId: string }>();
   const userId = useTechnicianUserId();
+  const [photoError, setPhotoError] = useState<string | null>(null);
 
   const {
     data: visit,
@@ -250,7 +254,17 @@ export default function JobReportPage() {
       // still-null internal state, is the fix — never touches
       // technicianNotes/issues, the draft seed, or resubmission's own
       // distinct default.
-      await updateDraftFields(visitId, { workCarriedOut: workCarriedOut ?? defaultWorkCarriedOut, technicianNotes, issues });
+      //
+      // The same applies to notes/issues on a RESUBMISSION: the textareas show
+      // the existing report's text, but the state stays null until typed in, so
+      // a technician who only adds a photo would otherwise send null and the
+      // resubmit RPC (which overwrites all three text fields) would erase them.
+      // For a brand-new report the defaults are empty, so this changes nothing.
+      await updateDraftFields(visitId, {
+        workCarriedOut: workCarriedOut ?? defaultWorkCarriedOut,
+        technicianNotes: technicianNotes ?? (isResubmitMode ? defaultTechnicianNotes : null),
+        issues: issues ?? (isResubmitMode ? defaultIssues : null),
+      });
       const readyDraft = await markReadyToSubmit(visitId);
       void trySubmitIfReady(visitId); // fire immediately in case we're already online — never awaited, navigation doesn't wait on it
       navigate(`/technician/visits/${visitId}/completed`, {
@@ -275,6 +289,7 @@ export default function JobReportPage() {
           {photos.length} new
         </span>
       </div>
+      {isResubmitMode && visitId && <ExistingReportPhotos userId={userId} visitId={visitId} disabled={isCompleting} />}
       <div className="grid grid-cols-3 gap-2">
         {PHASES.map(({ key, label }) => {
           const phasePhotos = photos.filter((p) => p.phase === key);
@@ -287,7 +302,7 @@ export default function JobReportPage() {
                 {phasePhotos.map((p) => {
                   const display = photoDisplay(p, online);
                   return (
-                    <div key={p.id} className="flex flex-col items-center gap-0.5">
+                    <div key={p.id} className="relative flex flex-col items-center gap-0.5">
                       <button
                         type="button"
                         onClick={() => display.retryable && void retryPhoto(p)}
@@ -296,6 +311,17 @@ export default function JobReportPage() {
                         style={{ backgroundImage: `url(${previewUrlFor(p)})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
                       />
                       <span className={`text-center text-[8.5px] leading-tight ${display.style.split(' ')[1]}`}>{display.label}</span>
+                      <PhotoDeleteButton
+                        needsConfirm={p.status === 'uploaded'}
+                        disabled={isCompleting}
+                        ariaLabel={`Delete ${label.toLowerCase()} photo`}
+                        onDelete={async () => {
+                          setPhotoError(null);
+                          await removeQueuedPhoto(p);
+                          if (visitId) setPhotos(await getVisitPhotos(visitId));
+                        }}
+                        onError={setPhotoError}
+                      />
                     </div>
                   );
                 })}
@@ -324,6 +350,9 @@ export default function JobReportPage() {
           );
         })}
       </div>
+      {photoError && (
+        <div className="mt-2 border border-missed bg-missed/10 p-2 text-[11px] leading-snug text-missed-fg">{photoError}</div>
+      )}
       {online && failedPhotos.length > 0 && (
         <div className="mt-2 border border-missed bg-missed/10 p-2 text-[11px] leading-snug text-missed-fg">
           <div className="font-semibold">
@@ -407,6 +436,11 @@ export default function JobReportPage() {
             <div className="text-[12.5px] text-neutral-600">
               {visit.buildingAddress} · {visit.jobSummary}
             </div>
+            {isSharedVisit(visit) && (
+              <div className="mt-1.5 text-[11.5px] font-semibold text-teal-700">
+                {sharedVisitLabel(visit.assignedCount)} · this is your own part of the report
+              </div>
+            )}
           </div>
 
           {isResubmitMode && (
@@ -445,7 +479,7 @@ export default function JobReportPage() {
             <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
               Specification
             </div>
-            <div className="flex border border-neutral-300">
+            <div className="segmented flex border border-neutral-300">
               <button
                 type="button"
                 onClick={() => handleSpecMetChange(true)}
