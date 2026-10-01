@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabaseClient';
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -40,14 +41,25 @@ export default function LoginPage() {
         </label>
         <label className="mb-4 block text-xs text-neutral-600">
           Password
-          <input
-            type="password"
-            autoComplete="current-password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 block w-full border border-neutral-300 px-2.5 py-1.5 text-sm text-ink outline-none focus:border-teal"
-          />
+          <div className="relative mt-1">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              autoComplete="current-password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="block w-full border border-neutral-300 py-1.5 pr-14 pl-2.5 text-sm text-ink outline-none focus:border-teal"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((shown) => !shown)}
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              aria-pressed={showPassword}
+              className="absolute inset-y-0 right-0 cursor-pointer px-2.5 text-xs font-semibold text-teal hover:text-teal-700"
+            >
+              {showPassword ? 'Hide' : 'Show'}
+            </button>
+          </div>
         </label>
 
         {error && <div className="mb-3 text-xs text-missed-fg">{error}</div>}
