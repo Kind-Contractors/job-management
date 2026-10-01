@@ -2,7 +2,7 @@ import type { DragEvent } from 'react';
 import type { JobRow, Technician, WeekVisit } from '../../domain/types';
 import { visitTechnicianLabel, visitTechnicianNames } from '../../lib/visitTechnicians';
 
-const WEEKDAY_HEADER = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const WEEKDAY_HEADER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const DAY_NUM = new Intl.DateTimeFormat('en-GB', { day: 'numeric' });
 const MAX_CHIPS_PER_DAY = 2;
 

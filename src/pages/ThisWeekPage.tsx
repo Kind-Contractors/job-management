@@ -21,7 +21,7 @@ import ScheduleDayDrawer from '../components/calendar/ScheduleDayDrawer';
 import ScheduleHeader from '../components/calendar/ScheduleHeader';
 import ScheduleToolbar from '../components/calendar/ScheduleToolbar';
 
-const DAY_LABEL = new Intl.DateTimeFormat('en-GB', { weekday: 'short' });
+const DAY_LABEL = new Intl.DateTimeFormat('en-GB', { weekday: 'long' });
 const RANGE_FORMAT = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 const MONTH_LABEL_FORMAT = new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric' });
 

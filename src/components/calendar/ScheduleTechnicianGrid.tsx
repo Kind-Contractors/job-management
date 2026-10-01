@@ -2,7 +2,7 @@ import { Fragment } from 'react';
 import type { JobRow, Technician, VisitStatus, WeekVisit } from '../../domain/types';
 import { compareVisitsInDay, isVisitParticipant, visitTechnicianNames } from '../../lib/visitTechnicians';
 
-const DAY_LABEL = new Intl.DateTimeFormat('en-GB', { weekday: 'short' });
+const DAY_LABEL = new Intl.DateTimeFormat('en-GB', { weekday: 'long' });
 const DAY_NUM = new Intl.DateTimeFormat('en-GB', { day: 'numeric' });
 
 /**
