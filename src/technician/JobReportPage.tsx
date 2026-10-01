@@ -7,6 +7,7 @@ import {
   getOrInitDraft,
   getVisitPhotos,
   markReadyToSubmit,
+  removeQueuedPhoto,
   retryPhoto,
   subscribeSyncEngine,
   trySubmitIfReady,
@@ -15,6 +16,8 @@ import {
 } from './offline/syncEngine';
 import type { PendingPhoto } from './offline/db';
 import { technicianKeys, useTechnicianUserId } from './queryKeys';
+import ExistingReportPhotos from './ExistingReportPhotos';
+import PhotoDeleteButton from './PhotoDeleteButton';
 
 /** See JobFilePage.tsx's identical constant — same query key, same value, so the two screens never disagree about how long this visit stays fresh-enough-to-skip-a-refetch. */
 const VISIT_DETAIL_STALE_TIME_MS = 5 * 60 * 1000;
@@ -82,6 +85,7 @@ export default function JobReportPage() {
   const navigate = useNavigate();
   const { visitId } = useParams<{ visitId: string }>();
   const userId = useTechnicianUserId();
+  const [photoError, setPhotoError] = useState<string | null>(null);
 
   const {
     data: visit,
@@ -285,6 +289,7 @@ export default function JobReportPage() {
           {photos.length} new
         </span>
       </div>
+      {isResubmitMode && visitId && <ExistingReportPhotos userId={userId} visitId={visitId} disabled={isCompleting} />}
       <div className="grid grid-cols-3 gap-2">
         {PHASES.map(({ key, label }) => {
           const phasePhotos = photos.filter((p) => p.phase === key);
@@ -297,7 +302,7 @@ export default function JobReportPage() {
                 {phasePhotos.map((p) => {
                   const display = photoDisplay(p, online);
                   return (
-                    <div key={p.id} className="flex flex-col items-center gap-0.5">
+                    <div key={p.id} className="relative flex flex-col items-center gap-0.5">
                       <button
                         type="button"
                         onClick={() => display.retryable && void retryPhoto(p)}
@@ -306,6 +311,17 @@ export default function JobReportPage() {
                         style={{ backgroundImage: `url(${previewUrlFor(p)})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
                       />
                       <span className={`text-center text-[8.5px] leading-tight ${display.style.split(' ')[1]}`}>{display.label}</span>
+                      <PhotoDeleteButton
+                        needsConfirm={p.status === 'uploaded'}
+                        disabled={isCompleting}
+                        ariaLabel={`Delete ${label.toLowerCase()} photo`}
+                        onDelete={async () => {
+                          setPhotoError(null);
+                          await removeQueuedPhoto(p);
+                          if (visitId) setPhotos(await getVisitPhotos(visitId));
+                        }}
+                        onError={setPhotoError}
+                      />
                     </div>
                   );
                 })}
@@ -334,6 +350,9 @@ export default function JobReportPage() {
           );
         })}
       </div>
+      {photoError && (
+        <div className="mt-2 border border-missed bg-missed/10 p-2 text-[11px] leading-snug text-missed-fg">{photoError}</div>
+      )}
       {online && failedPhotos.length > 0 && (
         <div className="mt-2 border border-missed bg-missed/10 p-2 text-[11px] leading-snug text-missed-fg">
           <div className="font-semibold">
