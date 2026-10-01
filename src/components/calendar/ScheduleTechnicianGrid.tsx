@@ -58,7 +58,7 @@ export default function ScheduleTechnicianGrid({
   };
 
   return (
-    <div className="border border-neutral-300 bg-white">
+    <div className="overflow-hidden rounded-lg border border-neutral-300 bg-white">
       <div
         className={`grid ${days.length === 1 ? 'grid-cols-[180px_minmax(0,1fr)]' : 'grid-cols-[180px_repeat(6,minmax(0,1fr))]'}`}
       >
@@ -177,7 +177,7 @@ export default function ScheduleTechnicianGrid({
                                 e.stopPropagation();
                                 onSelectVisit(v.jobId);
                               }}
-                              className={`truncate border px-1.5 py-1 text-[11px] leading-tight ${draggableChip ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${visitStatusStyle[v.status]}`}
+                              className={`truncate rounded-md border px-1.5 py-1 text-[11px] leading-tight ${draggableChip ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${visitStatusStyle[v.status]}`}
                               title={`${job ? `${job.jobSummary} · ${job.buildingName}` : v.jobId}${isMulti ? ` · With: ${teamNames.join(', ')}` : ''}`}
                             >
                               {dayVisits.length > 1 && (
@@ -187,7 +187,7 @@ export default function ScheduleTechnicianGrid({
                               )}
                               {job ? job.buildingName : 'Job'}
                               {isMulti && (
-                                <span className="ml-1 border border-current px-1 text-[9.5px] font-semibold opacity-80">
+                                <span className="ml-1 rounded-sm border border-current px-1 text-[9.5px] font-semibold opacity-80">
                                   {teamNames.length} techs
                                 </span>
                               )}

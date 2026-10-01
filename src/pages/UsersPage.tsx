@@ -190,7 +190,7 @@ function UserFormDrawer({
             </div>
           ) : (
             <>
-              <div className="flex border border-neutral-300">
+              <div className="segmented flex border border-neutral-300">
                 <button
                   type="button"
                   onClick={() => setRole('technician')}
@@ -469,7 +469,7 @@ export default function UsersPage() {
         </div>
 
         <div className="flex flex-none flex-wrap items-center gap-2 border-y border-neutral-300 bg-neutral-100 px-5 py-2.5">
-          <div className="flex border border-neutral-300 bg-white">
+          <div className="segmented flex border border-neutral-300 bg-white">
             {TABS.map((t) => (
               <button
                 key={t.key}

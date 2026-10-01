@@ -70,7 +70,7 @@ export default function MonthGrid({
   technicianById,
 }: MonthGridProps) {
   return (
-    <div className="grid grid-cols-7 border border-neutral-300 bg-white">
+    <div className="grid grid-cols-7 overflow-hidden rounded-lg border border-neutral-300 bg-white">
       {WEEKDAY_HEADER.map((label) => (
         <div
           key={label}
@@ -232,7 +232,7 @@ export default function MonthGrid({
                           onSelectVisit(v.jobId);
                         }}
                         title={`${job ? `${job.jobSummary} · ${job.buildingName}` : v.jobId}${technicianNames.length > 1 ? ` · ${technicianNames.join(', ')}` : ''}`}
-                        className={`border px-1.5 py-1 text-[10.5px] leading-tight ${draggableChip ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${visitStatusStyle[v.status]}`}
+                        className={`rounded-md border px-1.5 py-1 text-[10.5px] leading-tight ${draggableChip ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${visitStatusStyle[v.status]}`}
                       >
                         <div className="truncate font-semibold">{visitTechnicianLabel(v, technicianById)}</div>
                         <div className="truncate opacity-80">{job ? job.buildingName : 'Job'}</div>

@@ -101,13 +101,41 @@ body {
   }
 }
 
-/* Blueprint visual language: square corners everywhere, hairline borders. */
-button,
+/* Hairline borders. Form fields keep square corners... */
 input,
 select,
 textarea {
   border-radius: 0;
   font-family: inherit;
+}
+
+button {
+  font-family: inherit;
+}
+
+/*
+ * ...but every button is softly rounded. This sits in the base layer (not
+ * unlayered) so a Tailwind utility such as rounded-none can still opt a
+ * button out - used for bar-style buttons (tab bars, matrix cells).
+ */
+@layer base {
+  button {
+    border-radius: var(--radius-md);
+  }
+}
+
+/*
+ * A joined group of buttons (Day/Week/Month, role toggles, Division...): the
+ * group itself is the rounded shape and its buttons stay square inside it, so
+ * the selected button's fill follows the curve instead of fighting it.
+ * Unlayered on purpose so it beats the base-layer button radius above.
+ */
+.segmented {
+  overflow: hidden;
+  border-radius: var(--radius-md);
+}
+.segmented button {
+  border-radius: 0;
 }
 
 .tabular-nums {

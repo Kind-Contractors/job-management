@@ -230,7 +230,7 @@ export default function BuildingFilePage() {
             key={t}
             onClick={() => setTab(t)}
             className={[
-              'cursor-pointer border-b-2 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em]',
+              'cursor-pointer rounded-none border-b-2 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em]',
               tab === t ? 'border-teal text-teal-700' : 'border-transparent text-neutral-600',
             ].join(' ')}
           >

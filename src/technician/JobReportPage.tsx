@@ -436,7 +436,7 @@ export default function JobReportPage() {
             <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
               Specification
             </div>
-            <div className="flex border border-neutral-300">
+            <div className="segmented flex border border-neutral-300">
               <button
                 type="button"
                 onClick={() => handleSpecMetChange(true)}

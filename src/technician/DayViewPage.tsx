@@ -394,7 +394,7 @@ export default function DayViewPage() {
           <button
             key={key}
             onClick={() => setTab(key)}
-            className={`cursor-pointer flex min-h-[44px] items-center justify-center border-t-2 px-1 py-2 text-center leading-tight font-heading text-[10.5px] font-semibold tracking-[0.1em] uppercase ${
+            className={`cursor-pointer rounded-none flex min-h-[44px] items-center justify-center border-t-2 px-1 py-2 text-center leading-tight font-heading text-[10.5px] font-semibold tracking-[0.1em] uppercase ${
               tab === key
                 ? 'border-teal text-teal-700'
                 : badge
