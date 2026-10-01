@@ -14,6 +14,7 @@ import {
 import { getReportReviewStatusPresentation } from '../../lib/statusPresentation';
 import { getApprovalBlockers } from '../../lib/approvalBlockers';
 import ReportContributionsSection from './ReportContributionsSection';
+import AutoGrowTextarea from '../shared/AutoGrowTextarea';
 import StatusPill from './StatusPill';
 
 const PHOTO_PHASE_LABEL: Record<ReportPhoto['phase'], string> = { before: 'Before', during: 'During', after: 'After' };
@@ -196,28 +197,25 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
 
           <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
             Work carried out
-            <textarea
+            <AutoGrowTextarea
               value={editWork ?? report.workCarriedOut ?? ''}
               onChange={(e) => setEditWork(e.target.value)}
-              rows={2}
               className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
             />
           </label>
           <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
             Notes / Issues
-            <textarea
+            <AutoGrowTextarea
               value={editIssues ?? report.issues ?? ''}
               onChange={(e) => setEditIssues(e.target.value)}
-              rows={2}
               className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
             />
           </label>
           <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
             Optional notes
-            <textarea
+            <AutoGrowTextarea
               value={editNotes ?? report.technicianNotes ?? ''}
               onChange={(e) => setEditNotes(e.target.value)}
-              rows={2}
               className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
             />
           </label>
