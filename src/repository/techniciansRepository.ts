@@ -35,7 +35,7 @@ export async function listTechnicians(): Promise<Technician[]> {
 export async function listVisitsForRange(startDate: string, endDate: string): Promise<WeekVisit[]> {
   const { data, error } = await supabase
     .from('visits')
-    .select('id, job_id, technician_id, scheduled_date, status, visit_technicians ( technician_id )')
+    .select('id, job_id, technician_id, scheduled_date, status, sort_order, created_at, visit_technicians ( technician_id )')
     .gte('scheduled_date', startDate)
     .lte('scheduled_date', endDate);
 
@@ -48,6 +48,8 @@ export async function listVisitsForRange(startDate: string, endDate: string): Pr
     jobId: row.job_id,
     technicianId: row.technician_id,
     additionalTechnicianIds: (row.visit_technicians ?? []).map((vt: { technician_id: string }) => vt.technician_id),
+    sortOrder: row.sort_order == null ? null : Number(row.sort_order),
+    createdAt: row.created_at,
     scheduledDate: row.scheduled_date,
     status: row.status,
   }));
@@ -231,4 +233,19 @@ export async function removeVisitTechnician(visitId: string, technicianId: strin
   }
 
   await logCurrentUserActivity('visit', visitId, 'visit_technician_removed', name);
+}
+
+/**
+ * Saves one day's running order for the given visits - the first id becomes
+ * 1, the next 2, and so on - in a single database call (set_visit_order), so
+ * an order is either fully applied or not at all. Visits must all be on the
+ * same date. A shared multi-technician visit has one order, so moving it
+ * moves it for everyone assigned to it.
+ */
+export async function setVisitOrder(orderedVisitIds: string[]): Promise<void> {
+  const { error } = await supabase.rpc('set_visit_order', { p_visit_ids: orderedVisitIds });
+
+  if (error) {
+    throw new Error(`Failed to save visit order: ${error.message}`);
+  }
 }

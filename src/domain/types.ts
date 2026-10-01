@@ -394,6 +394,10 @@ export interface WeekVisit {
   technicianId: string | null;
   /** Ids of the visit's additional technicians (`visit_technicians`); empty for a single-technician visit. */
   additionalTechnicianIds: string[];
+  /** `visits.sort_order` - manual running order within the day (lower = earlier), null = unordered. One value per booking, shared by every assigned technician. Not a time. */
+  sortOrder: number | null;
+  /** `visits.created_at` - the fallback order among unordered visits, matching the technician app. */
+  createdAt: string;
   scheduledDate: string | null;
   status: VisitStatus;
 }

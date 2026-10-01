@@ -2,10 +2,10 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createVisit } from '../../repository/techniciansRepository';
 import VisitTechnicianPicker from '../jobs/VisitTechnicianPicker';
+import DayBookingsList from './DayBookingsList';
 import { activeSelection, splitPrimary } from '../../lib/visitTechnicianSelection';
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import type { JobRow, Technician, WeekVisit } from '../../domain/types';
-import { visitTechnicianNames } from '../../lib/visitTechnicians';
 import SearchableSelect from '../shared/SearchableSelect';
 import JobCreator from '../jobs/JobCreator';
 
@@ -69,13 +69,8 @@ export default function ScheduleDayDrawer({
   const jobById = useMemo(() => new Map(jobRows.map((j) => [j.id, j])), [jobRows]);
   const technicianById = useMemo(() => new Map(technicians.map((t) => [t.id, t])), [technicians]);
 
-  const dayVisits = useMemo(
-    () =>
-      visits
-        .filter((v) => v.scheduledDate === dateISO)
-        .sort((a, b) => (jobById.get(a.jobId)?.buildingName ?? '').localeCompare(jobById.get(b.jobId)?.buildingName ?? '')),
-    [visits, dateISO, jobById],
-  );
+  // Ordering (running order within the day) is applied by DayBookingsList itself.
+  const dayVisits = useMemo(() => visits.filter((v) => v.scheduledDate === dateISO), [visits, dateISO]);
 
   const { data: buildingRows = [] } = useQuery({ queryKey: ['buildingRows'], queryFn: listBuildingRows });
   const buildingById = useMemo(() => new Map(buildingRows.map((b) => [b.id, b])), [buildingRows]);
@@ -129,7 +124,7 @@ export default function ScheduleDayDrawer({
   return (
     <>
     <div className="fixed inset-0 z-40 bg-ink/30" onClick={onClose} />
-    <div className="fixed inset-y-0 right-0 z-50 flex w-[380px] flex-none flex-col overflow-y-auto border-l border-neutral-300 bg-white shadow-xl">
+    <div className="fixed inset-y-0 right-0 z-50 flex w-[440px] max-w-full flex-none flex-col overflow-y-auto border-l border-neutral-300 bg-white shadow-xl">
       <div className="flex items-start gap-2 border-b border-neutral-300 bg-teal-100 px-5 py-4">
         <div className="min-w-0">
           <div className="font-heading text-[10px] font-semibold tracking-[0.14em] text-teal-700 uppercase">Schedule</div>
@@ -154,24 +149,13 @@ export default function ScheduleDayDrawer({
         {dayVisits.length === 0 ? (
           <div className="text-[12.5px] text-neutral-500">Nothing booked for this day yet.</div>
         ) : (
-          <div className="flex flex-col gap-1.5">
-            {dayVisits.map((v) => {
-              const job = jobById.get(v.jobId);
-              const technicianNames = visitTechnicianNames(v, technicianById);
-              return (
-                <button
-                  key={v.id}
-                  onClick={() => onSelectVisit(v.jobId)}
-                  className={`flex cursor-pointer flex-col items-start gap-0.5 border px-2 py-1.5 text-left text-[12px] ${visitStatusStyle[v.status]}`}
-                >
-                  <span className="truncate font-semibold">{job ? job.buildingName : 'Job'}</span>
-                  <span className="truncate text-[11px] opacity-80">
-                    {job?.jobSummary ?? '—'} · {technicianNames.length > 0 ? technicianNames.join(', ') : 'Unassigned'}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          <DayBookingsList
+            dayVisits={dayVisits}
+            jobById={jobById}
+            technicianById={technicianById}
+            visitStatusStyle={visitStatusStyle}
+            onSelectVisit={onSelectVisit}
+          />
         )}
       </div>
 

@@ -20,3 +20,15 @@ export function visitTechnicianLabel(visit: WeekVisit, technicianById: Map<strin
 export function isVisitParticipant(visit: WeekVisit, technicianId: string): boolean {
   return visit.technicianId === technicianId || visit.additionalTechnicianIds.includes(technicianId);
 }
+
+/**
+ * Running order within a day: manually ordered visits first (lowest number
+ * first), then unordered ones by creation time - the same rule the technician
+ * app's lists use in the database, so both sides always agree.
+ */
+export function compareVisitsInDay(a: WeekVisit, b: WeekVisit): number {
+  if (a.sortOrder != null && b.sortOrder != null && a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+  if (a.sortOrder != null && b.sortOrder == null) return -1;
+  if (a.sortOrder == null && b.sortOrder != null) return 1;
+  return a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+}

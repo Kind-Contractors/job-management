@@ -1,6 +1,6 @@
 import { Fragment } from 'react';
 import type { JobRow, Technician, VisitStatus, WeekVisit } from '../../domain/types';
-import { isVisitParticipant, visitTechnicianNames } from '../../lib/visitTechnicians';
+import { compareVisitsInDay, isVisitParticipant, visitTechnicianNames } from '../../lib/visitTechnicians';
 
 const DAY_LABEL = new Intl.DateTimeFormat('en-GB', { weekday: 'short' });
 const DAY_NUM = new Intl.DateTimeFormat('en-GB', { day: 'numeric' });
@@ -114,7 +114,8 @@ export default function ScheduleTechnicianGrid({
               </div>
               {days.map((d) => {
                 const cellDateISO = toISODate(d);
-                const dayVisits = technicianDisplayVisits.filter((v) => v.scheduledDate === cellDateISO);
+                // Running order within the day (manual order first, then creation time) - the same order the technician sees.
+                const dayVisits = technicianDisplayVisits.filter((v) => v.scheduledDate === cellDateISO).sort(compareVisitsInDay);
                 const isToday = cellDateISO === todayISO;
                 const isSelected = cellDateISO === selectedDateISO;
                 return (
@@ -153,7 +154,7 @@ export default function ScheduleTechnicianGrid({
                       <span className="text-[11px] text-neutral-400">Free</span>
                     ) : (
                       <div className="flex flex-col gap-1">
-                        {dayVisits.map((v) => {
+                        {dayVisits.map((v, orderIndex) => {
                           const job = jobById.get(v.jobId);
                           // Only 'due'/'booked' visits can be dragged to a
                           // different day — see MonthGrid.tsx's identical rule.
@@ -179,6 +180,11 @@ export default function ScheduleTechnicianGrid({
                               className={`truncate border px-1.5 py-1 text-[11px] leading-tight ${draggableChip ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${visitStatusStyle[v.status]}`}
                               title={`${job ? `${job.jobSummary} · ${job.buildingName}` : v.jobId}${isMulti ? ` · With: ${teamNames.join(', ')}` : ''}`}
                             >
+                              {dayVisits.length > 1 && (
+                                <span title="Order for this technician today" className="mr-1 font-bold tabular-nums">
+                                  {orderIndex + 1}.
+                                </span>
+                              )}
                               {job ? job.buildingName : 'Job'}
                               {isMulti && (
                                 <span className="ml-1 border border-current px-1 text-[9.5px] font-semibold opacity-80">
