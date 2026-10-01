@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { HiOutlineTrash } from 'react-icons/hi2';
 
 interface PhotoDeleteButtonProps {
@@ -16,14 +17,20 @@ interface PhotoDeleteButtonProps {
 
 /**
  * The trash action on one photo tile. Must sit inside a `relative` tile: the trash icon is pinned to
- * its top-right corner, and the confirm / deleting states cover the tile.
+ * its top-right corner.
  *
- *   idle  ->  (confirm, if needed)  ->  deleting  ->  gone (the parent drops the tile) or back to idle with an error
+ *   idle  ->  (confirm dialog, if needed)  ->  deleting  ->  gone (the parent drops the tile) or back to idle with an error
+ *
+ * The confirmation is a centred dialog over a dimmed page (rendered in a portal so the small photo tile
+ * cannot clip it). A photo that never left the device skips the dialog and shows "Deleting…" on its tile.
  */
 export default function PhotoDeleteButton({ needsConfirm, disabled, ariaLabel, onDelete, onError }: PhotoDeleteButtonProps) {
   const [state, setState] = useState<'idle' | 'confirming' | 'deleting'>('idle');
+  // True when the delete was confirmed in the dialog, so the dialog stays up (showing progress) until it finishes.
+  const [confirmed, setConfirmed] = useState(false);
 
-  const run = async () => {
+  const run = async (fromDialog: boolean) => {
+    setConfirmed(fromDialog);
     setState('deleting');
     try {
       await onDelete();
@@ -31,53 +38,76 @@ export default function PhotoDeleteButton({ needsConfirm, disabled, ariaLabel, o
       onError(err instanceof Error ? err.message : 'The photo could not be deleted.');
     } finally {
       setState('idle');
+      setConfirmed(false);
     }
   };
 
-  if (state === 'idle') {
-    return (
+  const busy = state === 'deleting';
+
+  return (
+    <>
       <button
         type="button"
         aria-label={ariaLabel}
         title="Delete photo"
-        disabled={disabled}
-        onClick={() => (needsConfirm ? setState('confirming') : void run())}
-        className="absolute -top-1.5 -right-1.5 z-10 flex h-5 w-5 cursor-pointer items-center justify-center rounded-full border border-neutral-400 bg-white text-neutral-600 hover:border-missed hover:text-missed-fg disabled:cursor-not-allowed disabled:opacity-40"
+        disabled={disabled || busy}
+        onClick={() => (needsConfirm ? setState('confirming') : void run(false))}
+        className="absolute -top-1.5 -right-1.5 z-10 flex h-5 w-5 cursor-pointer items-center justify-center rounded-full border border-missed bg-white text-missed hover:bg-missed hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
       >
         <HiOutlineTrash className="h-3 w-3" aria-hidden />
       </button>
-    );
-  }
 
-  return (
-    <div
-      role="group"
-      aria-label={ariaLabel}
-      className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-0.5 bg-white/95 text-center text-[9px] leading-tight text-ink"
-    >
-      {state === 'deleting' ? (
-        <span>Deleting…</span>
-      ) : (
-        <>
-          <span className="font-semibold">Delete?</span>
-          <div className="flex gap-1">
-            <button
-              type="button"
-              onClick={() => void run()}
-              className="cursor-pointer rounded-sm border border-missed bg-missed px-1.5 py-0.5 text-[9px] font-semibold text-white"
-            >
-              Yes
-            </button>
-            <button
-              type="button"
-              onClick={() => setState('idle')}
-              className="cursor-pointer rounded-sm border border-neutral-400 bg-white px-1.5 py-0.5 text-[9px] text-neutral-700"
-            >
-              No
-            </button>
-          </div>
-        </>
+      {busy && !confirmed && (
+        <div
+          role="status"
+          className="absolute inset-0 z-20 flex items-center justify-center bg-white/95 text-center text-[9px] leading-tight text-ink"
+        >
+          Deleting…
+        </div>
       )}
-    </div>
+
+      {(state === 'confirming' || (busy && confirmed)) &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-near-black/50 p-4"
+            onClick={() => {
+              if (!busy) setState('idle');
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && !busy) setState('idle');
+            }}
+          >
+            <div
+              role="alertdialog"
+              aria-modal="true"
+              aria-label={ariaLabel}
+              className="w-full max-w-xs rounded-lg border border-neutral-300 bg-white px-5 py-6 text-center shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className="text-sm leading-snug text-ink">Are you sure you want to delete this photo?</p>
+              <div className="mt-5 flex gap-3">
+                <button
+                  type="button"
+                  autoFocus
+                  disabled={busy}
+                  onClick={() => setState('idle')}
+                  className="h-11 flex-1 cursor-pointer rounded-md border border-neutral-300 bg-white text-sm font-semibold text-neutral-700 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void run(true)}
+                  className="h-11 flex-1 cursor-pointer rounded-md bg-missed text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {busy ? 'Deleting…' : 'Delete'}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
