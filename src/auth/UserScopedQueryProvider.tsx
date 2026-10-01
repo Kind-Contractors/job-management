@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { useAuth } from './AuthProvider';
-import { QUERY_CACHE_MAX_AGE_MS, createUserQueryPersister } from '../lib/userQueryCache';
+import { QUERY_CACHE_MAX_AGE_MS, createUserQueryPersister, queryCacheBuster } from '../lib/userQueryCache';
 
 interface ScopedProps {
   userId: string;
@@ -12,8 +12,10 @@ interface ScopedProps {
 /**
  * One QueryClient — and one persisted cache — per authenticated user.
  * Persisted data is restored only into that same user's client, and the
- * payload is stamped with the user ID (`buster`) so even a mis-keyed entry
- * is discarded on restore rather than trusted.
+ * payload is stamped with the user ID plus a cache-shape version (`buster`,
+ * see queryCacheBuster) so even a mis-keyed entry - or one written by an older
+ * version of the app with differently shaped data - is discarded on restore
+ * rather than trusted.
  *
  * The client/persister live in useState so they're created once per mount;
  * the `key` on the caller changes with the user ID, which discards the
@@ -27,7 +29,7 @@ function PersistedForUser({ userId, children }: ScopedProps) {
   return (
     <PersistQueryClientProvider
       client={client}
-      persistOptions={{ persister, maxAge: QUERY_CACHE_MAX_AGE_MS, buster: userId }}
+      persistOptions={{ persister, maxAge: QUERY_CACHE_MAX_AGE_MS, buster: queryCacheBuster(userId) }}
     >
       {children}
     </PersistQueryClientProvider>

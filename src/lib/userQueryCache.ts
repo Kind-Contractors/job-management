@@ -23,6 +23,26 @@ const WRITE_THROTTLE_MS = 1000;
 export const QUERY_CACHE_MAX_AGE_MS = 1000 * 60 * 60 * 24;
 
 /**
+ * The shape version of what is stored in the persisted query cache. BUMP THIS
+ * whenever the data returned by any cached query changes shape (a field is
+ * added, renamed or removed in a repository mapper): a browser that cached the
+ * previous shape would otherwise restore it into the new code and render it
+ * before the fresh fetch lands, which is exactly how 7af7739 blanked the
+ * Schedule (cached visits had no additionalTechnicianIds). A changed version
+ * makes every previously persisted cache be discarded on restore.
+ */
+export const QUERY_CACHE_SCHEMA_VERSION = '2026-10-01-multi-technician';
+
+/**
+ * The `buster` the persisted cache is stamped with and restored against: the
+ * user ID (so one user's cache is never trusted for another - unchanged) plus
+ * the shape version above.
+ */
+export function queryCacheBuster(userId: string): string {
+  return `${userId}:${QUERY_CACHE_SCHEMA_VERSION}`;
+}
+
+/**
  * Users whose cache was just purged by an explicit sign-out. A throttled
  * write that was already scheduled for that user's (now unmounting) client
  * must not resurrect the entry the purge just removed. Cleared again the

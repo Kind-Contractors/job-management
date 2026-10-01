@@ -128,6 +128,9 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
     onError: (err) => setCancelError(err instanceof Error ? err.message : 'Failed to cancel visit.'),
   });
 
+  // `?? []`: job rows restored from a cache written before multi-technician visits have no additionalTechnicians.
+  const additionalTechnicians = visit.additionalTechnicians ?? [];
+
   // A legacy (non-contribution) report has no per-technician tracking, so an
   // extra technician could never submit into it; an approved report is final.
   const extrasLocked =
@@ -137,9 +140,9 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
       ? 'This visit’s report is already approved.'
       : 'A single-technician report has already been submitted for this visit.';
   const showExtras = visit.status !== 'cancelled' && visit.status !== 'missed';
-  const assignedIds = new Set([visit.technicianId, ...visit.additionalTechnicians.map((t) => t.technicianId)]);
+  const assignedIds = new Set([visit.technicianId, ...additionalTechnicians.map((t) => t.technicianId)]);
   const addableTechnicians = technicians.filter((t) => t.isActive && !assignedIds.has(t.id));
-  const extraIds = new Set(visit.additionalTechnicians.map((t) => t.technicianId));
+  const extraIds = new Set(additionalTechnicians.map((t) => t.technicianId));
   const primaryOptions = technicians.filter((t) => !extraIds.has(t.id));
 
   const dateLabel = visit.scheduledDate ? new Date(visit.scheduledDate).toLocaleDateString('en-GB') : 'No date set';
@@ -152,7 +155,7 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
           <span className="text-neutral-500">
             {' '}
             · {visit.technicianName ?? 'Unassigned'}
-            {visit.additionalTechnicians.length > 0 && ` + ${visit.additionalTechnicians.length} more`}
+            {additionalTechnicians.length > 0 && ` + ${additionalTechnicians.length} more`}
           </span>
           {visit.priceCharged != null && (
             <span className="text-neutral-500"> · £{visit.priceCharged.toLocaleString('en-GB')}</span>
@@ -161,11 +164,11 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
         <span className="tabular-nums text-neutral-600">{dateLabel}</span>
       </div>
 
-      {showExtras && mode === 'summary' && (visit.additionalTechnicians.length > 0 || !extrasLocked) && (
+      {showExtras && mode === 'summary' && (additionalTechnicians.length > 0 || !extrasLocked) && (
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-neutral-600">
           <span>Also on this visit:</span>
-          {visit.additionalTechnicians.length === 0 && <span className="text-neutral-400">nobody else</span>}
-          {visit.additionalTechnicians.map((t) => {
+          {additionalTechnicians.length === 0 && <span className="text-neutral-400">nobody else</span>}
+          {additionalTechnicians.map((t) => {
             const locked = t.contribution !== 'pending';
             return (
               <span key={t.technicianId} className="inline-flex items-center gap-1 border border-neutral-300 px-1.5 py-0.5 text-ink">
