@@ -63,7 +63,7 @@ export default function MonthMatrixGrid({ blocks, year, todayISO, onSelectCell }
                   type="button"
                   onClick={() => onSelectCell(job, i + 1, cell)}
                   title={cell.label}
-                  className={`flex h-8 cursor-pointer items-center justify-center border-l border-neutral-300 text-[10px] font-semibold tabular-nums ${presentation.className} ${
+                  className={`flex h-8 cursor-pointer items-center justify-center rounded-none border-l border-neutral-300 text-[10px] font-semibold tabular-nums ${presentation.className} ${
                     presentation.hollow ? 'text-neutral-400' : 'text-ink'
                   }`}
                 >

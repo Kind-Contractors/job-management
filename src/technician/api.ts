@@ -7,6 +7,12 @@
 // on purpose — not added to src/domain/types.ts, which is the Manager app's
 // own shared shape.
 //
+// MULTI-TECHNICIAN VISITS: a visit can have several assigned technicians. The
+// RPCs below return PER-TECHNICIAN views (the report_* fields of a visit
+// detail are the signed-in technician's own contribution), and
+// technician_shared_visits() adds the assigned-technician count. The note
+// below predates that and describes the original single-technician model.
+//
 // KNOWN GAP (Phase 1-3 audit, 2026-09-07 — see matching DB comments on
 // technician_visit_detail()/technician_submit_report()/the two technician
 // storage.objects policies): every ownership check here is CURRENT
@@ -69,6 +75,51 @@ export interface TechnicianVisitSummary {
    * underlying visit-completion/pricing state.
    */
   reportSubmitted: boolean;
+  /**
+   * How many technicians are assigned to this visit (primary + additional).
+   * 1 for an ordinary single-technician visit. From technician_shared_visits()
+   * - a count only, never colleague names or their submission state.
+   */
+  assignedCount: number;
+}
+
+/** True when a visit is shared with at least one other technician. */
+export function isSharedVisit(visit: { assignedCount: number }): boolean {
+  return visit.assignedCount > 1;
+}
+
+/** "Shared report · 3 technicians" - shown wherever a shared visit appears. */
+export function sharedVisitLabel(assignedCount: number): string {
+  return `Shared report · ${assignedCount} technicians`;
+}
+
+/**
+ * Done FROM THIS TECHNICIAN'S POINT OF VIEW. `reportSubmitted` is already
+ * per-technician (their own contribution exists). A visit whose status is
+ * 'completed' counts as done only when it is NOT shared: on a shared visit a
+ * colleague's submission completes the visit for everyone, but this
+ * technician still owes their own part.
+ */
+export function isVisitDoneForMe(visit: { status: TechnicianVisitStatus; reportSubmitted: boolean; assignedCount: number }): boolean {
+  return visit.reportSubmitted || (visit.status === 'completed' && !isSharedVisit(visit));
+}
+
+interface RpcSharedVisitRow {
+  visit_id: string;
+  assigned_count: number;
+}
+
+/**
+ * The signed-in technician's own visits that are shared with other
+ * technicians, keyed by visit id - see technician_shared_visits(). Best
+ * effort by design: if this call fails the lists still load (every visit
+ * is then treated as unshared, exactly the pre-existing behaviour) rather
+ * than a missing indicator breaking the technician's whole day.
+ */
+export async function listSharedVisitCounts(): Promise<Map<string, number>> {
+  const { data, error } = await supabase.rpc('technician_shared_visits');
+  if (error) return new Map();
+  return new Map(((data ?? []) as RpcSharedVisitRow[]).map((row) => [row.visit_id, row.assigned_count]));
 }
 
 interface RpcTodayVisitRow {
@@ -86,7 +137,7 @@ interface RpcTodayVisitRow {
 
 /** Today's assigned visits, office-set order, technician-safe columns only — see technician_today_visits(). */
 export async function listTodayVisits(): Promise<TechnicianVisitSummary[]> {
-  const { data, error } = await supabase.rpc('technician_today_visits');
+  const [{ data, error }, shared] = await Promise.all([supabase.rpc('technician_today_visits'), listSharedVisitCounts()]);
   if (error) throw new Error(`Failed to load today's visits: ${error.message}`);
 
   return ((data ?? []) as RpcTodayVisitRow[]).map((row) => ({
@@ -100,6 +151,7 @@ export async function listTodayVisits(): Promise<TechnicianVisitSummary[]> {
     buildingAddress: row.building_address,
     buildingPostcode: row.building_postcode,
     reportSubmitted: row.report_submitted,
+    assignedCount: shared.get(row.visit_id) ?? 1,
   }));
 }
 
@@ -114,7 +166,7 @@ export async function listTodayVisits(): Promise<TechnicianVisitSummary[]> {
  * same regardless of the visit's date.
  */
 export async function listPastVisits(): Promise<TechnicianVisitSummary[]> {
-  const { data, error } = await supabase.rpc('technician_past_visits');
+  const [{ data, error }, shared] = await Promise.all([supabase.rpc('technician_past_visits'), listSharedVisitCounts()]);
   if (error) throw new Error(`Failed to load past visits: ${error.message}`);
 
   return ((data ?? []) as RpcTodayVisitRow[]).map((row) => ({
@@ -128,6 +180,7 @@ export async function listPastVisits(): Promise<TechnicianVisitSummary[]> {
     buildingAddress: row.building_address,
     buildingPostcode: row.building_postcode,
     reportSubmitted: row.report_submitted,
+    assignedCount: shared.get(row.visit_id) ?? 1,
   }));
 }
 
@@ -159,6 +212,8 @@ export interface TechnicianVisitDetail {
   reportPhotoCount: number;
   /** true = specification completed (the normal case); false = the technician previously selected "Something not done". null only when no report exists yet for this visit — treated as the default (true) by the caller. */
   reportSpecMet: boolean | null;
+  /** Technicians assigned to this visit (1 = ordinary single-technician visit) - see technician_shared_visits(). The report_* fields above always describe THIS technician's own contribution. */
+  assignedCount: number;
 }
 
 interface RpcVisitDetailRow {
@@ -212,7 +267,10 @@ export function retryUnlessOffline(failureCount: number): boolean {
  * indistinguishably, by design (never reveals which case it was).
  */
 export async function getVisitDetail(visitId: string): Promise<TechnicianVisitDetail | null> {
-  const { data, error } = await supabase.rpc('technician_visit_detail', { p_visit_id: visitId }).maybeSingle();
+  const [{ data, error }, shared] = await Promise.all([
+    supabase.rpc('technician_visit_detail', { p_visit_id: visitId }).maybeSingle(),
+    listSharedVisitCounts(),
+  ]);
   if (error) throw new Error(`Failed to load visit: ${error.message}`);
   if (!data) return null;
 
@@ -242,6 +300,7 @@ export async function getVisitDetail(visitId: string): Promise<TechnicianVisitDe
     reportIssues: row.report_issues,
     reportPhotoCount: row.report_photo_count,
     reportSpecMet: row.report_spec_met,
+    assignedCount: shared.get(row.visit_id) ?? 1,
   };
 }
 

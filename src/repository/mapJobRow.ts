@@ -10,6 +10,8 @@
 // own `visits.status = 'missed'` ever produces that status.
 
 import type {
+  ContributionState,
+  VisitExtraTechnician,
   Frequency,
   FrequencyType,
   JobLifecycleStatus,
@@ -138,6 +140,18 @@ interface SupabaseReport {
   review_status: ReportReviewStatus;
   sent_to_client_at: string | null;
   sent_to_accounts_at: string | null;
+  report_contributions: SupabaseReportContribution[] | null;
+}
+
+interface SupabaseReportContribution {
+  technician_id: string;
+  submitted_at: string | null;
+  waived_at: string | null;
+}
+
+interface SupabaseVisitTechnician {
+  technician_id: string;
+  technicians: SupabaseTechnician | SupabaseTechnician[] | null;
 }
 
 interface SupabaseInvoice {
@@ -157,6 +171,7 @@ export interface SupabaseVisit {
   price_charged: number | null;
   completed_at: string | null;
   technicians: SupabaseTechnician | SupabaseTechnician[] | null;
+  visit_technicians: SupabaseVisitTechnician[] | null;
   reports: SupabaseReport | SupabaseReport[] | null;
   invoice_line_items: SupabaseInvoiceLineItem | SupabaseInvoiceLineItem[] | null;
 }
@@ -308,12 +323,24 @@ export function mapVisitRow(v: SupabaseVisit): JobVisitSummary {
   const report = one(v.reports);
   const invoiceLineItem = one(v.invoice_line_items);
   const invoice = invoiceLineItem ? one(invoiceLineItem.invoices) : null;
+  const contributions = report?.report_contributions ?? [];
+  const contributionOf = (technicianId: string): ContributionState => {
+    const c = contributions.find((row) => row.technician_id === technicianId);
+    return c?.waived_at ? 'waived' : c?.submitted_at ? 'submitted' : 'pending';
+  };
+  const additionalTechnicians = (v.visit_technicians ?? []).flatMap((vt): VisitExtraTechnician[] => {
+    const t = one(vt.technicians);
+    return t ? [{ technicianId: t.id, name: t.name, isActive: t.is_active, contribution: contributionOf(t.id) }] : [];
+  });
   return {
     id: v.id,
     scheduledDate: v.scheduled_date,
     status: v.status,
     technicianId: v.technician_id,
     technicianName: one(v.technicians)?.name ?? null,
+    additionalTechnicians,
+    reportHasContributions: contributions.length > 0,
+    primaryContribution: v.technician_id ? contributionOf(v.technician_id) : 'pending',
     priceCharged: v.price_charged,
     completedAt: v.completed_at,
     reportId: report?.id ?? null,

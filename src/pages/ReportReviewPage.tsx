@@ -75,7 +75,8 @@ export default function ReportReviewPage() {
         )}
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      {/* overflow-y-auto: AppShell is h-screen/overflow-hidden, so a long report (e.g. one with a card per technician) must scroll inside this pane or its Approve/Return buttons are cut off. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
         {!selected ? (
           <div className="flex flex-1 items-center justify-center p-5 text-center">
             <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">

@@ -1,7 +1,8 @@
 import type { DragEvent } from 'react';
 import type { JobRow, Technician, WeekVisit } from '../../domain/types';
+import { visitTechnicianLabel, visitTechnicianNames } from '../../lib/visitTechnicians';
 
-const WEEKDAY_HEADER = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const WEEKDAY_HEADER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const DAY_NUM = new Intl.DateTimeFormat('en-GB', { day: 'numeric' });
 const MAX_CHIPS_PER_DAY = 2;
 
@@ -69,7 +70,7 @@ export default function MonthGrid({
   technicianById,
 }: MonthGridProps) {
   return (
-    <div className="grid grid-cols-7 border border-neutral-300 bg-white">
+    <div className="grid grid-cols-7 overflow-hidden rounded-lg border border-neutral-300 bg-white">
       {WEEKDAY_HEADER.map((label) => (
         <div
           key={label}
@@ -209,7 +210,7 @@ export default function MonthGrid({
                 <div className="mt-1 flex flex-col gap-1">
                   {shown.map((v) => {
                     const job = jobById.get(v.jobId);
-                    const technician = v.technicianId ? technicianById.get(v.technicianId) : undefined;
+                    const technicianNames = visitTechnicianNames(v, technicianById);
                     // Only a 'due'/'booked' visit can be dragged to reschedule —
                     // a completed/missed/cancelled visit shouldn't be moved by
                     // dragging its chip around.
@@ -230,10 +231,10 @@ export default function MonthGrid({
                           e.stopPropagation();
                           onSelectVisit(v.jobId);
                         }}
-                        title={job ? `${job.jobSummary} · ${job.buildingName}` : v.jobId}
-                        className={`border px-1.5 py-1 text-[10.5px] leading-tight ${draggableChip ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${visitStatusStyle[v.status]}`}
+                        title={`${job ? `${job.jobSummary} · ${job.buildingName}` : v.jobId}${technicianNames.length > 1 ? ` · ${technicianNames.join(', ')}` : ''}`}
+                        className={`rounded-md border px-1.5 py-1 text-[10.5px] leading-tight ${draggableChip ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${visitStatusStyle[v.status]}`}
                       >
-                        <div className="truncate font-semibold">{technician ? technician.name : 'Unassigned'}</div>
+                        <div className="truncate font-semibold">{visitTechnicianLabel(v, technicianById)}</div>
                         <div className="truncate opacity-80">{job ? job.buildingName : 'Job'}</div>
                       </div>
                     );

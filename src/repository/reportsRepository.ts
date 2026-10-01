@@ -351,3 +351,159 @@ export async function getLatestClientSend(reportId: string): Promise<ClientSendR
     resendMessageId: data.resend_message_id,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Multi-technician reports — per-technician contributions to one combined report.
+// Manager-only (RLS: manager_full_access on report_contributions); the combined
+// report on `reports` stays the single thing that is reviewed, approved and sent.
+// ---------------------------------------------------------------------------
+
+export type ContributionStatus = 'pending' | 'submitted' | 'waived';
+
+export interface ReportParticipant {
+  technicianId: string;
+  name: string;
+  isPrimary: boolean;
+  isActive: boolean;
+  status: ContributionStatus;
+  needsCorrection: boolean;
+  correctionReason: string | null;
+  submittedAt: string | null;
+  waivedAt: string | null;
+  waivedBy: string | null;
+  workCarriedOut: string | null;
+  technicianNotes: string | null;
+  issues: string | null;
+  specMet: boolean | null;
+  onSiteStart: string | null;
+  onSiteEnd: string | null;
+}
+
+export interface ReportContributionOverview {
+  /** True once any contribution/waiver row exists. False for every ordinary single-technician (legacy) report. */
+  contributionMode: boolean;
+  /** Set when a manager hand-edited the combined text; later submissions no longer overwrite it. */
+  managerEditedAt: string | null;
+  /** Everyone currently assigned to the visit (primary first, then additional) — each with their own state. */
+  participants: ReportParticipant[];
+}
+
+interface TechnicianRef {
+  id: string;
+  name: string;
+  is_active: boolean;
+}
+
+function firstOf<T>(value: T | T[] | null | undefined): T | null {
+  return Array.isArray(value) ? (value[0] ?? null) : (value ?? null);
+}
+
+export async function getReportContributionOverview(reportId: string): Promise<ReportContributionOverview> {
+  const { data: report, error: reportError } = await supabase
+    .from('reports')
+    .select(
+      `manager_edited_at,
+       visits (
+         technician_id,
+         technicians ( id, name, is_active ),
+         visit_technicians ( technician_id, technicians ( id, name, is_active ) )
+       )`,
+    )
+    .eq('id', reportId)
+    .single();
+
+  if (reportError) throw new Error(`Failed to load report technicians: ${reportError.message}`);
+
+  const { data: rows, error: rowsError } = await supabase
+    .from('report_contributions')
+    .select(
+      `technician_id, work_carried_out, technician_notes, issues, spec_met, on_site_start, on_site_end,
+       submitted_at, needs_correction, correction_reason, waived_at, waived_by, created_at`,
+    )
+    .eq('report_id', reportId)
+    .order('created_at', { ascending: true });
+
+  if (rowsError) throw new Error(`Failed to load report contributions: ${rowsError.message}`);
+
+  const visit = firstOf(report.visits) as {
+    technician_id: string | null;
+    technicians: TechnicianRef | TechnicianRef[] | null;
+    visit_technicians: { technician_id: string; technicians: TechnicianRef | TechnicianRef[] | null }[] | null;
+  } | null;
+
+  const assigned: { tech: TechnicianRef; isPrimary: boolean }[] = [];
+  const primary = firstOf(visit?.technicians);
+  if (primary) assigned.push({ tech: primary, isPrimary: true });
+  for (const vt of visit?.visit_technicians ?? []) {
+    const t = firstOf(vt.technicians);
+    if (t) assigned.push({ tech: t, isPrimary: false });
+  }
+
+  const byTechnician = new Map((rows ?? []).map((r) => [r.technician_id, r]));
+
+  const participants: ReportParticipant[] = assigned.map(({ tech, isPrimary }) => {
+    const r = byTechnician.get(tech.id);
+    return {
+      technicianId: tech.id,
+      name: tech.name,
+      isPrimary,
+      isActive: tech.is_active,
+      status: r?.waived_at ? 'waived' : r?.submitted_at ? 'submitted' : 'pending',
+      needsCorrection: r?.needs_correction ?? false,
+      correctionReason: r?.correction_reason ?? null,
+      submittedAt: r?.submitted_at ?? null,
+      waivedAt: r?.waived_at ?? null,
+      waivedBy: r?.waived_by ?? null,
+      workCarriedOut: r?.work_carried_out ?? null,
+      technicianNotes: r?.technician_notes ?? null,
+      issues: r?.issues ?? null,
+      specMet: r ? r.spec_met : null,
+      onSiteStart: r?.on_site_start ?? null,
+      onSiteEnd: r?.on_site_end ?? null,
+    };
+  });
+
+  return { contributionMode: (rows ?? []).length > 0, managerEditedAt: report.manager_edited_at ?? null, participants };
+}
+
+/**
+ * Sends ONE technician's submitted contribution back for correction. The
+ * database (sync_report_state_from_contributions) moves the whole report to
+ * 'returned_for_correction' and records the reason; every other technician's
+ * contribution is untouched. Distinct from returnReportForCorrection(), which
+ * returns everyone's.
+ */
+export async function returnContributionForCorrection(
+  reportId: string,
+  technicianId: string,
+  technicianName: string,
+  reason: string,
+  actor: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from('report_contributions')
+    .update({ needs_correction: true, correction_reason: reason })
+    .eq('report_id', reportId)
+    .eq('technician_id', technicianId)
+    .not('submitted_at', 'is', null);
+
+  if (error) throw new Error(`Failed to return contribution: ${error.message}`);
+  await logActivityEvent('report', reportId, 'report_contribution_returned', actor, `${technicianName}: ${reason}`);
+}
+
+/** The office decides a technician who never submitted no longer blocks the report. Only for a technician with no submission yet. */
+export async function waiveContribution(reportId: string, technicianId: string, technicianName: string, actor: string): Promise<void> {
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from('report_contributions')
+    .insert({ report_id: reportId, technician_id: technicianId, waived_at: now, waived_by: actor });
+
+  if (error) throw new Error(`Failed to waive technician: ${error.message}`);
+  await logActivityEvent('report', reportId, 'report_contribution_waived', actor, technicianName, now);
+}
+
+/** Drops a manual edit of the combined text and rebuilds it from the contributions (database function). */
+export async function resetCombinedReport(reportId: string): Promise<void> {
+  const { error } = await supabase.rpc('manager_reset_combined_report', { p_report_id: reportId });
+  if (error) throw new Error(`Failed to rebuild combined report: ${error.message}`);
+}

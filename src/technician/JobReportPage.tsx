@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getVisitDetail, retryUnlessOffline, type PhotoPhase } from './api';
+import { getVisitDetail, isSharedVisit, retryUnlessOffline, sharedVisitLabel, type PhotoPhase } from './api';
 import {
   enqueuePhoto,
   getOrInitDraft,
@@ -250,7 +250,17 @@ export default function JobReportPage() {
       // still-null internal state, is the fix — never touches
       // technicianNotes/issues, the draft seed, or resubmission's own
       // distinct default.
-      await updateDraftFields(visitId, { workCarriedOut: workCarriedOut ?? defaultWorkCarriedOut, technicianNotes, issues });
+      //
+      // The same applies to notes/issues on a RESUBMISSION: the textareas show
+      // the existing report's text, but the state stays null until typed in, so
+      // a technician who only adds a photo would otherwise send null and the
+      // resubmit RPC (which overwrites all three text fields) would erase them.
+      // For a brand-new report the defaults are empty, so this changes nothing.
+      await updateDraftFields(visitId, {
+        workCarriedOut: workCarriedOut ?? defaultWorkCarriedOut,
+        technicianNotes: technicianNotes ?? (isResubmitMode ? defaultTechnicianNotes : null),
+        issues: issues ?? (isResubmitMode ? defaultIssues : null),
+      });
       const readyDraft = await markReadyToSubmit(visitId);
       void trySubmitIfReady(visitId); // fire immediately in case we're already online — never awaited, navigation doesn't wait on it
       navigate(`/technician/visits/${visitId}/completed`, {
@@ -404,6 +414,11 @@ export default function JobReportPage() {
             <div className="text-[12.5px] text-neutral-600">
               {visit.buildingAddress} · {visit.jobSummary}
             </div>
+            {isSharedVisit(visit) && (
+              <div className="mt-1.5 text-[11.5px] font-semibold text-teal-700">
+                {sharedVisitLabel(visit.assignedCount)} · this is your own part of the report
+              </div>
+            )}
           </div>
 
           {isResubmitMode && (
@@ -442,7 +457,7 @@ export default function JobReportPage() {
             <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
               Specification
             </div>
-            <div className="flex border border-neutral-300">
+            <div className="segmented flex border border-neutral-300">
               <button
                 type="button"
                 onClick={() => handleSpecMetChange(true)}

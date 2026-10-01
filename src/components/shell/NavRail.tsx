@@ -229,7 +229,7 @@ export default function NavRail() {
         {!collapsed && (
           <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">Division</div>
         )}
-        <div className={collapsed ? 'flex flex-col gap-1' : 'grid grid-cols-3 border border-neutral-300'}>
+        <div className={collapsed ? 'flex flex-col gap-1' : 'segmented grid grid-cols-3 border border-neutral-300'}>
           {DIVISIONS.map((d) => (
             <button
               key={d}

@@ -71,13 +71,71 @@ body {
   box-sizing: border-box;
 }
 
-/* Blueprint visual language: square corners everywhere, hairline borders. */
-button,
+/*
+ * Every scrollbar in the app (page panes, drawers, dropdown lists, AG Grid)
+ * uses the primary-button teal, on the neutral track. Standard properties for
+ * Firefox and current Chromium; the ::-webkit-scrollbar rules only apply where
+ * scrollbar-color is unsupported (older Chromium/Safari), because browsers
+ * that support scrollbar-color ignore them.
+ */
+* {
+  scrollbar-color: var(--color-teal) var(--color-neutral-200);
+}
+
+@supports not (scrollbar-color: auto) {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--color-neutral-200);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-teal);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-teal-700);
+  }
+  ::-webkit-scrollbar-corner {
+    background: var(--color-neutral-200);
+  }
+}
+
+/* Hairline borders. Form fields keep square corners... */
 input,
 select,
 textarea {
   border-radius: 0;
   font-family: inherit;
+}
+
+button {
+  font-family: inherit;
+}
+
+/*
+ * ...but every button is softly rounded. This sits in the base layer (not
+ * unlayered) so a Tailwind utility such as rounded-none can still opt a
+ * button out - used for bar-style buttons (tab bars, matrix cells).
+ */
+@layer base {
+  button {
+    border-radius: var(--radius-md);
+  }
+}
+
+/*
+ * A joined group of buttons (Day/Week/Month, role toggles, Division...): the
+ * group itself is the rounded shape and its buttons stay square inside it, so
+ * the selected button's fill follows the curve instead of fighting it.
+ * Unlayered on purpose so it beats the base-layer button radius above.
+ */
+.segmented {
+  overflow: hidden;
+  border-radius: var(--radius-md);
+}
+.segmented button {
+  border-radius: 0;
 }
 
 .tabular-nums {

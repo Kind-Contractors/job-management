@@ -34,6 +34,10 @@ const HISTORY_EVENT_LABEL: Record<string, string> = {
   visit_technician_assigned: 'Technician assigned',
   visit_technician_changed: 'Technician changed',
   visit_technician_unassigned: 'Technician unassigned',
+  visit_technician_added: 'Additional technician added',
+  visit_technician_removed: 'Additional technician removed',
+  report_contribution_returned: 'Technician contribution returned',
+  report_contribution_waived: 'Technician waived from report',
   visit_completed: 'Visit completed',
   visit_missed: 'Visit missed',
   visit_cancelled: 'Visit cancelled',
@@ -226,7 +230,7 @@ export default function BuildingFilePage() {
             key={t}
             onClick={() => setTab(t)}
             className={[
-              'cursor-pointer border-b-2 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em]',
+              'cursor-pointer rounded-none border-b-2 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em]',
               tab === t ? 'border-teal text-teal-700' : 'border-transparent text-neutral-600',
             ].join(' ')}
           >
