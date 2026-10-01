@@ -2,7 +2,8 @@ import type { Technician, WeekVisit } from '../domain/types';
 
 /** Every technician on a visit — the primary first, then additional ones in assignment order. Unknown ids are skipped. */
 export function visitTechnicianNames(visit: WeekVisit, technicianById: Map<string, Technician>): string[] {
-  const ids = [visit.technicianId, ...visit.additionalTechnicianIds].filter((id): id is string => id != null);
+  // `?? []`: visits restored from a cache written before additionalTechnicianIds existed have no such field.
+  const ids = [visit.technicianId, ...(visit.additionalTechnicianIds ?? [])].filter((id): id is string => id != null);
   return ids.flatMap((id) => {
     const t = technicianById.get(id);
     return t ? [t.name] : [];
@@ -18,7 +19,7 @@ export function visitTechnicianLabel(visit: WeekVisit, technicianById: Map<strin
 
 /** True when this technician is the primary or one of the additional technicians on the visit. */
 export function isVisitParticipant(visit: WeekVisit, technicianId: string): boolean {
-  return visit.technicianId === technicianId || visit.additionalTechnicianIds.includes(technicianId);
+  return visit.technicianId === technicianId || (visit.additionalTechnicianIds ?? []).includes(technicianId);
 }
 
 /**
@@ -30,5 +31,6 @@ export function compareVisitsInDay(a: WeekVisit, b: WeekVisit): number {
   if (a.sortOrder != null && b.sortOrder != null && a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
   if (a.sortOrder != null && b.sortOrder == null) return -1;
   if (a.sortOrder == null && b.sortOrder != null) return 1;
-  return a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+  // `?? ''`: a stale cached visit may predate createdAt.
+  return (a.createdAt ?? '').localeCompare(b.createdAt ?? '') || a.id.localeCompare(b.id);
 }
