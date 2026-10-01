@@ -338,10 +338,13 @@ export default function JobReportPage() {
           </ul>
         </div>
       )}
-      {!isResubmitMode && <div className="mt-2 text-[11.5px] text-due-fg">At least one photo is required to complete the job.</div>}
+      {/* Gone as soon as one photo has actually uploaded — the requirement is met from then on. */}
+      {!isResubmitMode && !photos.some((p) => p.status === 'uploaded') && (
+        <div className="mt-2 text-[11.5px] text-due-fg">At least one photo is required to complete the job.</div>
+      )}
       <div className="mt-1 text-[10.5px] leading-snug text-neutral-500">
-        Photos are saved on this device the instant you take them, even with no signal — they'll upload automatically
-        once you're back online.
+        Photos are saved on this device and upload automatically while the app is open and online. A completed job is sent
+        to the office once all of its photos have uploaded.
       </div>
     </div>
   );
