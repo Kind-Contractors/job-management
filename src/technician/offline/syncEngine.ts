@@ -39,19 +39,30 @@ import {
   countUnattributedRecords,
   countUnuploadedPhotos,
   deleteDraft,
+  deletePhoto,
   deletePhotosForVisit,
   getDraft as getDraftForOwner,
+  getPhoto,
   listAllDrafts,
   listPhotosForVisit,
   listReadyDraftVisitIds,
   listUnuploadedPhotos,
   putDraft,
   putPhoto,
+  updatePhotoIfPresent,
   type DraftReport,
   type PendingPhoto,
 } from './db';
 import { formatBytes, preparePhotoForUpload } from './photoCompression';
-import { RpcError, newVisitPhotoStoragePath, resubmitReport, submitReport, uploadVisitPhotoToPath, type PhotoPhase } from '../api';
+import {
+  RpcError,
+  newVisitPhotoStoragePath,
+  removePhotoObject,
+  resubmitReport,
+  submitReport,
+  uploadVisitPhotoToPath,
+  type PhotoPhase,
+} from '../api';
 
 const RETRY_INTERVAL_MS = 30_000;
 
@@ -183,19 +194,19 @@ async function recordUploadFailure(photo: PendingPhoto, err: unknown): Promise<v
   const attempts = (photo.attempts ?? 0) + 1;
   const giveUp = attempts >= MAX_UPLOAD_ATTEMPTS || isPermanentUploadFailure(err);
   if (giveUp) {
-    await putPhoto({ ...photo, status: 'failed', attempts, lastError: describeUploadFailure(err, photo, attempts, true), nextAttemptAt: null });
+    await updatePhotoIfPresent({ ...photo, status: 'failed', attempts, lastError: describeUploadFailure(err, photo, attempts, true), nextAttemptAt: null });
     return;
   }
   const delay = backoffDelayMs(attempts);
   // Back to 'pending' (not 'failed'): it is still going to upload by itself.
-  await putPhoto({
+  const stillQueued = await updatePhotoIfPresent({
     ...photo,
     status: 'pending',
     attempts,
     lastError: describeUploadFailure(err, photo, attempts, false),
     nextAttemptAt: new Date(Date.now() + delay).toISOString(),
   });
-  scheduleRetrySweep(delay);
+  if (stillQueued) scheduleRetrySweep(delay); // deleted meanwhile: nothing to retry
 }
 
 /** The signed-in user's ID, or a thrown error — for actions that CREATE queued work, which must always belong to someone. */
@@ -222,16 +233,23 @@ async function attemptUploadPhoto(photo: PendingPhoto): Promise<void> {
     try {
       // Time may have passed waiting for a slot — re-check before touching the network.
       if (!navigator.onLine || !isStillCurrentOwner(photo.ownerId)) return;
-      await putPhoto({ ...photo, status: 'uploading' });
+      // A photo the technician deleted while it waited for a slot must never be uploaded: the write
+      // only happens if the record still exists, and its absence ends the attempt here.
+      if (!(await updatePhotoIfPresent({ ...photo, status: 'uploading' }))) return;
       notify();
       try {
         if (!isStillCurrentOwner(photo.ownerId)) {
           // The user changed between claiming this photo and uploading it — put it back untouched for its owner's next retry.
-          await putPhoto(photo);
+          await updatePhotoIfPresent(photo);
           return;
         }
         await uploadVisitPhotoToPath(photo.storagePath, photo.blob);
-        await putPhoto({ ...photo, status: 'uploaded', lastError: null, attempts: 0, nextAttemptAt: null });
+        const kept = await updatePhotoIfPresent({ ...photo, status: 'uploaded', lastError: null, attempts: 0, nextAttemptAt: null });
+        if (!kept) {
+          // Deleted while the upload was in flight: the file now exists but nothing will ever reference
+          // it, so remove it again rather than leave an orphan. Best effort - it cannot affect the UI.
+          void removePhotoObject(photo.storagePath).catch(() => {});
+        }
       } catch (err) {
         await recordUploadFailure(photo, err);
       }
@@ -455,6 +473,40 @@ export async function enqueuePhoto(visitId: string, phase: PhotoPhase, file: Fil
   notify();
   void attemptUploadPhoto(photo);
   return photo;
+}
+
+/**
+ * Deletes a photo the technician queued or uploaded but has NOT yet submitted.
+ *
+ *  - Never while the report is being sent (draft marked ready / submitting).
+ *  - Already uploaded: the file is removed from Storage first (Storage itself refuses anything
+ *    that is not the technician own, unsubmitted photo). Only when that succeeds is the local
+ *    record dropped, so a failure leaves the photo exactly as it was and the error is thrown.
+ *  - Not uploaded yet: the queue record is deleted first, which cancels the upload for good (every
+ *    status write in this file only happens while the record exists). Then the file, in case an
+ *    interrupted upload had already created it, is removed on a best-effort basis.
+ */
+export async function removeQueuedPhoto(photo: PendingPhoto): Promise<void> {
+  const ownerId = requireCurrentUserId();
+  if (photo.ownerId !== ownerId) throw new Error('This photo belongs to a different account.');
+
+  const draft = await getDraftForOwner(ownerId, photo.visitId);
+  if (draft?.readyToSubmit || draft?.submitting) {
+    throw new Error('This report is already being sent, so its photos can no longer be changed.');
+  }
+
+  const current = await getPhoto(photo.id);
+  if (!current) return; // already gone
+
+  if (current.status === 'uploaded') {
+    if (!navigator.onLine) throw new Error('You need a connection to delete a photo that has already uploaded.');
+    await removePhotoObject(current.storagePath); // throws on failure - the record below is then kept
+    await deletePhoto(current.id);
+  } else {
+    await deletePhoto(current.id);
+    if (navigator.onLine) void removePhotoObject(current.storagePath).catch(() => {});
+  }
+  notify();
 }
 
 /** Manual retry — the UI's "Retry" button on a failed chip. */

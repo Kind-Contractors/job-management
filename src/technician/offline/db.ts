@@ -210,6 +210,33 @@ export async function putPhoto(photo: PendingPhoto): Promise<void> {
   await (await getDb()).put('pendingPhotos', photo);
 }
 
+export async function getPhoto(id: string): Promise<PendingPhoto | undefined> {
+  return (await getDb()).get('pendingPhotos', id);
+}
+
+/** Removes one queued photo record. Once it is gone the sync engine has nothing left to upload for it. */
+export async function deletePhoto(id: string): Promise<void> {
+  await (await getDb()).delete('pendingPhotos', id);
+}
+
+/**
+ * Writes a photo record ONLY if it still exists, in one transaction. Every status
+ * update the sync engine makes goes through this instead of putPhoto(): a plain put
+ * would re-create a record the technician deleted while its upload was in flight,
+ * resurrecting the photo. Returns false (and writes nothing) when it has been deleted.
+ */
+export async function updatePhotoIfPresent(photo: PendingPhoto): Promise<boolean> {
+  const tx = (await getDb()).transaction('pendingPhotos', 'readwrite');
+  const existing = await tx.store.get(photo.id);
+  if (!existing) {
+    await tx.done;
+    return false;
+  }
+  await tx.store.put(photo);
+  await tx.done;
+  return true;
+}
+
 export async function deletePhotosForVisit(ownerId: string, visitId: string): Promise<void> {
   const db = await getDb();
   const photos = await db.getAllFromIndex('pendingPhotos', 'by-owner-visit', [ownerId, visitId]);
