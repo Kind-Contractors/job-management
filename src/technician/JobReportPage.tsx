@@ -59,6 +59,10 @@ function photoDisplay(photo: PendingPhoto, online: boolean): { label: string; st
       retryable: false,
     };
   }
+  // A failed attempt that the engine is still going to retry by itself — not a failure yet.
+  if (photo.status === 'pending' && (photo.attempts ?? 0) > 0) {
+    return { label: 'Retrying…', style: PHOTO_STATUS_STYLE.uploading, retryable: false };
+  }
   return { label: PHOTO_STATUS_LABEL[photo.status], style: PHOTO_STATUS_STYLE[photo.status], retryable: photo.status === 'failed' };
 }
 
@@ -269,6 +273,9 @@ export default function JobReportPage() {
     }
   };
 
+  // Photos that ultimately failed, with the engine's recorded reason and size — shown under the grid so the actual cause isn't hidden in a tooltip.
+  const failedPhotos = photos.filter((p) => p.status === 'failed' && p.lastError);
+
   const photoSection = visit && (
     <div className="border-b border-divider px-4 py-3">
       <div className="mb-1.5 flex items-center justify-between font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
@@ -327,6 +334,20 @@ export default function JobReportPage() {
           );
         })}
       </div>
+      {online && failedPhotos.length > 0 && (
+        <div className="mt-2 border border-missed bg-missed/10 p-2 text-[11px] leading-snug text-missed-fg">
+          <div className="font-semibold">
+            {failedPhotos.length === 1 ? '1 photo' : `${failedPhotos.length} photos`} could not be uploaded. Tap a red photo to try again.
+          </div>
+          <ul className="mt-1 list-disc pl-4">
+            {failedPhotos.map((p) => (
+              <li key={p.id}>
+                {PHASES.find((phase) => phase.key === p.phase)?.label ?? p.phase} photo: {p.lastError}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {!isResubmitMode && <div className="mt-2 text-[11.5px] text-due-fg">At least one photo is required to complete the job.</div>}
       <div className="mt-1 text-[10.5px] leading-snug text-neutral-500">
         Photos are saved on this device the instant you take them, even with no signal — they'll upload automatically

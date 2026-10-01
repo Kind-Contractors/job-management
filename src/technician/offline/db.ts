@@ -94,6 +94,12 @@ export interface PendingPhoto {
   status: PendingPhotoStatus;
   lastError: string | null;
   createdAt: string;
+  /** Size in bytes of the file as originally picked, before any resize/compression — only for the failure message; absent on photos queued before this field existed. */
+  originalSize?: number;
+  /** Consecutive failed upload attempts since the last success or manual retry — drives the automatic retry limit. Absent (treated as 0) on older photos. */
+  attempts?: number;
+  /** ISO time before which the automatic retry must not run again (backoff). Null/absent = due now. */
+  nextAttemptAt?: string | null;
 }
 
 interface TechnicianOfflineDB extends DBSchema {
@@ -232,6 +238,12 @@ export async function listAllDrafts(ownerId: string): Promise<DraftReport[]> {
 export async function countUnuploadedPhotos(ownerId: string): Promise<number> {
   const photos = await (await getDb()).getAllFromIndex('pendingPhotos', 'by-owner-visit', ownerRange(ownerId));
   return photos.filter((p) => p.status !== 'uploaded').length;
+}
+
+/** This owner's photos that haven't finished uploading, across every visit and whether or not their report has been completed yet — what the retry sweep walks. */
+export async function listUnuploadedPhotos(ownerId: string): Promise<PendingPhoto[]> {
+  const photos = await (await getDb()).getAllFromIndex('pendingPhotos', 'by-owner-visit', ownerRange(ownerId));
+  return photos.filter((p) => p.status !== 'uploaded');
 }
 
 /** How many pre-ownership (schema v1) records are preserved but attributed to no one — surfaced only as a startup console warning, never shown to a user. */
