@@ -44,11 +44,13 @@ import {
   listAllDrafts,
   listPhotosForVisit,
   listReadyDraftVisitIds,
+  listUnuploadedPhotos,
   putDraft,
   putPhoto,
   type DraftReport,
   type PendingPhoto,
 } from './db';
+import { formatBytes, preparePhotoForUpload } from './photoCompression';
 import { RpcError, newVisitPhotoStoragePath, resubmitReport, submitReport, uploadVisitPhotoToPath, type PhotoPhase } from '../api';
 
 const RETRY_INTERVAL_MS = 30_000;
@@ -115,6 +117,87 @@ function isPermanentSubmitError(err: unknown): boolean {
 const uploadingIds = new Set<string>();
 const submittingKeys = new Set<string>();
 
+/**
+ * At most this many photo uploads run at the same time. Selecting several
+ * photos used to start every upload at once; over mobile data that many
+ * parallel requests share one connection, so each takes longer and any
+ * dropped request fails a photo. The rest simply wait their turn.
+ */
+const MAX_CONCURRENT_UPLOADS = 3;
+let activeUploads = 0;
+const slotWaiters: (() => void)[] = [];
+
+function acquireUploadSlot(): Promise<void> {
+  if (activeUploads < MAX_CONCURRENT_UPLOADS) {
+    activeUploads += 1;
+    return Promise.resolve();
+  }
+  // The waiter inherits the releasing upload's slot, so activeUploads is unchanged on hand-off.
+  return new Promise((resolve) => slotWaiters.push(resolve));
+}
+
+function releaseUploadSlot(): void {
+  const next = slotWaiters.shift();
+  if (next) next();
+  else activeUploads -= 1;
+}
+
+/**
+ * Automatic retries for a failed upload: the first attempt plus up to three
+ * more, spaced out so a brief signal drop (lift, stairwell, cell hand-off) has
+ * time to clear. After that the photo shows "Failed — tap to retry" with the
+ * reason; a manual tap starts a fresh round, and the periodic/online sweep
+ * keeps retrying photos whose report has already been completed.
+ */
+const MAX_UPLOAD_ATTEMPTS = 4;
+const RETRY_BACKOFF_MS = [2_000, 6_000, 15_000];
+
+function backoffDelayMs(attemptsSoFar: number): number {
+  const base = RETRY_BACKOFF_MS[Math.min(attemptsSoFar, RETRY_BACKOFF_MS.length) - 1];
+  return base + Math.round(Math.random() * 500); // jitter so several photos don't retry in lockstep
+}
+
+/** Server-side rejections that retrying can't fix (not allowed / too large) — these go straight to Failed instead of burning retries. */
+function isPermanentUploadFailure(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : '';
+  return /row-level security|exceeded the maximum|payload too large|invalid mime|not allowed/i.test(message);
+}
+
+/** The text stored on a photo (and shown to the technician) when an upload fails: the real reason plus the size of what was being uploaded. */
+function describeUploadFailure(err: unknown, photo: PendingPhoto, attempts: number, final: boolean): string {
+  const reason = err instanceof Error && err.message ? err.message : 'Unknown error';
+  const size = formatBytes(photo.blob.size);
+  const original = photo.originalSize && photo.originalSize > photo.blob.size + 1024 ? `, resized from ${formatBytes(photo.originalSize)}` : '';
+  const tail = final ? ` Tried ${attempts} time${attempts === 1 ? '' : 's'}.` : '';
+  return `${reason} (${size}${original}).${tail}`;
+}
+
+/** The sweep also runs after a backoff delay elapses — due photos are picked up from storage, so nothing is lost if the page reloads in between. */
+function scheduleRetrySweep(delayMs: number): void {
+  setTimeout(() => {
+    void retryEverything();
+  }, delayMs + 250);
+}
+
+async function recordUploadFailure(photo: PendingPhoto, err: unknown): Promise<void> {
+  const attempts = (photo.attempts ?? 0) + 1;
+  const giveUp = attempts >= MAX_UPLOAD_ATTEMPTS || isPermanentUploadFailure(err);
+  if (giveUp) {
+    await putPhoto({ ...photo, status: 'failed', attempts, lastError: describeUploadFailure(err, photo, attempts, true), nextAttemptAt: null });
+    return;
+  }
+  const delay = backoffDelayMs(attempts);
+  // Back to 'pending' (not 'failed'): it is still going to upload by itself.
+  await putPhoto({
+    ...photo,
+    status: 'pending',
+    attempts,
+    lastError: describeUploadFailure(err, photo, attempts, false),
+    nextAttemptAt: new Date(Date.now() + delay).toISOString(),
+  });
+  scheduleRetrySweep(delay);
+}
+
 /** The signed-in user's ID, or a thrown error — for actions that CREATE queued work, which must always belong to someone. */
 function requireCurrentUserId(): string {
   const userId = getCurrentUserId();
@@ -132,22 +215,30 @@ async function attemptUploadPhoto(photo: PendingPhoto): Promise<void> {
   if (!navigator.onLine) return;
   if (!isStillCurrentOwner(photo.ownerId)) return;
 
+  // Claimed synchronously (before any await) so two triggers can never both start this photo.
   uploadingIds.add(photo.id);
   try {
-    await putPhoto({ ...photo, status: 'uploading' });
-    notify();
+    await acquireUploadSlot();
     try {
-      if (!isStillCurrentOwner(photo.ownerId)) {
-        // The user changed between claiming this photo and uploading it — put it back untouched for its owner's next retry.
-        await putPhoto(photo);
-        return;
+      // Time may have passed waiting for a slot — re-check before touching the network.
+      if (!navigator.onLine || !isStillCurrentOwner(photo.ownerId)) return;
+      await putPhoto({ ...photo, status: 'uploading' });
+      notify();
+      try {
+        if (!isStillCurrentOwner(photo.ownerId)) {
+          // The user changed between claiming this photo and uploading it — put it back untouched for its owner's next retry.
+          await putPhoto(photo);
+          return;
+        }
+        await uploadVisitPhotoToPath(photo.storagePath, photo.blob);
+        await putPhoto({ ...photo, status: 'uploaded', lastError: null, attempts: 0, nextAttemptAt: null });
+      } catch (err) {
+        await recordUploadFailure(photo, err);
       }
-      await uploadVisitPhotoToPath(photo.storagePath, photo.blob);
-      await putPhoto({ ...photo, status: 'uploaded', lastError: null });
-    } catch (err) {
-      await putPhoto({ ...photo, status: 'failed', lastError: err instanceof Error ? err.message : 'Upload failed.' });
+      notify();
+    } finally {
+      releaseUploadSlot();
     }
-    notify();
   } finally {
     uploadingIds.delete(photo.id);
   }
@@ -266,31 +357,38 @@ async function submitIfReadyForOwner(ownerId: string, visitId: string): Promise<
   }
 }
 
-/** Retries every queued photo and every ready draft across every visit — the one function every retry trigger below calls. */
-async function retryEverything(): Promise<void> {
+/**
+ * Retries the signed-in user's queued uploads, then every ready draft — the one
+ * function every retry trigger calls.
+ *
+ * Photos that are still waiting ('pending', or 'uploading' left behind by a
+ * page that died mid-request) are picked up for EVERY visit, whether or not
+ * its report has been completed yet — so photos taken offline upload on
+ * reconnect, and a photo stranded mid-upload doesn't sit there until
+ * "Complete job". A photo in backoff is skipped until its time is due.
+ * Photos that have ultimately 'failed' are only re-tried automatically when
+ * their report is completed (as before) or when `includeFailed` is set (the
+ * device just came back online); otherwise they wait for a manual tap.
+ */
+async function retryEverything(includeFailed = false): Promise<void> {
   if (!navigator.onLine) return;
   // Only the signed-in user's own queued work — nobody signed in, nothing to retry.
   const ownerId = getCurrentUserId();
   if (!ownerId) return;
-  const visitIds = await listReadyDraftVisitIds(ownerId);
-  for (const visitId of visitIds) {
+  const [readyVisitIds, unuploaded] = await Promise.all([listReadyDraftVisitIds(ownerId), listUnuploadedPhotos(ownerId)]);
+  const readyVisits = new Set(readyVisitIds);
+  const now = Date.now();
+
+  const due = unuploaded.filter((photo) => {
+    if (photo.nextAttemptAt && Date.parse(photo.nextAttemptAt) > now) return false;
+    if (photo.status === 'failed') return includeFailed || readyVisits.has(photo.visitId);
+    return true;
+  });
+  // The upload slot limiter inside attemptUploadPhoto keeps this to a few at a time.
+  await Promise.all(due.map((photo) => attemptUploadPhoto(photo)));
+
+  for (const visitId of readyVisitIds) {
     if (!isStillCurrentOwner(ownerId)) return;
-    const photos = await listPhotosForVisit(ownerId, visitId);
-    for (const photo of photos) {
-      // 'uploading' is deliberately retried too, not just 'pending'/'failed'
-      // — a photo can be left stuck at 'uploading' forever if the page
-      // dies (reload, closed, killed) mid-request, after the status write
-      // but before the actual upload settles. Without this, that single
-      // row would silently block its report's sync indefinitely, with no
-      // error ever surfacing (the exact "stuck on Syncing" bug). Safe to
-      // retry unconditionally: uploadVisitPhotoToPath() is idempotent
-      // (checks existence before uploading), and the in-memory
-      // `uploadingIds` guard below still prevents a duplicate concurrent
-      // attempt within this same page session.
-      if (photo.status === 'pending' || photo.status === 'failed' || photo.status === 'uploading') {
-        await attemptUploadPhoto(photo);
-      }
-    }
     await submitIfReadyForOwner(ownerId, visitId);
   }
 }
@@ -316,7 +414,7 @@ export function startSyncEngine(): void {
     .catch(() => undefined);
 
   window.addEventListener('online', () => {
-    void retryEverything();
+    void retryEverything(true);
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') void retryEverything();
@@ -336,17 +434,22 @@ export function startSyncEngine(): void {
  */
 export async function enqueuePhoto(visitId: string, phase: PhotoPhase, file: File): Promise<PendingPhoto> {
   const ownerId = requireCurrentUserId();
-  const storagePath = newVisitPhotoStoragePath(visitId, phase, file.name);
+  // Shrink before saving (see photoCompression.ts) — and if that fails for any reason this is the untouched original, never nothing.
+  const prepared = await preparePhotoForUpload(file);
+  const storagePath = newVisitPhotoStoragePath(visitId, phase, prepared.filename);
   const photo: PendingPhoto = {
     id: crypto.randomUUID(),
     ownerId,
     visitId,
     phase,
-    blob: file,
+    blob: prepared.blob,
     storagePath,
     status: 'pending',
     lastError: null,
     createdAt: new Date().toISOString(),
+    originalSize: prepared.originalSize,
+    attempts: 0,
+    nextAttemptAt: null,
   };
   await putPhoto(photo);
   notify();
@@ -356,7 +459,8 @@ export async function enqueuePhoto(visitId: string, phase: PhotoPhase, file: Fil
 
 /** Manual retry — the UI's "Retry" button on a failed chip. */
 export async function retryPhoto(photo: PendingPhoto): Promise<void> {
-  await attemptUploadPhoto(photo);
+  // A manual tap gets the full automatic-retry sequence again.
+  await attemptUploadPhoto({ ...photo, attempts: 0, nextAttemptAt: null });
 }
 
 export interface DraftSeed {
