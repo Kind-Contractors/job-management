@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getVisitDetail, isSharedVisit, jobTypeLabel, listTodayVisits, retryUnlessOffline, sharedVisitLabel } from './api';
+import { getVisitDetail, isSharedVisit, jobTypeLabel, listTodayItems, retryUnlessOffline, sharedVisitLabel } from './api';
 import { useSyncStatus } from './offline/syncEngine';
 import { technicianKeys, useTechnicianUserId } from './queryKeys';
 
@@ -42,12 +42,13 @@ export default function JobFilePage() {
   // Best-effort only — the page must render correctly even if this hasn't
   // loaded, has never been fetched (direct navigation to this URL), or
   // errors. Never gates the page's own render on this query.
-  const { data: todayVisits } = useQuery({
-    queryKey: technicianKeys.todayVisits(userId),
-    queryFn: listTodayVisits,
+  // The merged list (jobs and activities), so "Stop N" matches the number shown on Your day.
+  const { data: todayItems } = useQuery({
+    queryKey: technicianKeys.todayItems(userId),
+    queryFn: listTodayItems,
     enabled: userId !== '',
   });
-  const stopNumber = todayVisits && visitId ? todayVisits.findIndex((v) => v.visitId === visitId) + 1 : 0;
+  const stopNumber = todayItems && visitId ? todayItems.findIndex((v) => v.kind === 'visit' && v.visitId === visitId) + 1 : 0;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

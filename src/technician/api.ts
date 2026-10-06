@@ -24,6 +24,7 @@
 // reassigns an already-created visit's technician.
 
 import { supabase } from '../lib/supabaseClient';
+import { normalizeTime } from '../lib/timeRange';
 
 /**
  * Thrown by submitReport()/resubmitReport() only — preserves the
@@ -153,6 +154,129 @@ export async function listTodayVisits(): Promise<TechnicianVisitSummary[]> {
     reportSubmitted: row.report_submitted,
     assignedCount: shared.get(row.visit_id) ?? 1,
   }));
+}
+
+/** A job in today's merged list: the existing visit summary plus its optional time of day (display only). */
+export interface TechnicianVisitItem extends TechnicianVisitSummary {
+  kind: 'visit';
+  startTime: string | null;
+  endTime: string | null;
+}
+
+/**
+ * An Activity in today's merged list - a non-job item (a quote visit, picking up keys, a meeting) assigned
+ * to THIS technician. It has no job, report or visit status; `done` is set by the technician themselves.
+ */
+export interface TechnicianActivityItem {
+  kind: 'activity';
+  activityId: string;
+  scheduledDate: string;
+  startTime: string | null;
+  endTime: string | null;
+  description: string;
+  location: string | null;
+  notes: string | null;
+  done: boolean;
+}
+
+export type TechnicianDayItem = TechnicianVisitItem | TechnicianActivityItem;
+
+interface RpcDayItemRow extends Partial<RpcTodayVisitRow> {
+  item_kind: 'visit' | 'activity';
+  item_id: string;
+  day_position: number;
+  scheduled_date: string;
+  start_time: string | null;
+  end_time: string | null;
+  description: string | null;
+  location: string | null;
+  notes: string | null;
+  done: boolean | null;
+}
+
+/** PostgREST / Postgres answers for "this function does not exist" (e.g. the app is newer than the database). */
+function isMissingFunctionError(error: { code?: string }): boolean {
+  return error.code === 'PGRST202' || error.code === '42883';
+}
+
+/**
+ * Today's items for the signed-in technician - their jobs AND their activities - already in the office's
+ * running order (see technician_day_items(): the database does the ordering, so this screen just renders
+ * what it is given). Only their own: an unassigned activity or a colleague's never comes back. If the
+ * function is not there yet (the app deployed ahead of the database), it falls back to the job-only list so
+ * the technician's day still works.
+ */
+export async function listTodayItems(): Promise<TechnicianDayItem[]> {
+  const [{ data, error }, shared] = await Promise.all([supabase.rpc('technician_day_items'), listSharedVisitCounts()]);
+  if (error) {
+    if (isMissingFunctionError(error)) {
+      return (await listTodayVisits()).map((v) => ({ ...v, kind: 'visit' as const, startTime: null, endTime: null }));
+    }
+    throw new Error(`Failed to load today's items: ${error.message}`);
+  }
+
+  return ((data ?? []) as RpcDayItemRow[])
+    .slice()
+    .sort((a, b) => a.day_position - b.day_position)
+    .map((row): TechnicianDayItem => {
+      const startTime = normalizeTime(row.start_time);
+      const endTime = normalizeTime(row.end_time);
+      if (row.item_kind === 'activity') {
+        return {
+          kind: 'activity',
+          activityId: row.item_id,
+          scheduledDate: row.scheduled_date,
+          startTime,
+          endTime,
+          description: row.description ?? '',
+          location: row.location,
+          notes: row.notes,
+          done: row.done === true,
+        };
+      }
+      return {
+        kind: 'visit',
+        visitId: row.item_id,
+        scheduledDate: row.scheduled_date,
+        status: row.visit_status as TechnicianVisitStatus,
+        jobId: row.job_id as string,
+        jobSummary: row.job_summary as string,
+        jobType: row.job_type as string,
+        buildingName: row.building_name ?? null,
+        buildingAddress: row.building_address as string,
+        buildingPostcode: row.building_postcode ?? null,
+        reportSubmitted: row.report_submitted === true,
+        assignedCount: shared.get(row.item_id) ?? 1,
+        startTime,
+        endTime,
+      };
+    });
+}
+
+/** Done from this technician's point of view: a job by the existing rule (isVisitDoneForMe), an activity by its own done flag. */
+export function isDayItemDone(item: TechnicianDayItem): boolean {
+  return item.kind === 'activity' ? item.done : isVisitDoneForMe(item);
+}
+
+/** The "Next stop": the first item that is not done - a completed activity is skipped, an incomplete one can be next. -1 when everything is done. */
+export function nextStopIndex(items: TechnicianDayItem[]): number {
+  return items.findIndex((item) => !isDayItemDone(item));
+}
+
+/** A stable React key / lookup key for a day item (a job id and an activity id are different kinds of id). */
+export function dayItemKey(item: TechnicianDayItem): string {
+  return item.kind === 'activity' ? `activity:${item.activityId}` : `visit:${item.visitId}`;
+}
+
+/**
+ * Marks the technician's OWN activity done (or undoes it) through technician_set_activity_done(). The
+ * database refuses someone else's, an unassigned one, a cancelled one, or one that is not due yet.
+ */
+export async function setActivityDone(activityId: string, done: boolean): Promise<void> {
+  const { error } = await supabase.rpc('technician_set_activity_done', { p_activity_id: activityId, p_done: done });
+  if (error) {
+    throw new Error(error.message || 'The activity could not be updated.');
+  }
 }
 
 /**

@@ -9,6 +9,8 @@
 import type { Technician, WeekVisit } from '../domain/types';
 import { supabase } from '../lib/supabaseClient';
 import { logCurrentUserActivity } from './activityEventsRepository';
+import { normalizeTime, timeRangeForSave } from '../lib/timeRange';
+import { toDayOrderPayload, type DayItem } from '../lib/dayItems';
 
 export async function listTechnicians(): Promise<Technician[]> {
   const { data, error } = await supabase.from('technicians').select('id, name, is_active, notes, app_user_id');
@@ -35,7 +37,7 @@ export async function listTechnicians(): Promise<Technician[]> {
 export async function listVisitsForRange(startDate: string, endDate: string): Promise<WeekVisit[]> {
   const { data, error } = await supabase
     .from('visits')
-    .select('id, job_id, technician_id, scheduled_date, status, sort_order, created_at, visit_technicians ( technician_id )')
+    .select('id, job_id, technician_id, scheduled_date, status, sort_order, created_at, start_time, end_time, visit_technicians ( technician_id )')
     .gte('scheduled_date', startDate)
     .lte('scheduled_date', endDate);
 
@@ -52,6 +54,8 @@ export async function listVisitsForRange(startDate: string, endDate: string): Pr
     createdAt: row.created_at,
     scheduledDate: row.scheduled_date,
     status: row.status,
+    startTime: normalizeTime(row.start_time),
+    endTime: normalizeTime(row.end_time),
   }));
 }
 
@@ -94,7 +98,12 @@ export async function createVisit(
   technicianId: string | null,
   scheduledDate: string,
   additionalTechnicianIds: string[] = [],
+  /** Optional time of day for the visit (display only - it never orders the visit). Omit for no time. */
+  timeRange?: { startTime?: string | null; endTime?: string | null },
 ): Promise<void> {
+  const { startTime, endTime } = timeRangeForSave(timeRange?.startTime, timeRange?.endTime);
+  const hasTime = startTime != null;
+
   // Additional technicians: one atomic database call creates the visit AND every
   // assignment, or nothing at all. The no-extras path below is the original
   // plain insert, unchanged.
@@ -114,6 +123,14 @@ export async function createVisit(
     for (const extraId of additionalTechnicianIds) {
       await logCurrentUserActivity('visit', visitId as string, 'visit_technician_added', await technicianName(extraId));
     }
+    // The atomic function above does not take a time, so it is saved right after as a plain update of this one visit.
+    if (hasTime) {
+      try {
+        await setVisitTimeRange(visitId as string, startTime, endTime);
+      } catch (err) {
+        throw new Error(`The visit was booked, but its time could not be saved: ${err instanceof Error ? err.message : 'unknown error'}`);
+      }
+    }
     return;
   }
 
@@ -124,6 +141,8 @@ export async function createVisit(
       technician_id: technicianId,
       scheduled_date: scheduledDate,
       status: 'booked',
+      // Only sent when a time was chosen, so a booking without one is the exact same insert as before.
+      ...(hasTime ? { start_time: startTime, end_time: endTime } : {}),
     })
     .select('id')
     .single();
@@ -247,5 +266,47 @@ export async function setVisitOrder(orderedVisitIds: string[]): Promise<void> {
 
   if (error) {
     throw new Error(`Failed to save visit order: ${error.message}`);
+  }
+}
+
+/**
+ * Saves one day's running order for jobs AND activities together (set_day_order): the first item
+ * becomes 1, the next 2, and so on, in a single database call. `items` must be exactly that day's
+ * live items (not cancelled), in the new order - if the day changed since it was loaded the database
+ * refuses and asks for a refresh, so two items can never end up on the same number. A time is never
+ * part of this.
+ */
+export async function setDayOrder(dateISO: string, items: DayItem[]): Promise<void> {
+  const { error } = await supabase.rpc('set_day_order', { p_date: dateISO, p_items: toDayOrderPayload(items) });
+
+  if (error) {
+    throw new Error(error.message || 'Failed to save the day order.');
+  }
+}
+
+/**
+ * Saves a day's running order from the items shown. A day with NO activities is saved with the original
+ * set_visit_order call, exactly as before activities existed; a day that has any activity uses set_day_order
+ * (which orders jobs and activities together). `items` must be the day's live items, in the new order.
+ */
+export async function saveDayItemOrder(dateISO: string, items: DayItem[]): Promise<void> {
+  if (items.some((i) => i.kind === 'activity')) {
+    await setDayOrder(dateISO, items);
+    return;
+  }
+  await setVisitOrder(items.map((i) => i.id));
+}
+
+/**
+ * Sets (or clears, with nulls) a job visit's optional time of day - a plain update of this one visit's
+ * start_time/end_time. Display only: the visit's position in the day is not touched. An end without a
+ * start is never stored.
+ */
+export async function setVisitTimeRange(visitId: string, startTime: string | null, endTime: string | null): Promise<void> {
+  const range = timeRangeForSave(startTime, endTime);
+  const { error } = await supabase.from('visits').update({ start_time: range.startTime, end_time: range.endTime }).eq('id', visitId);
+
+  if (error) {
+    throw new Error(`Failed to save the time: ${error.message}`);
   }
 }

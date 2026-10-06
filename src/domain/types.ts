@@ -400,6 +400,38 @@ export interface WeekVisit {
   createdAt: string;
   scheduledDate: string | null;
   status: VisitStatus;
+  /** `visits.start_time` as 'HH:MM', or null = no time. Display only - never decides the order. (Visits cached before this field existed have none; read it as `?? null`.) */
+  startTime: string | null;
+  /** `visits.end_time` as 'HH:MM', or null. Only ever set together with a startTime. */
+  endTime: string | null;
+}
+
+/**
+ * A real `activities` row: a non-job item in someone's working day (a quote visit, picking up
+ * keys, a client meeting). Completely separate from visits/jobs/reports/invoices - it has no job,
+ * price or report. Shares the day's running order with visits (see lib/dayItems.ts) but its time is
+ * display-only, exactly like a visit's.
+ */
+export interface ScheduleActivity {
+  id: string;
+  /** Short description, required (1-120 characters). */
+  description: string;
+  scheduledDate: string;
+  /** The one assigned technician, or null = unassigned (unassigned activities are never shown to technicians). */
+  technicianId: string | null;
+  location: string | null;
+  notes: string | null;
+  /** 'HH:MM' or null = no time. Display only - never decides the order. */
+  startTime: string | null;
+  /** 'HH:MM' or null. Only ever set together with a startTime. */
+  endTime: string | null;
+  /** `activities.sort_order` - the same running order as `visits.sort_order` (one sequence per day). Not a time. */
+  sortOrder: number | null;
+  createdAt: string;
+  /** Set when the assigned technician marked it done; null = not done. */
+  doneAt: string | null;
+  /** Set when a manager cancelled it (soft cancel - the row is kept); null = live. */
+  cancelledAt: string | null;
 }
 
 /** One line of an invoice — either backed by a real visit, or a manually-added line (visitId null). */

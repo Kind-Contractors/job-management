@@ -167,3 +167,43 @@ test('a cache written by the CURRENT version is restored normally', async () => 
   const restored = qc.getQueryData<any[]>(VISITS_KEY);
   assert.ok(restored && restored.length === 1 && Array.isArray(restored[0].additionalTechnicianIds));
 });
+
+// ---- the Activities release (2026-10-06): a cache from the multi-technician release must not be restored ----------------------
+const PREVIOUS_RELEASE_VERSION = '2026-10-01-multi-technician';
+
+test('the cache version was bumped for Activities, so the previous release\'s buster no longer matches', () => {
+  assert.notEqual(QUERY_CACHE_SCHEMA_VERSION, PREVIOUS_RELEASE_VERSION);
+  assert.notEqual(queryCacheBuster('user-1'), `user-1:${PREVIOUS_RELEASE_VERSION}`);
+});
+
+test('a cache persisted by the multi-technician release (visits without times, no activities, jobs-only technician list) is discarded on restore', async () => {
+  const storage = new MemoryStorage();
+  (globalThis as any).window = { localStorage: storage };
+  const qc0 = new QueryClient();
+  // Exactly the shapes that release cached: visits with no startTime/endTime, and the jobs-only technician list.
+  qc0.setQueryData(VISITS_KEY, [freshWeekVisit('a', 'ja', 'mo', [], null, '2026-10-01T08:00:00Z')]);
+  qc0.setQueryData(['technician', 'user-1', 'todayVisits'], [{ visitId: 'v1', scheduledDate: '2026-10-01', status: 'booked' }]);
+  storage.setItem(KEY('user-1'), JSON.stringify({ buster: `user-1:${PREVIOUS_RELEASE_VERSION}`, timestamp: Date.now(), clientState: dehydrate(qc0) }));
+  storage.setItem(KEY('user-2'), JSON.stringify({ buster: `user-2:${PREVIOUS_RELEASE_VERSION}`, timestamp: Date.now(), clientState: dehydrate(qc0) }));
+
+  const qc = new QueryClient();
+  await persistQueryClientRestore({ queryClient: qc, persister: createUserQueryPersister('user-1'), maxAge: QUERY_CACHE_MAX_AGE_MS, buster: queryCacheBuster('user-1') });
+
+  assert.equal(qc.getQueryData(VISITS_KEY), undefined, 'the previous release\'s visits are not restored into the new code');
+  assert.equal(qc.getQueryData(['technician', 'user-1', 'todayVisits']), undefined);
+  assert.equal(storage.has(KEY('user-1')), false, 'the stale entry is removed');
+  assert.equal(storage.has(KEY('user-2')), true, 'another user\'s cache is untouched (isolation kept)');
+});
+
+test('CONTROL: with the previous release\'s version string the old data WOULD have been restored (why the bump matters)', async () => {
+  const storage = new MemoryStorage();
+  (globalThis as any).window = { localStorage: storage };
+  const qc0 = new QueryClient();
+  qc0.setQueryData(VISITS_KEY, [freshWeekVisit('a', 'ja', 'mo', [], null, '2026-10-01T08:00:00Z')]);
+  storage.setItem(KEY('user-1'), JSON.stringify({ buster: `user-1:${PREVIOUS_RELEASE_VERSION}`, timestamp: Date.now(), clientState: dehydrate(qc0) }));
+  const qc = new QueryClient();
+  await persistQueryClientRestore({ queryClient: qc, persister: createUserQueryPersister('user-1'), maxAge: QUERY_CACHE_MAX_AGE_MS, buster: `user-1:${PREVIOUS_RELEASE_VERSION}` });
+  const restored = qc.getQueryData<any[]>(VISITS_KEY);
+  assert.ok(restored && restored.length === 1, 'without the bump the old shape is restored');
+  assert.equal(restored![0].startTime, undefined, 'and it has no startTime - the new code must therefore not depend on it (it reads ?? null)');
+});

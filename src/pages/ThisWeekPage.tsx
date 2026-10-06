@@ -11,9 +11,11 @@ import {
   setTechnicianActive,
 } from '../repository/techniciansRepository';
 import { listJobRows } from '../repository/jobsRepository';
+import { listActivitiesForRange, moveActivity } from '../repository/activitiesRepository';
 import { setUserActive } from '../repository/usersRepository';
-import type { JobRow, WeekVisit } from '../domain/types';
+import type { JobRow, ScheduleActivity, WeekVisit } from '../domain/types';
 import { isVisitParticipant, visitTechnicianNames } from '../lib/visitTechnicians';
+import { UNASSIGNED_ROW_ID } from '../lib/dayItems';
 import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
 import MonthGrid, { type MonthGridDay } from '../components/calendar/MonthGrid';
 import ScheduleTechnicianGrid from '../components/calendar/ScheduleTechnicianGrid';
@@ -114,6 +116,8 @@ export default function ThisWeekPage() {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [prefilledTechnicianId, setPrefilledTechnicianId] = useState<string | null>(null);
+  // Set when an activity chip was clicked: the day drawer opens straight into editing that activity.
+  const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
   const [pendingDrop, setPendingDrop] = useState<{ jobId: string; date: string } | null>(null);
   const [pendingTechnicianId, setPendingTechnicianId] = useState('');
   const [searchParams, setSearchParams] = useSearchParams();
@@ -218,6 +222,12 @@ export default function ThisWeekPage() {
   } = useQuery({
     queryKey: ['visits', rangeStartDate, rangeEndDate],
     queryFn: () => listVisitsForRange(rangeStartDate, rangeEndDate),
+  });
+  // Activities (non-job items) for the same range. Deliberately NOT part of the loading/error gating below:
+  // if this query fails the schedule still shows every job exactly as before, just without activities.
+  const { data: activities = [] } = useQuery({
+    queryKey: ['activities', rangeStartDate, rangeEndDate],
+    queryFn: () => listActivitiesForRange(rangeStartDate, rangeEndDate),
   });
   const {
     data: jobRows = [],
@@ -332,6 +342,21 @@ export default function ThisWeekPage() {
     },
   });
 
+  /**
+   * Drag-and-drop of an activity: its date and/or assignee change in ONE update, so a drop can never
+   * half-apply (unlike a job, an activity has no report that could block a reassignment). Its time is kept;
+   * the database clears its order when the date changes and its "done" when the assignee changes.
+   */
+  const moveActivityMutation = useMutation({
+    mutationFn: ({ activityId, change }: { activityId: string; change: { scheduledDate?: string; technicianId?: string | null } }) =>
+      moveActivity(activityId, change),
+    onSuccess: () => {
+      setBookingError(null);
+      queryClient.invalidateQueries({ queryKey: ['activities'] });
+    },
+    onError: (err) => setBookingError(err instanceof Error ? err.message : 'Failed to move activity.'),
+  });
+
   const activeTechnicians = useMemo(() => technicians.filter((t) => t.isActive), [technicians]);
 
   /**
@@ -403,6 +428,15 @@ export default function ThisWeekPage() {
     });
   }, [visits, q, division, jobById, technicianById]);
 
+  /** Search narrows the activity chips on the calendar like it does visits (description, location, notes, assignee). Division does not apply: an activity has no General/Specialist division, so it stays visible. */
+  const displayActivities = useMemo(() => {
+    if (!q) return activities;
+    return activities.filter((a) => {
+      const who = a.technicianId ? (technicianById.get(a.technicianId)?.name ?? '') : 'unassigned';
+      return `${a.description} ${a.location ?? ''} ${a.notes ?? ''} ${who}`.toLowerCase().includes(q);
+    });
+  }, [activities, q, technicianById]);
+
   const divisionFilteredJobs = useMemo(
     () => jobRows.filter((j) => division === 'Both' || j.division === division),
     [jobRows, division],
@@ -433,16 +467,51 @@ export default function ThisWeekPage() {
    */
   const openDay = (dateISO: string, technicianId?: string) => {
     setSelectedJobId(null);
+    setSelectedActivityId(null);
     setSelectedDate(dateISO);
     setPrefilledTechnicianId(technicianId ?? null);
   };
   const openJob = (jobId: string) => {
     setSelectedDate(null);
+    setSelectedActivityId(null);
     setSelectedJobId(jobId);
+  };
+  /** Opens the day drawer on the activity's own date, straight into editing it. */
+  const openActivity = (activity: ScheduleActivity) => {
+    setSelectedJobId(null);
+    setPrefilledTechnicianId(null);
+    setSelectedDate(activity.scheduledDate);
+    setSelectedActivityId(activity.id);
   };
 
   const handleDrop = (technicianId: string, dateISO: string) => (e: DragEvent) => {
     e.preventDefault();
+    // An activity chip carries its own id under a dedicated mime type. Dropping it on a technician's cell
+    // moves it to that day and person; on the "Unassigned" row it becomes unassigned.
+    const activityId = e.dataTransfer.getData('application/x-activity-id');
+    if (activityId) {
+      const activity = activities.find((a) => a.id === activityId);
+      if (!activity) return; // stale drag payload - nothing to act on
+      const toUnassigned = technicianId === UNASSIGNED_ROW_ID;
+      if (!toUnassigned && !technicianById.get(technicianId)?.isActive) {
+        setBookingError(`${technicianById.get(technicianId)?.name ?? 'This technician'} is deactivated and can't be assigned new activities.`);
+        return;
+      }
+      const newTechnicianId = toUnassigned ? null : technicianId;
+      const change: { scheduledDate?: string; technicianId?: string | null } = {};
+      if (activity.scheduledDate !== dateISO) change.scheduledDate = dateISO;
+      if (activity.technicianId !== newTechnicianId) change.technicianId = newTechnicianId;
+      if (Object.keys(change).length > 0) {
+        setBookingError(null);
+        moveActivityMutation.mutate({ activityId, change });
+      }
+      return;
+    }
+    // Nothing but activities can be dropped on the "Unassigned" row (a job booking always needs a technician).
+    if (technicianId === UNASSIGNED_ROW_ID) {
+      setBookingError('Only activities can be left unassigned - a job booking needs a technician.');
+      return;
+    }
     // An already-booked chip carries its visit id under this dedicated mime
     // type (set by the chip's own onDragStart in ScheduleTechnicianGrid).
     const visitId = e.dataTransfer.getData('application/x-visit-id');
@@ -568,7 +637,7 @@ export default function ThisWeekPage() {
               existing, different concept — jobs due regardless of what's
               currently on screen) — this is only about the visible range.
             */}
-            {visits.length === 0 && (
+            {visits.length === 0 && activities.length === 0 && (
               <div className="mb-3 border border-neutral-300 bg-neutral-100 px-3 py-2 text-[12px] text-neutral-600">
                 No visits scheduled for {mode === 'day' ? 'this day' : mode === 'week' ? 'this week' : 'this month'} —
                 use "+ Add booking" above, or drag a job onto a day, to schedule one.
@@ -587,6 +656,12 @@ export default function ThisWeekPage() {
               <MonthGrid
                 days={monthDays}
                 visits={displayVisits}
+                activities={displayActivities}
+                onSelectActivity={openActivity}
+                onRescheduleActivity={(activityId, date) => {
+                  setBookingError(null);
+                  moveActivityMutation.mutate({ activityId, change: { scheduledDate: date } });
+                }}
                 jobById={jobById}
                 technicianById={technicianById}
                 visitStatusStyle={VISIT_STATUS_STYLE}
@@ -647,12 +722,14 @@ export default function ThisWeekPage() {
                   technicians={technicians}
                   visits={visits}
                   displayVisits={displayVisits}
+                  activities={displayActivities}
                   jobById={jobById}
                   visitStatusStyle={VISIT_STATUS_STYLE}
                   todayISO={todayISO}
                   selectedDateISO={selectedDate}
                   onSelectDay={openDay}
                   onSelectVisit={openJob}
+                  onSelectActivity={openActivity}
                   onDrop={handleDrop}
                   onToggleTechnicianActive={(id, isActive) => {
                     const technician = technicians.find((t) => t.id === id);
@@ -683,14 +760,19 @@ export default function ThisWeekPage() {
           // Includes the prefill in the key — a reopen for the same date but a
           // different (or no) technician must remount with fresh initial state,
           // not silently keep whatever the drawer's own <select> was left showing.
-          key={`${selectedDate}::${prefilledTechnicianId ?? ''}`}
+          key={`${selectedDate}::${prefilledTechnicianId ?? ''}::${selectedActivityId ?? ''}`}
           dateISO={selectedDate}
           visits={visits}
+          activities={activities}
           jobRows={jobRows}
           technicians={technicians}
           visitStatusStyle={VISIT_STATUS_STYLE}
           initialTechnicianId={prefilledTechnicianId}
-          onClose={() => setSelectedDate(null)}
+          initialActivityId={selectedActivityId}
+          onClose={() => {
+            setSelectedDate(null);
+            setSelectedActivityId(null);
+          }}
           onSelectVisit={openJob}
         />
       )}

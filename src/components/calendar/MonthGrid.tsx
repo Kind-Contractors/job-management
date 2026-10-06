@@ -1,6 +1,8 @@
 import type { DragEvent } from 'react';
-import type { JobRow, Technician, WeekVisit } from '../../domain/types';
+import type { JobRow, ScheduleActivity, Technician, WeekVisit } from '../../domain/types';
 import { visitTechnicianLabel, visitTechnicianNames } from '../../lib/visitTechnicians';
+import { mergeDayItems } from '../../lib/dayItems';
+import { formatTimeRange } from '../../lib/timeRange';
 
 const WEEKDAY_HEADER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const DAY_NUM = new Intl.DateTimeFormat('en-GB', { day: 'numeric' });
@@ -20,6 +22,12 @@ export interface PendingDrop {
 interface MonthGridProps {
   days: MonthGridDay[];
   visits: WeekVisit[];
+  /** Search-narrowed activities (non-job items) to show alongside the visits; cancelled ones are never shown. Optional: omitted = none. */
+  activities?: ScheduleActivity[];
+  /** Opens an activity for editing (in the day drawer). */
+  onSelectActivity?: (activity: ScheduleActivity) => void;
+  /** Moves an activity to this date (dragged from another day); its assignee, time and notes are kept. */
+  onRescheduleActivity?: (activityId: string, date: string) => void;
   jobById: Map<string, JobRow>;
   visitStatusStyle: Record<WeekVisit['status'], string>;
   activeTechnicians: Technician[];
@@ -52,6 +60,9 @@ interface MonthGridProps {
 export default function MonthGrid({
   days,
   visits,
+  activities = [],
+  onSelectActivity,
+  onRescheduleActivity,
   jobById,
   visitStatusStyle,
   activeTechnicians,
@@ -81,10 +92,15 @@ export default function MonthGrid({
       ))}
 
       {days.map((day, i) => {
-        const dayVisits = visits.filter((v) => v.scheduledDate === day.dateISO);
+        // Jobs and activities in the day's one running order; cancelled activities are not part of anyone's day.
+        // `?? []`: activities restored from a cache written before they existed must not crash the grid.
+        const dayItems = mergeDayItems(
+          visits.filter((v) => v.scheduledDate === day.dateISO),
+          (activities ?? []).filter((a) => a.scheduledDate === day.dateISO && (a.cancelledAt ?? null) == null),
+        );
         const isPending = pendingDrop?.date === day.dateISO;
-        const shown = dayVisits.slice(0, MAX_CHIPS_PER_DAY);
-        const overflow = dayVisits.length - shown.length;
+        const shown = dayItems.slice(0, MAX_CHIPS_PER_DAY);
+        const overflow = dayItems.length - shown.length;
         const isToday = day.dateISO === todayISO;
         const isSelected = day.dateISO === selectedDateISO;
 
@@ -100,6 +116,11 @@ export default function MonthGrid({
           const visitId = e.dataTransfer.getData('application/x-visit-id');
           if (visitId) {
             onRescheduleVisit(visitId, day.dateISO);
+            return;
+          }
+          const activityId = e.dataTransfer.getData('application/x-activity-id');
+          if (activityId) {
+            onRescheduleActivity?.(activityId, day.dateISO);
             return;
           }
           const jobId = e.dataTransfer.getData('text/plain');
@@ -206,10 +227,46 @@ export default function MonthGrid({
                 )}
               </div>
             ) : (
-              dayVisits.length > 0 && (
+              dayItems.length > 0 && (
                 <div className="mt-1 flex flex-col gap-1">
-                  {shown.map((v) => {
+                  {shown.map((item) => {
+                    if (item.kind === 'activity') {
+                      const a = item.activity;
+                      const done = (a.doneAt ?? null) != null;
+                      const time = formatTimeRange(a.startTime ?? null, a.endTime ?? null);
+                      const who = a.technicianId ? (technicianById.get(a.technicianId)?.name ?? 'Unknown') : 'Unassigned';
+                      return (
+                        <div
+                          key={`a-${a.id}`}
+                          draggable
+                          onDragStart={(e) => {
+                            e.stopPropagation();
+                            e.dataTransfer.setData('application/x-activity-id', a.id);
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSelectActivity?.(a);
+                          }}
+                          title={`Activity: ${a.description} · ${who}${a.location ? ` · ${a.location}` : ''}${time ? ` · ${time}` : ''}${done ? ' · Done' : ''}`}
+                          className={`cursor-grab rounded-md border border-dashed px-1.5 py-1 text-[10.5px] leading-tight active:cursor-grabbing ${
+                            done ? 'border-done bg-done/10 text-done-fg' : 'border-neutral-400 bg-white text-ink'
+                          }`}
+                        >
+                          <div className="truncate font-semibold">
+                            {a.description}
+                            {done ? ' ✓' : ''}
+                          </div>
+                          <div className="truncate opacity-80">
+                            <span className="mr-1 border border-current px-0.5 font-heading text-[8px] font-semibold tracking-[0.08em] uppercase">Act</span>
+                            {time ? `${time} · ` : ''}
+                            {who}
+                          </div>
+                        </div>
+                      );
+                    }
+                    const v = item.visit;
                     const job = jobById.get(v.jobId);
+                    const jobTime = formatTimeRange(v.startTime ?? null, v.endTime ?? null);
                     const technicianNames = visitTechnicianNames(v, technicianById);
                     // Only a 'due'/'booked' visit can be dragged to reschedule —
                     // a completed/missed/cancelled visit shouldn't be moved by
@@ -235,7 +292,10 @@ export default function MonthGrid({
                         className={`rounded-md border px-1.5 py-1 text-[10.5px] leading-tight ${draggableChip ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${visitStatusStyle[v.status]}`}
                       >
                         <div className="truncate font-semibold">{visitTechnicianLabel(v, technicianById)}</div>
-                        <div className="truncate opacity-80">{job ? job.buildingName : 'Job'}</div>
+                        <div className="truncate opacity-80">
+                          {jobTime ? `${jobTime} · ` : ''}
+                          {job ? job.buildingName : 'Job'}
+                        </div>
                       </div>
                     );
                   })}

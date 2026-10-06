@@ -10,6 +10,8 @@ import { useAuth } from '../auth/AuthProvider';
 export const technicianKeys = {
   whoAmI: (userId: string) => ['technician', userId, 'whoAmI'] as const,
   todayVisits: (userId: string) => ['technician', userId, 'todayVisits'] as const,
+  /** Today's jobs AND activities merged in the office's running order. A separate key from todayVisits so the two shapes can never be mistaken for each other in a cache. */
+  todayItems: (userId: string) => ['technician', userId, 'todayItems'] as const,
   pastVisits: (userId: string) => ['technician', userId, 'pastVisits'] as const,
   needsCorrection: (userId: string) => ['technician', userId, 'needsCorrection'] as const,
   visitDetail: (userId: string, visitId: string | undefined) => ['technician', userId, 'visitDetail', visitId] as const,
@@ -18,7 +20,12 @@ export const technicianKeys = {
 
 /** The three list queries a newly booked/assigned visit or a newly synced/returned report could affect. */
 export function visitListQueryKeys(userId: string) {
-  return [technicianKeys.todayVisits(userId), technicianKeys.pastVisits(userId), technicianKeys.needsCorrection(userId)];
+  return [
+    technicianKeys.todayVisits(userId),
+    technicianKeys.todayItems(userId),
+    technicianKeys.pastVisits(userId),
+    technicianKeys.needsCorrection(userId),
+  ];
 }
 
 /**

@@ -1,20 +1,26 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
+  dayItemKey,
+  isDayItemDone,
   isSharedVisit,
   isVisitDoneForMe,
   jobTypeLabel,
   listNeedsCorrection,
   listPastVisits,
-  listTodayVisits,
+  listTodayItems,
+  nextStopIndex,
   retryUnlessOffline,
+  setActivityDone,
   sharedVisitLabel,
+  type TechnicianActivityItem,
   type TechnicianCorrectionSummary,
   type TechnicianVisitSummary,
 } from './api';
 import { useSyncStatus } from './offline/syncEngine';
 import { technicianKeys, useTechnicianUserId } from './queryKeys';
+import { formatTimeRange } from '../lib/timeRange';
 
 /** Same reasoning/value as JobFilePage.tsx/JobReportPage.tsx's identical constant — a technician re-opening Today's Jobs seconds after it was already loaded shouldn't force a new round trip. Left unchanged — newly booked/assigned jobs reaching this screen promptly is instead handled by POLL_INTERVAL_MS below plus TechnicianShell.tsx's online/foreground invalidation, not by shortening this. */
 const VISIT_LIST_STALE_TIME_MS = 5 * 60 * 1000;
@@ -56,20 +62,22 @@ const PAST_DATE_FORMAT = new Intl.DateTimeFormat('en-GB', { weekday: 'short', da
  * on Today. No reordering affordance exists here or anywhere else in this
  * list; it's read-only, chronological, server-sorted.
  */
-function StopRow({
+export function StopRow({
   visit,
   index,
   isNext,
   dateLabel,
   onSelect,
 }: {
-  visit: TechnicianVisitSummary;
+  /** A job; on Today it also carries its optional time of day (display only). */
+  visit: TechnicianVisitSummary & { startTime?: string | null; endTime?: string | null };
   index: number;
   isNext: boolean;
   dateLabel?: string;
   onSelect: () => void;
 }) {
   const done = isVisitDoneForMe(visit);
+  const timeLabel = formatTimeRange(visit.startTime ?? null, visit.endTime ?? null);
   return (
     <div
       onClick={onSelect}
@@ -101,6 +109,7 @@ function StopRow({
         <div className="mt-0.5 font-heading text-[10px] font-semibold tracking-[0.1em] text-neutral-500 uppercase">
           {jobTypeLabel(visit.jobType)}, {visit.jobSummary}
         </div>
+        {timeLabel && <div className="mt-0.5 text-[12px] font-semibold text-teal-700 tabular-nums">{timeLabel}</div>}
         {isSharedVisit(visit) && (
           <div className="mt-0.5 text-[11px] text-teal-700">
             {sharedVisitLabel(visit.assignedCount)}
@@ -109,6 +118,85 @@ function StopRow({
         )}
       </div>
       <span className="text-neutral-400">›</span>
+    </div>
+  );
+}
+
+/**
+ * An Activity in the technician's day: a non-job item (a quote visit, picking up keys, a meeting) in the
+ * same numbered sequence as the jobs. It is clearly marked "Activity", shows its optional time, location and
+ * notes, and can be marked done (and undone) by the technician it is assigned to. A done activity stays in
+ * the list, faded with a tick; an incomplete one can be the "Next stop". Tapping the row shows the full notes.
+ */
+export function ActivityRow({
+  item,
+  index,
+  isNext,
+  canChange,
+  pending,
+  error,
+  onToggleDone,
+}: {
+  item: TechnicianActivityItem;
+  index: number;
+  isNext: boolean;
+  /** False while offline: marking done needs a connection (the change is made on the server). */
+  canChange: boolean;
+  pending: boolean;
+  error?: string | null;
+  onToggleDone: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const done = item.done;
+  const timeLabel = formatTimeRange(item.startTime, item.endTime);
+  return (
+    <div
+      className={`flex items-start gap-3 border-b border-l-4 border-divider px-4 py-3 ${
+        done ? 'border-l-transparent bg-white opacity-60' : isNext ? 'border-l-teal bg-teal-100' : 'border-l-transparent bg-white'
+      }`}
+    >
+      <span
+        className={`mt-0.5 flex h-6 w-6 flex-none items-center justify-center rounded-full font-heading text-[11px] font-semibold ${
+          done ? 'bg-neutral-300 text-neutral-600' : isNext ? 'bg-teal text-white' : 'border border-neutral-400 text-neutral-600'
+        }`}
+      >
+        {done ? '✓' : index + 1}
+      </span>
+      <div className="min-w-0 flex-1">
+        {isNext && !done && (
+          <div className="mb-0.5 font-heading text-[9.5px] font-semibold tracking-[0.13em] text-teal-700 uppercase">Next stop</div>
+        )}
+        <button type="button" onClick={() => setExpanded((e) => !e)} aria-expanded={expanded} className="block w-full cursor-pointer text-left">
+          <div className="flex items-center gap-1.5">
+            <span className="flex-none border border-neutral-500 px-1 font-heading text-[9px] font-semibold tracking-[0.1em] text-neutral-600 uppercase">
+              Activity
+            </span>
+            <span className={`truncate text-[14px] font-semibold text-ink ${done ? 'line-through' : ''}`}>{item.description}</span>
+          </div>
+          {timeLabel && <div className="mt-0.5 text-[12px] font-semibold text-teal-700 tabular-nums">{timeLabel}</div>}
+          {item.location && <div className="mt-0.5 truncate text-[12.5px] text-neutral-600">📍 {item.location}</div>}
+          {item.notes && (
+            <div className={`mt-0.5 text-[12.5px] whitespace-pre-line text-neutral-600 ${expanded ? '' : 'line-clamp-2'}`}>{item.notes}</div>
+          )}
+        </button>
+        {done && <div className="mt-0.5 text-[11px] text-done-fg">Done</div>}
+        {error && (
+          <div role="alert" className="mt-1 text-[11.5px] text-missed-fg">
+            {error}
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onToggleDone}
+        disabled={!canChange || pending}
+        title={!canChange ? "You're offline — marking an activity done needs a connection" : undefined}
+        className={`flex-none cursor-pointer border px-2.5 py-1.5 text-[12px] font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
+          done ? 'border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-100' : 'border-teal-700 bg-white text-teal-700 hover:bg-teal-100'
+        }`}
+      >
+        {pending ? 'Saving…' : done ? 'Undo' : 'Mark done'}
+      </button>
     </div>
   );
 }
@@ -167,6 +255,10 @@ export default function DayViewPage() {
   const { online } = useSyncStatus();
   const userId = useTechnicianUserId();
 
+  const queryClient = useQueryClient();
+
+  // Today's jobs AND activities, merged in the office's running order (a separate cache key from the old
+  // jobs-only list, so the two shapes can never be mistaken for each other).
   const {
     data: visitsData,
     isLoading,
@@ -175,14 +267,24 @@ export default function DayViewPage() {
     error,
     refetch,
   } = useQuery({
-    queryKey: technicianKeys.todayVisits(userId),
-    queryFn: listTodayVisits,
+    queryKey: technicianKeys.todayItems(userId),
+    queryFn: listTodayItems,
     enabled: userId !== '',
     staleTime: VISIT_LIST_STALE_TIME_MS,
     retry: retryUnlessOffline,
     refetchInterval: pollWhileOnline,
   });
   const visits = visitsData ?? [];
+
+  // Mark done / undo for an activity. Only the one row being changed shows "Saving…" or an error.
+  const [activityErrors, setActivityErrors] = useState<Record<string, string>>({});
+  const doneMutation = useMutation({
+    mutationFn: ({ activityId, done }: { activityId: string; done: boolean }) => setActivityDone(activityId, done),
+    onMutate: ({ activityId }) => setActivityErrors((prev) => ({ ...prev, [activityId]: '' })),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: technicianKeys.todayItems(userId) }),
+    onError: (err, { activityId }) =>
+      setActivityErrors((prev) => ({ ...prev, [activityId]: err instanceof Error ? err.message : 'Could not update the activity.' })),
+  });
   // visitsData (not the defaulted `visits`) distinguishes "never
   // successfully fetched" from "fetched, and there's genuinely nothing
   // scheduled" — an empty array is a legitimate, common online result,
@@ -237,8 +339,9 @@ export default function DayViewPage() {
     if (tab === 'past') void refetchPast();
   };
 
-  const doneCount = visits.filter(isVisitDoneForMe).length;
-  const nextIndex = visits.findIndex((v) => !isVisitDoneForMe(v));
+  const doneCount = visits.filter(isDayItemDone).length;
+  // The next stop is the first item not done: a completed activity is skipped, an incomplete one can be next.
+  const nextIndex = nextStopIndex(visits);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -298,15 +401,28 @@ export default function DayViewPage() {
             </div>
           ) : (
             <div>
-              {visits.map((visit, index) => (
-                <StopRow
-                  key={visit.visitId}
-                  visit={visit}
-                  index={index}
-                  isNext={index === nextIndex}
-                  onSelect={() => navigate(`/technician/visits/${visit.visitId}`)}
-                />
-              ))}
+              {visits.map((item, index) =>
+                item.kind === 'activity' ? (
+                  <ActivityRow
+                    key={dayItemKey(item)}
+                    item={item}
+                    index={index}
+                    isNext={index === nextIndex}
+                    canChange={online}
+                    pending={doneMutation.isPending && doneMutation.variables?.activityId === item.activityId}
+                    error={activityErrors[item.activityId] || null}
+                    onToggleDone={() => doneMutation.mutate({ activityId: item.activityId, done: !item.done })}
+                  />
+                ) : (
+                  <StopRow
+                    key={dayItemKey(item)}
+                    visit={item}
+                    index={index}
+                    isNext={index === nextIndex}
+                    onSelect={() => navigate(`/technician/visits/${item.visitId}`)}
+                  />
+                ),
+              )}
             </div>
           ))}
 

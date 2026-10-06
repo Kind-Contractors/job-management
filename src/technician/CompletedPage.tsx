@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { getVisitDetail, isVisitDoneForMe, listTodayVisits } from './api';
+import { getVisitDetail, isDayItemDone, listTodayItems } from './api';
 import { getDraft, getVisitPhotos, subscribeSyncEngine, trySubmitIfReady } from './offline/syncEngine';
 import type { DraftReport, PendingPhoto } from './offline/db';
 import { technicianKeys, useTechnicianUserId } from './queryKeys';
@@ -63,12 +63,14 @@ export default function CompletedPage() {
   }, [visitId]);
 
   // Best-effort only, exactly like Job File's own "Stop N" — renders correctly with or without it.
-  const { data: todayVisits } = useQuery({
-    queryKey: technicianKeys.todayVisits(userId),
-    queryFn: listTodayVisits,
+  // The merged list (jobs and activities): the next stop is the first item not done, other than this job.
+  // A completed activity is skipped; an incomplete one can be next (it opens Your day, where it can be marked done).
+  const { data: todayItems } = useQuery({
+    queryKey: technicianKeys.todayItems(userId),
+    queryFn: listTodayItems,
     enabled: userId !== '',
   });
-  const nextStop = todayVisits?.find((v) => v.visitId !== visitId && !isVisitDoneForMe(v));
+  const nextStop = todayItems?.find((item) => !(item.kind === 'visit' && item.visitId === visitId) && !isDayItemDone(item));
 
   const isSyncedToServer = !!visit?.reportId;
   const isWaitingToSync = !isSyncedToServer && !!draft?.readyToSubmit;
@@ -187,10 +189,12 @@ export default function CompletedPage() {
       <div className="p-4">
         {nextStop ? (
           <button
-            onClick={() => navigate(`/technician/visits/${nextStop.visitId}`)}
+            onClick={() => navigate(nextStop.kind === 'visit' ? `/technician/visits/${nextStop.visitId}` : '/technician')}
             className="w-full cursor-pointer bg-teal px-3 py-2.5 text-sm font-semibold text-white hover:opacity-90"
           >
-            Next stop — {nextStop.buildingName ?? nextStop.buildingAddress}
+            {nextStop.kind === 'visit'
+              ? `Next stop — ${nextStop.buildingName ?? nextStop.buildingAddress}`
+              : `Next — Activity: ${nextStop.description}`}
           </button>
         ) : (
           <button
