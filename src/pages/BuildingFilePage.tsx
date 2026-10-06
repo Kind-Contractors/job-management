@@ -47,6 +47,8 @@ const HISTORY_EVENT_LABEL: Record<string, string> = {
   report_resubmitted: 'Report resubmitted',
   report_sent_to_client: 'Sent to client',
   report_sent_to_accounts: 'Sent to accounts',
+  report_completed: 'Report completed',
+  report_reopened: 'Report reopened',
 };
 
 const PHOTO_PHASE_LABEL = { before: 'Before', during: 'During', after: 'After' } as const;

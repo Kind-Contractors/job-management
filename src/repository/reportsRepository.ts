@@ -33,6 +33,8 @@ interface SupabaseReportRow {
   sent_to_client_by: string | null;
   sent_to_accounts_at: string | null;
   sent_to_accounts_by: string | null;
+  completed_at: string | null;
+  completed_by: string | null;
 }
 
 function mapReport(row: SupabaseReportRow): ReportDetail {
@@ -59,11 +61,25 @@ function mapReport(row: SupabaseReportRow): ReportDetail {
     sentToClientBy: row.sent_to_client_by,
     sentToAccountsAt: row.sent_to_accounts_at,
     sentToAccountsBy: row.sent_to_accounts_by,
+    completedAt: row.completed_at ?? null,
+    completedBy: row.completed_by ?? null,
   };
 }
 
 const REPORT_SELECT =
-  'id, visit_id, submitted_by, submitted_at, on_site_start, on_site_end, work_carried_out, technician_notes, issues, spec_met, review_status, reviewed_by, reviewed_at, return_reason, include_photos, include_notes, include_issues, include_price, sent_to_client_at, sent_to_client_by, sent_to_accounts_at, sent_to_accounts_by';
+  'id, visit_id, submitted_by, submitted_at, on_site_start, on_site_end, work_carried_out, technician_notes, issues, spec_met, review_status, reviewed_by, reviewed_at, return_reason, include_photos, include_notes, include_issues, include_price, sent_to_client_at, sent_to_client_by, sent_to_accounts_at, sent_to_accounts_by, completed_at, completed_by';
+
+/**
+ * A completed report cannot be returned for correction, or have a technician's contribution flagged, until it is
+ * reopened (the database rule reports_completion_requires_approval_check). If that rule is what refused a write,
+ * say so in plain words instead of surfacing the raw constraint message; any other error is passed through as is.
+ */
+export const REOPEN_FIRST_MESSAGE =
+  'This report is marked Completed. Reopen it first (Ready for client, then the Completed tab, then Reopen) before returning it for correction or sending a technician’s section back.';
+
+export function explainCompletionBlock(errorMessage: string): string | null {
+  return errorMessage.includes('reports_completion_requires_approval_check') ? REOPEN_FIRST_MESSAGE : null;
+}
 
 /**
  * Marks a visit completed. `priceCharged` must already reflect the rule the
@@ -273,8 +289,44 @@ export async function returnReportForCorrection(reportId: string, reason: string
     .update({ review_status: 'returned_for_correction', reviewed_by: actor, reviewed_at: now, return_reason: reason })
     .eq('id', reportId);
 
-  if (error) throw new Error(`Failed to return report: ${error.message}`);
+  if (error) throw new Error(explainCompletionBlock(error.message) ?? `Failed to return report: ${error.message}`);
   await logActivityEvent('report', reportId, 'report_returned', actor, reason, now);
+}
+
+/**
+ * Marks an approved report Completed: the manager's "this report is fully dealt with" marker, independent of HOW it
+ * reached the client (emailed through the system, downloaded and sent by hand, or both). Records who and when, and
+ * leaves sent_to_client_* untouched. Only an approved, not-yet-completed report is changed - if nothing was changed
+ * (already completed, or not approved) it says so instead of silently succeeding. Logs 'report_completed'.
+ */
+export async function completeReport(reportId: string, actor: string): Promise<void> {
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('reports')
+    .update({ completed_at: now, completed_by: actor })
+    .eq('id', reportId)
+    .eq('review_status', 'approved')
+    .is('completed_at', null)
+    .select('id');
+
+  if (error) throw new Error(`Failed to mark report completed: ${error.message}`);
+  if (!data || data.length === 0) throw new Error('This report could not be marked completed - it may already be completed, or it is not approved. Refresh and try again.');
+  await logActivityEvent('report', reportId, 'report_completed', actor, null, now);
+}
+
+/** Undoes Completed: clears who/when so the report returns to the Ready for client queue. Logs 'report_reopened'. */
+export async function reopenReport(reportId: string, actor: string): Promise<void> {
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('reports')
+    .update({ completed_at: null, completed_by: null })
+    .eq('id', reportId)
+    .not('completed_at', 'is', null)
+    .select('id');
+
+  if (error) throw new Error(`Failed to reopen report: ${error.message}`);
+  if (!data || data.length === 0) throw new Error('This report is not completed, so there is nothing to reopen. Refresh and try again.');
+  await logActivityEvent('report', reportId, 'report_reopened', actor, null, now);
 }
 
 /** Back to awaiting_review after a correction — clears the now-stale return_reason. */
@@ -487,7 +539,7 @@ export async function returnContributionForCorrection(
     .eq('technician_id', technicianId)
     .not('submitted_at', 'is', null);
 
-  if (error) throw new Error(`Failed to return contribution: ${error.message}`);
+  if (error) throw new Error(explainCompletionBlock(error.message) ?? `Failed to return contribution: ${error.message}`);
   await logActivityEvent('report', reportId, 'report_contribution_returned', actor, `${technicianName}: ${reason}`);
 }
 

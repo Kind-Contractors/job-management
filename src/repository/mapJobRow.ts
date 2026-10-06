@@ -140,6 +140,8 @@ interface SupabaseReport {
   review_status: ReportReviewStatus;
   sent_to_client_at: string | null;
   sent_to_accounts_at: string | null;
+  completed_at: string | null;
+  completed_by: string | null;
   report_contributions: SupabaseReportContribution[] | null;
 }
 
@@ -347,6 +349,8 @@ export function mapVisitRow(v: SupabaseVisit): JobVisitSummary {
     reportReviewStatus: report?.review_status ?? null,
     sentToClientAt: report?.sent_to_client_at ?? null,
     sentToAccountsAt: report?.sent_to_accounts_at ?? null,
+    reportCompletedAt: report?.completed_at ?? null,
+    reportCompletedBy: report?.completed_by ?? null,
     invoiceId: invoiceLineItem?.invoice_id ?? null,
     invoiceStatus: invoice?.status ?? null,
   };

@@ -207,3 +207,42 @@ test('CONTROL: with the previous release\'s version string the old data WOULD ha
   assert.ok(restored && restored.length === 1, 'without the bump the old shape is restored');
   assert.equal(restored![0].startTime, undefined, 'and it has no startTime - the new code must therefore not depend on it (it reads ?? null)');
 });
+
+// ---- the report-completion release (2026-10-07): a cache from the Activities release must not be restored ------------------
+const ACTIVITIES_RELEASE_VERSION = '2026-10-06-activities';
+const JOB_ROWS_KEY = ['jobRows'];
+
+test('the cache version was bumped again for report completion', () => {
+  assert.notEqual(QUERY_CACHE_SCHEMA_VERSION, ACTIVITIES_RELEASE_VERSION);
+  assert.notEqual(queryCacheBuster('user-1'), `user-1:${ACTIVITIES_RELEASE_VERSION}`);
+});
+
+test('job rows persisted by the Activities release (visits without completed fields) are discarded on restore, for that user only', async () => {
+  const storage = new MemoryStorage();
+  (globalThis as any).window = { localStorage: storage };
+  const qc0 = new QueryClient();
+  // Exactly the shape that release cached for a job's visits: a report state and send time, but no completion fields.
+  qc0.setQueryData(JOB_ROWS_KEY, [{ id: 'j1', visits: [{ id: 'v1', reportId: 'r1', reportReviewStatus: 'approved', sentToClientAt: '2026-10-02T09:00:00Z', sentToAccountsAt: null }] }]);
+  storage.setItem(KEY('user-1'), JSON.stringify({ buster: `user-1:${ACTIVITIES_RELEASE_VERSION}`, timestamp: Date.now(), clientState: dehydrate(qc0) }));
+  storage.setItem(KEY('user-2'), JSON.stringify({ buster: `user-2:${ACTIVITIES_RELEASE_VERSION}`, timestamp: Date.now(), clientState: dehydrate(qc0) }));
+
+  const qc = new QueryClient();
+  await persistQueryClientRestore({ queryClient: qc, persister: createUserQueryPersister('user-1'), maxAge: QUERY_CACHE_MAX_AGE_MS, buster: queryCacheBuster('user-1') });
+
+  assert.equal(qc.getQueryData(JOB_ROWS_KEY), undefined, 'the old-shaped job rows are not restored into the new code');
+  assert.equal(storage.has(KEY('user-1')), false, 'the stale entry is removed');
+  assert.equal(storage.has(KEY('user-2')), true, 'another user\'s cache is untouched (isolation kept)');
+});
+
+test('CONTROL: with the Activities release\'s version string the old job rows WOULD have been restored, with no completed fields (why the bump matters)', async () => {
+  const storage = new MemoryStorage();
+  (globalThis as any).window = { localStorage: storage };
+  const qc0 = new QueryClient();
+  qc0.setQueryData(JOB_ROWS_KEY, [{ id: 'j1', visits: [{ id: 'v1', reportReviewStatus: 'approved', sentToClientAt: '2026-10-02T09:00:00Z' }] }]);
+  storage.setItem(KEY('user-1'), JSON.stringify({ buster: `user-1:${ACTIVITIES_RELEASE_VERSION}`, timestamp: Date.now(), clientState: dehydrate(qc0) }));
+  const qc = new QueryClient();
+  await persistQueryClientRestore({ queryClient: qc, persister: createUserQueryPersister('user-1'), maxAge: QUERY_CACHE_MAX_AGE_MS, buster: `user-1:${ACTIVITIES_RELEASE_VERSION}` });
+  const restored = qc.getQueryData<any[]>(JOB_ROWS_KEY);
+  assert.ok(restored && restored.length === 1, 'without the bump the old shape is restored');
+  assert.equal(restored![0].visits[0].reportCompletedAt, undefined, 'and it has no completed field - the new code reads it as ?? null, so an old cache can never crash it');
+});

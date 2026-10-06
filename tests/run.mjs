@@ -22,6 +22,8 @@ await build({
   platform: 'node',
   format: 'esm',
   jsx: 'automatic',
+  // Pages import their logo images; they are never rendered in these tests, so inline them as data URLs.
+  loader: { '.png': 'dataurl', '.jpg': 'dataurl', '.jpeg': 'dataurl', '.svg': 'dataurl' },
   logLevel: 'warning',
   // The app reads Vite env at import time (src/lib/supabaseClient.ts). No network call is ever made in these tests.
   define: {

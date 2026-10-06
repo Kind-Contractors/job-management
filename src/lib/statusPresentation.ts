@@ -80,14 +80,21 @@ export function isVisitReadyForAccounts(visit: JobVisitSummary): boolean {
 }
 
 /**
- * A report is "ready for client" once approved and not yet sent to the
- * client — the same shape as isVisitReadyForAccounts above, just keyed on
- * sentToClientAt instead of sentToAccountsAt. The one shared source of
- * truth for this predicate — reused by NavRail's count and
- * ReadyForClientPage.tsx's own filter.
+ * A report is "ready for client" - i.e. still in the Ready for client queue - from the moment it is approved until a
+ * manager explicitly marks it Completed. It is deliberately NOT keyed on sentToClientAt any more: the report can be
+ * downloaded and sent by hand, or emailed through the system, or both, and it stays in the queue either way until
+ * the manager decides it is fully dealt with. A report that has been emailed shows a "Sent" badge but is still
+ * awaiting completion. The one shared source of truth - reused by NavRail's count, ReadyForClientPage's list and
+ * the job lifecycle check.
  */
 export function isReportReadyForClient(visit: JobVisitSummary): boolean {
-  return visit.reportReviewStatus === 'approved' && !visit.sentToClientAt;
+  // `?? null`: job rows cached before completion existed have no such field.
+  return visit.reportReviewStatus === 'approved' && (visit.reportCompletedAt ?? null) == null;
+}
+
+/** True once a manager has marked the visit's report Completed (it has left the Ready for client queue; Reopen puts it back). */
+export function isReportCompleted(visit: JobVisitSummary): boolean {
+  return (visit.reportCompletedAt ?? null) != null;
 }
 
 export interface MonthCellPresentation {

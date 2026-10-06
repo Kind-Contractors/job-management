@@ -224,6 +224,14 @@ export interface JobVisitSummary {
   sentToClientAt: string | null;
   sentToAccountsAt: string | null;
   /**
+   * When a manager marked the linked report Completed (the report workflow is finished, however it reached the
+   * client - emailed through the system, downloaded and sent by hand, or both). Independent of sentToClientAt.
+   * Null = not completed. Cached job rows from before this existed have no such field; read it as `?? null`.
+   */
+  reportCompletedAt: string | null;
+  /** Who marked it Completed (the manager's email), set and cleared together with reportCompletedAt. */
+  reportCompletedBy: string | null;
+  /**
    * Non-null once this visit is linked to an invoice line item
    * (invoice_line_items.visit_id is UNIQUE — at most one). This is the
    * actual duplicate-invoicing guard: a visit with a non-null invoiceId
@@ -264,6 +272,10 @@ export interface ReportDetail {
   sentToClientBy: string | null;
   sentToAccountsAt: string | null;
   sentToAccountsBy: string | null;
+  /** `reports.completed_at` - when a manager marked this report Completed; null = not completed. Independent of sentToClientAt. */
+  completedAt: string | null;
+  /** `reports.completed_by` - who marked it Completed. */
+  completedBy: string | null;
 }
 
 /**

@@ -6,7 +6,7 @@ import {
   updateJobLifecycle,
   type ActiveToHistoricalLifecycleStatus,
 } from '../../repository/jobsRepository';
-import { isReportReadyForClient } from '../../lib/statusPresentation';
+import { isReportCompleted, isReportReadyForClient } from '../../lib/statusPresentation';
 
 export type JobLifecycleTransition = ActiveToHistoricalLifecycleStatus;
 
@@ -46,9 +46,11 @@ function isUnresolvedVisit(visit: JobVisitSummary): boolean {
 
 /**
  * A visit whose report is still moving through the review/send/invoice
- * pipeline. Reuses isReportReadyForClient() as-is — it's still a correct,
- * live-maintained predicate (sentToClientAt is written only by the real
- * send-client-report Edge Function). Deliberately does NOT reuse
+ * pipeline. A report a manager has marked COMPLETED never blocks (completion is
+ * the manager's explicit "this report is fully dealt with"); a report that was
+ * only emailed through the system but not yet completed still does (it stays
+ * in the Ready for client queue until completed - see isReportReadyForClient).
+ * Deliberately does NOT reuse
  * isVisitReadyForAccounts(): that predicate is keyed on sentToAccountsAt,
  * which nothing has written since the legacy "Send to accounts"
  * bookkeeping action was removed as a confirmed P0 fix earlier this
@@ -60,7 +62,8 @@ function isUnresolvedVisit(visit: JobVisitSummary): boolean {
  * (draft/sending/failed), both genuinely block; a fully 'sent' invoice
  * does not.
  */
-function hasIncompleteReportWork(visit: JobVisitSummary): boolean {
+export function hasIncompleteReportWork(visit: JobVisitSummary): boolean {
+  if (isReportCompleted(visit)) return false;
   if (visit.reportReviewStatus === 'awaiting_review' || visit.reportReviewStatus === 'returned_for_correction') return true;
   if (isReportReadyForClient(visit)) return true;
   if (visit.reportReviewStatus === 'approved' && (!visit.invoiceId || visit.invoiceStatus !== 'sent')) return true;
@@ -201,8 +204,9 @@ export default function JobLifecycleDialog({ job, transition, onClose, onSuccess
             )}
             {blockToShow.incompleteReportVisits.length > 0 && (
               <div className="border border-due bg-due/10 p-3 text-[12.5px] text-due-fg">
-                This job has an outstanding report that still needs to be processed. Complete the report workflow
-                (review, send to client, or send to accounts) before moving this job to Historical.
+                This job has an outstanding report that still needs to be processed. Finish the report workflow
+                (review it, deliver it to the client and mark it Completed in Ready for client, or send it to
+                accounts) before moving this job to Historical.
               </div>
             )}
             {freshBlock && (

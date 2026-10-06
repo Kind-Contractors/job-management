@@ -4,16 +4,28 @@ import { useNavigate } from 'react-router-dom';
 import type { JobRow, JobVisitSummary } from '../domain/types';
 import { listJobRows } from '../repository/jobsRepository';
 import {
+  completeReport,
   getLatestClientSend,
   getReport,
   listPhotosForReport,
+  reopenReport,
   sendClientReport,
   signReportPhotoUrls,
   updatePhotoClientInclusion,
   updateReport,
   type ReportPhoto,
 } from '../repository/reportsRepository';
-import { isReportReadyForClient } from '../lib/statusPresentation';
+import { isReportCompleted, isReportReadyForClient } from '../lib/statusPresentation';
+import { useAuth } from '../auth/AuthProvider';
+import {
+  CompleteButton,
+  CompleteConfirm,
+  CompletedBanner,
+  ReadyForClientTabs,
+  SentBadge,
+  formatWhen,
+  type QueueView,
+} from '../components/reports/ReportCompletionControls';
 import { resolveDisplayContact } from '../lib/contactDisplay';
 import { buildClientReportModel, type ClientReportModel } from '../lib/clientReportModel';
 import { FOOTER_CONTACT_LINE, ISSUE_HELPER_TEXT, generateClientReportPdf, prepareClientReportPhotos, type PreparedReportPhotos } from '../lib/clientReportPdf';
@@ -36,12 +48,14 @@ interface SendConfirmDialogProps {
   model: ClientReportModel;
   contact: JobContactSummary;
   isSending: boolean;
+  /** Set when this report was ALREADY emailed through the system: the dialog then warns that sending again emails it a second time. Null for a first send. */
+  alreadySent: { at: string; to: string | null } | null;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
 /** A confirmation step between clicking "Send to client" and anything actually happening — reuses ContactPopover.tsx's exact overlay pattern (the one modal precedent in this app). */
-function SendConfirmDialog({ model, contact, isSending, onCancel, onConfirm }: SendConfirmDialogProps) {
+export function SendConfirmDialog({ model, contact, isSending, alreadySent, onCancel, onConfirm }: SendConfirmDialogProps) {
   const sectionsIncluded: string[] = ['Work carried out'];
   if (model.notes) sectionsIncluded.push('Notes');
   if (model.issues) sectionsIncluded.push('Issues');
@@ -60,6 +74,13 @@ function SendConfirmDialog({ model, contact, isSending, onCancel, onConfirm }: S
             {model.clientName} · {model.jobSummary} · {model.visitDateLabel}
           </div>
         </div>
+
+        {alreadySent && (
+          <div role="alert" className="mt-3 border border-due bg-due/10 p-2.5 text-[12.5px] text-due-fg">
+            <span className="font-semibold">Already sent.</span> This report was emailed{alreadySent.to ? ` to ${alreadySent.to}` : ''} on {formatWhen(alreadySent.at)}.
+            Sending it again will email the client a second copy. If you only need to finish with this report, cancel and use Completed instead.
+          </div>
+        )}
 
         <div className="mt-3 text-[12.5px] text-ink">
           Sending to <span className="font-semibold">{contact.name}</span> ({contact.email})
@@ -80,7 +101,7 @@ function SendConfirmDialog({ model, contact, isSending, onCancel, onConfirm }: S
             disabled={isSending}
             className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isSending ? 'Sending…' : 'Confirm and send'}
+            {isSending ? 'Sending…' : alreadySent ? 'Send again' : 'Confirm and send'}
           </button>
           <button
             onClick={onCancel}
@@ -287,11 +308,18 @@ function ClientReportPreview({ model }: { model: ClientReportModel }) {
  * about Ready for Accounts/Xero is touched. See CLAUDE.md/the approved
  * plan for the full phased design and what Phase 2/3 will add.
  */
-export default function ReadyForClientPage() {
+export default function ReadyForClientPage({
+  initialView = 'awaiting',
+  initialSelectedVisitId = null,
+}: {
+  /** Which list to open on. Only tests pass these; the app always opens on "Awaiting completion" with nothing selected. */
+  initialView?: QueueView;
+  initialSelectedVisitId?: string | null;
+} = {}) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const [selectedVisitId, setSelectedVisitId] = useState<string | null>(null);
+  const [selectedVisitId, setSelectedVisitId] = useState<string | null>(initialSelectedVisitId);
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
@@ -301,18 +329,34 @@ export default function ReadyForClientPage() {
   const [sendError, setSendError] = useState<string | null>(null);
   // Set when photo preparation couldn't include every photo — holds the already-prepared photos so continuing doesn't redo the work.
   const [skippedWarning, setSkippedWarning] = useState<{ action: 'download' | 'send'; prepared: PreparedReportPhotos } | null>(null);
+  // Which list is showing: reports still awaiting completion (the queue), or reports a manager has completed.
+  const [view, setView] = useState<QueueView>(initialView);
+  const [confirmingComplete, setConfirmingComplete] = useState(false);
+  const [completionError, setCompletionError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const { session } = useAuth();
+  const actor = session?.user.email ?? 'unknown';
 
   const { data: jobRows = [], isLoading, isError, error } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
 
-  const rows = useMemo<ClientReportRow[]>(() => {
-    const list: ClientReportRow[] = [];
+  // A report stays in the queue from approval until a manager explicitly marks it Completed - whether it was emailed
+  // through the system, downloaded and sent by hand, or both (see isReportReadyForClient).
+  const { awaitingRows, completedRows } = useMemo(() => {
+    const awaiting: ClientReportRow[] = [];
+    const completed: ClientReportRow[] = [];
     for (const job of jobRows) {
       for (const visit of job.visits) {
-        if (isReportReadyForClient(visit)) list.push({ job, visit });
+        if (isReportReadyForClient(visit)) awaiting.push({ job, visit });
+        else if (isReportCompleted(visit)) completed.push({ job, visit });
       }
     }
-    return list.sort((a, b) => (a.visit.scheduledDate ?? '').localeCompare(b.visit.scheduledDate ?? ''));
+    awaiting.sort((a, b) => (a.visit.scheduledDate ?? '').localeCompare(b.visit.scheduledDate ?? ''));
+    // Most recently completed first.
+    completed.sort((a, b) => (b.visit.reportCompletedAt ?? '').localeCompare(a.visit.reportCompletedAt ?? ''));
+    return { awaitingRows: awaiting, completedRows: completed };
   }, [jobRows]);
+  const rows = view === 'awaiting' ? awaitingRows : completedRows;
 
   const selected = rows.find((r) => r.visit.id === selectedVisitId);
   const reportId = selected?.visit.reportId ?? null;
@@ -373,6 +417,17 @@ export default function ReadyForClientPage() {
     setSaveError(null);
     setSendError(null);
     setShowConfirmDialog(false);
+    setConfirmingComplete(false);
+    setCompletionError(null);
+    setNotice(null);
+  };
+
+  const changeView = (next: QueueView) => {
+    setView(next);
+    setSelectedVisitId(null);
+    setConfirmingComplete(false);
+    setCompletionError(null);
+    setNotice(null);
   };
 
   const invalidateReport = () => {
@@ -398,7 +453,36 @@ export default function ReadyForClientPage() {
     onError: (err) => setSaveError(err instanceof Error ? err.message : 'Failed to save photo selection.'),
   });
 
+  // Completed: records who and when, independent of how the report was delivered. The report then leaves the queue.
+  const completeMutation = useMutation({
+    mutationFn: (id: string) => completeReport(id, actor),
+    onSuccess: (_data, id) => {
+      setConfirmingComplete(false);
+      setCompletionError(null);
+      setSelectedVisitId(null);
+      setNotice('Report marked as completed. You can find it under Completed, and Reopen it if needed.');
+      queryClient.invalidateQueries({ queryKey: ['report', id] });
+      queryClient.invalidateQueries({ queryKey: ['jobRows'] });
+    },
+    onError: (err) => setCompletionError(err instanceof Error ? err.message : 'Failed to mark the report completed.'),
+  });
+
+  // Reopen: clears completed_at / completed_by and puts the report back in the queue, on the Awaiting completion list.
+  const reopenMutation = useMutation({
+    mutationFn: (id: string) => reopenReport(id, actor),
+    onSuccess: (_data, id) => {
+      setCompletionError(null);
+      setView('awaiting');
+      setNotice('Report reopened. It is back in the Ready for client queue.');
+      queryClient.invalidateQueries({ queryKey: ['report', id] });
+      queryClient.invalidateQueries({ queryKey: ['jobRows'] });
+    },
+    onError: (err) => setCompletionError(err instanceof Error ? err.message : 'Failed to reopen the report.'),
+  });
+
   const selectedContact = selected?.job.clientContacts.find((c) => c.id === selectedContactId) ?? null;
+  // Already emailed through the system? (authoritative: the report's own sent timestamp, not just the latest attempt)
+  const alreadySentAt = selected?.visit.sentToClientAt ?? null;
   const model = selected && report ? buildClientReportModel(selected.job, selected.visit, report, photos, photoUrls) : null;
 
   /**
@@ -515,7 +599,8 @@ export default function ReadyForClientPage() {
       <div className="flex w-[320px] flex-none flex-col border-r border-divider bg-white">
         <div className="flex-none border-b border-divider px-3.5 py-3">
           <h1 className="font-heading text-lg font-semibold">Ready for client</h1>
-          <div className="mt-0.5 text-xs text-neutral-600 tabular-nums">{rows.length} awaiting send</div>
+          <div className="mt-0.5 text-xs text-neutral-600 tabular-nums">{awaitingRows.length} awaiting completion</div>
+          <ReadyForClientTabs view={view} awaitingCount={awaitingRows.length} completedCount={completedRows.length} onChange={changeView} />
         </div>
 
         {isLoading ? (
@@ -534,7 +619,7 @@ export default function ReadyForClientPage() {
         ) : rows.length === 0 ? (
           <div className="flex flex-1 items-center justify-center p-5 text-center">
             <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
-              No approved reports are waiting to be sent to a client.
+              {view === 'awaiting' ? 'No approved reports are waiting to be completed.' : 'No reports have been marked completed yet.'}
             </div>
           </div>
         ) : (
@@ -556,6 +641,16 @@ export default function ReadyForClientPage() {
                     Visit {dateLabel}
                     {row.visit.technicianName ? ` · ${row.visit.technicianName}` : ''}
                   </div>
+                  {view === 'awaiting' && row.visit.sentToClientAt && (
+                    <div className="mt-1">
+                      <SentBadge sentAt={row.visit.sentToClientAt} />
+                    </div>
+                  )}
+                  {view === 'completed' && (
+                    <div className="mt-1 text-[11px] text-done-fg">
+                      Completed by {row.visit.reportCompletedBy ?? 'unknown'} · {formatWhen(row.visit.reportCompletedAt)}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -565,7 +660,8 @@ export default function ReadyForClientPage() {
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto lg:overflow-visible">
         {!selected ? (
-          <div className="flex flex-1 items-center justify-center p-5 text-center">
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-5 text-center">
+            {notice && <div role="status" className="max-w-md border border-teal-700 bg-teal-100 px-3 py-2 text-[12.5px] text-teal-700">{notice}</div>}
             <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
               Select an item on the left
             </div>
@@ -610,6 +706,21 @@ export default function ReadyForClientPage() {
                     Open building file
                   </button>
                 </div>
+
+                {view === 'completed' && (
+                  <CompletedBanner
+                    completedAt={selected.visit.reportCompletedAt ?? null}
+                    completedBy={selected.visit.reportCompletedBy ?? null}
+                    sentAt={alreadySentAt}
+                    pending={reopenMutation.isPending}
+                    onReopen={() => reopenMutation.mutate(reportId!)}
+                  />
+                )}
+                {view === 'awaiting' && alreadySentAt && (
+                  <div className="mb-3 border border-done bg-done/10 px-3 py-2 text-[12.5px] text-done-fg">
+                    <span className="font-semibold">Sent to client</span> on {formatWhen(alreadySentAt)}. This report stays in the queue until you mark it Completed.
+                  </div>
+                )}
 
                 {/* Read-only reference — plain gray fields, no interactive controls, so it never reads like an editable section. */}
                 <section className="border border-neutral-300 bg-white p-3">
@@ -799,6 +910,7 @@ export default function ReadyForClientPage() {
               <div className="flex-none border-t border-divider pt-3 pb-0.5">
                 {pdfError && <div className="mb-2 text-[11.5px] text-missed-fg">{pdfError}</div>}
                 {sendError && <div className="mb-2 text-[11.5px] text-missed-fg">{sendError}</div>}
+                {completionError && <div role="alert" className="mb-2 text-[11.5px] text-missed-fg">{completionError}</div>}
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     onClick={() => void handleDownloadPdf()}
@@ -807,15 +919,35 @@ export default function ReadyForClientPage() {
                   >
                     {isGeneratingPdf ? 'Generating…' : 'Download PDF'}
                   </button>
-                  <button
-                    onClick={() => setShowConfirmDialog(true)}
-                    disabled={!model || !selectedContact?.email}
-                    title={!selectedContact?.email ? 'Choose a recipient with an email address on file first.' : undefined}
-                    className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    Send to client
-                  </button>
+                  {view === 'awaiting' && (
+                    <>
+                      <button
+                        onClick={() => setShowConfirmDialog(true)}
+                        disabled={!model || !selectedContact?.email}
+                        title={!selectedContact?.email ? 'Choose a recipient with an email address on file first.' : undefined}
+                        className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Send to client
+                      </button>
+                      {/* Completed - the manager's own "fully dealt with", whichever way the report reached the client. */}
+                      <CompleteButton
+                        disabled={completeMutation.isPending || !reportId}
+                        onClick={() => {
+                          setCompletionError(null);
+                          setConfirmingComplete(true);
+                        }}
+                      />
+                    </>
+                  )}
                 </div>
+                {view === 'awaiting' && confirmingComplete && reportId && (
+                  <CompleteConfirm
+                    sentAt={alreadySentAt}
+                    pending={completeMutation.isPending}
+                    onConfirm={() => completeMutation.mutate(reportId)}
+                    onCancel={() => setConfirmingComplete(false)}
+                  />
+                )}
               </div>
             </div>
 
@@ -835,6 +967,7 @@ export default function ReadyForClientPage() {
           model={model}
           contact={selectedContact}
           isSending={isSending}
+          alreadySent={alreadySentAt ? { at: alreadySentAt, to: lastSend?.status === 'sent' ? lastSend.recipientEmail : null } : null}
           onCancel={() => (isSending ? null : setShowConfirmDialog(false))}
           onConfirm={() => void handleConfirmSend()}
         />

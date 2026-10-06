@@ -11,6 +11,8 @@ import {
 interface ReportContributionsSectionProps {
   reportId: string;
   reviewStatus: 'awaiting_review' | 'approved' | 'returned_for_correction';
+  /** True when a manager has marked the report Completed. A completed report is approved, so a technician's section cannot be sent back until it is reopened. */
+  completed?: boolean;
   actor: string;
   overview: ReportContributionOverview;
 }
@@ -31,7 +33,7 @@ function statusLabel(p: ReportParticipant): { text: string; className: string } 
  * waive. Only rendered for reports that have contributions; the ordinary
  * single-technician report never reaches this component.
  */
-export default function ReportContributionsSection({ reportId, reviewStatus, actor, overview }: ReportContributionsSectionProps) {
+export default function ReportContributionsSection({ reportId, reviewStatus, completed = false, actor, overview }: ReportContributionsSectionProps) {
   const queryClient = useQueryClient();
   const [returningId, setReturningId] = useState<string | null>(null);
   const [reason, setReason] = useState('');
@@ -89,6 +91,12 @@ export default function ReportContributionsSection({ reportId, reviewStatus, act
 
       {pending.length > 0 && (
         <div className="text-[11.5px] text-due-fg">Still to submit: {pending.map((p) => p.name).join(', ')}</div>
+      )}
+
+      {completed && (
+        <div role="note" className="border border-done bg-done/10 p-1.5 text-[11px] text-done-fg">
+          This report is Completed, so a technician&rsquo;s section can&rsquo;t be sent back for correction. Reopen it first (Ready for client &rarr; Completed &rarr; Reopen).
+        </div>
       )}
 
       {managerEditedAt && (

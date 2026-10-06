@@ -22,7 +22,7 @@ export type AuthStatus = 'loading' | 'signed_out' | 'unauthorized' | 'check_fail
 /** `app_users.role` — the only two values the DB's own CHECK constraint allows. */
 export type AppRole = 'manager' | 'technician';
 
-interface AuthContextValue {
+export interface AuthContextValue {
   status: AuthStatus;
   /** Non-null only when status === 'authorized'. Lets App.tsx route to the Manager tree vs. the technician tree — the two never share a route or component. */
   role: AppRole | null;
@@ -32,7 +32,8 @@ interface AuthContextValue {
   recheck: () => void;
 }
 
-const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+// Exported so a test can render a page that calls useAuth() with a fake signed-in session; the app itself only reads it through useAuth().
+export const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 interface AuthorizationResult {
   status: 'authorized' | 'unauthorized' | 'check_failed';

@@ -14,6 +14,7 @@ import {
 import { getReportReviewStatusPresentation } from '../../lib/statusPresentation';
 import { getApprovalBlockers } from '../../lib/approvalBlockers';
 import ReportContributionsSection from './ReportContributionsSection';
+import { ReopenFirstNotice } from '../reports/ReportCompletionControls';
 import AutoGrowTextarea from '../shared/AutoGrowTextarea';
 import StatusPill from './StatusPill';
 
@@ -167,10 +168,14 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
             Submitted by {report.submittedBy} · {new Date(report.submittedAt).toLocaleString('en-GB')}
           </div>
 
+          {/* A completed report cannot be returned for correction (or have a technician's section sent back) until it is reopened. */}
+          {(report.completedAt ?? null) != null && <ReopenFirstNotice completedBy={report.completedBy ?? null} completedAt={report.completedAt ?? null} />}
+
           {contributionOverview?.contributionMode && (
             <ReportContributionsSection
               reportId={reportId}
               reviewStatus={report.reviewStatus}
+              completed={(report.completedAt ?? null) != null}
               actor={actor}
               overview={contributionOverview}
             />
