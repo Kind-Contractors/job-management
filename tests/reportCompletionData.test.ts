@@ -192,3 +192,19 @@ test('Send to client is the same single edge-function call with the same body, a
   assert.equal(calls(/^PATCH \/rest\/v1\/reports$/).length, 0, 'sending never sets completed_at: that is the manager\'s explicit step');
   assert.equal(events().length, 0, 'and writes no completion event');
 });
+
+test('Send to client with a confirmed message passes exactly that message, unchanged, alongside the same fields', async () => {
+  const message = 'Hi Sam,\n\nThanks for your patience & support <3\n\nLuke';
+  await sendClientReport({ reportId: 'r1', contactId: 'c1', pdfBase64: 'JVBERi0=', message });
+  const [fn] = calls(/^POST \/functions\/v1\/send-client-report$/);
+  assert.deepEqual(fn.body, { reportId: 'r1', contactId: 'c1', pdfBase64: 'JVBERi0=', message });
+});
+
+test('the send request is built from the confirmed message, cleaned like the server does, and never built from an invalid one', async () => {
+  const { buildSendClientReportInput } = await import('../src/lib/clientEmailSend');
+  const ok = buildSendClientReportInput('r1', 'c1', 'JVBERi0=', '  Hi Sam,\r\n\r\nThanks  \n');
+  assert.deepEqual(ok, { ok: true, input: { reportId: 'r1', contactId: 'c1', pdfBase64: 'JVBERi0=', message: 'Hi Sam,\n\nThanks' } });
+  assert.equal(buildSendClientReportInput('r1', 'c1', 'x', '   \n').ok, false);
+  assert.equal(buildSendClientReportInput('r1', 'c1', 'x', 'a'.repeat(2001)).ok, false);
+  assert.equal(buildSendClientReportInput('r1', 'c1', 'x', 'a'.repeat(2000)).ok, true);
+});

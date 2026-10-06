@@ -1,7 +1,14 @@
 // Emails a report's client-facing PDF summary to one of the client's own
 // contacts — the send half of the "Ready for Client" workflow (Phase 2B).
 // POST only, manager-gated (see ../_shared/auth.ts). Body:
-// { reportId: string; contactId: string; pdfBase64: string }.
+// { reportId: string; contactId: string; pdfBase64: string; message?: string }.
+//
+// `message` is the email text the manager wrote or confirmed in the Send to client dialog. It is OPTIONAL: when it is
+// absent the standard message is used (exactly the wording this function always sent), so an older caller behaves as
+// before. When present it is validated HERE on its own (text, not empty, at most 2,000 characters - never trusting the
+// browser), escaped, and turned into HTML by ../_shared/reportEmail.ts (the same module the dialog uses for its
+// pre-filled default). The subject, recipient, attachment, approval checks and send history are unaffected. The message
+// text is never logged. The response says which was used: { status, messageUsed: 'custom' | 'default' }.
 //
 // The PDF itself is generated in the Manager's own browser (see
 // src/lib/clientReportPdf.ts — the exact same function Phase 2A's preview
@@ -34,6 +41,13 @@
 import { corsHeaders } from 'npm:@supabase/supabase-js@2/cors';
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import { assertManager, UnauthorizedError } from '../_shared/auth.ts';
+import {
+  checkEmailMessage,
+  defaultEmailMessage,
+  emailMessageToHtml,
+  emailMessageToText,
+  formatReportDateLong,
+} from '../_shared/reportEmail.ts';
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body, null, 2), {
@@ -81,17 +95,6 @@ interface ContactRow {
   email: string | null;
 }
 
-/** "15 September 2026" — matches the app's own en-GB date formatting elsewhere; 'Not set' is honest rather than fabricating a date the visit doesn't have. */
-function formatReportDate(scheduledDate: string | null): string {
-  if (!scheduledDate) return 'date not set';
-  return new Date(`${scheduledDate}T00:00:00Z`).toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'UTC',
-  });
-}
-
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -111,6 +114,8 @@ Deno.serve(async (req: Request) => {
   let reportId: string;
   let contactId: string;
   let pdfBase64: string;
+  // The manager's own message, validated and cleaned; null = none supplied, so the standard message is used.
+  let customMessage: string | null = null;
   try {
     const body = await req.json();
     reportId = body.reportId;
@@ -119,6 +124,12 @@ Deno.serve(async (req: Request) => {
     if (!reportId || typeof reportId !== 'string') throw new Error('Missing reportId.');
     if (!contactId || typeof contactId !== 'string') throw new Error('Missing contactId.');
     if (!pdfBase64 || typeof pdfBase64 !== 'string') throw new Error('Missing pdfBase64.');
+    if (body.message !== undefined && body.message !== null) {
+      // Checked before anything is looked up or sent. The text itself is never logged, only the reason it was refused.
+      const checked = checkEmailMessage(body.message);
+      if (!checked.ok) throw new Error(checked.error);
+      customMessage = checked.message;
+    }
   } catch (err) {
     return json({ error: `Invalid request body: ${errorMessage(err)}` }, 400);
   }
@@ -206,10 +217,14 @@ Deno.serve(async (req: Request) => {
     if (insertError || !sendRow) throw new Error(insertError?.message ?? 'Failed to record send attempt.');
 
     const buildingName = building.name ?? 'your property';
-    const dateLabel = formatReportDate(visit?.scheduled_date ?? null);
+    const dateLabel = formatReportDateLong(visit?.scheduled_date ?? null);
+    // The subject is always generated here, exactly as before - the manager only chooses the message.
     const subject = job?.job_summary
       ? `Service report — ${buildingName} (${job.job_summary}) — ${dateLabel}`
       : `Service report — ${buildingName} — ${dateLabel}`;
+    // The manager's confirmed message, or the standard one. Either way the text is escaped when turned into HTML (the
+    // standard message includes the contact's and building's names, which used to be inserted unescaped).
+    const messageText = customMessage ?? defaultEmailMessage({ contactName: contact.name, buildingName, dateLabel });
 
     const emailResponse = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -221,7 +236,8 @@ Deno.serve(async (req: Request) => {
         from: resendFromEmail,
         to: contact.email,
         subject,
-        html: `<p>Hello ${contact.name},</p><p>Please find attached the service report for ${buildingName}, dated ${dateLabel}. This report is for your records.</p><p>Kind regards,<br/>Kind Contractors</p>`,
+        html: emailMessageToHtml(messageText),
+        text: emailMessageToText(messageText),
         attachments: [{ filename: 'service-report.pdf', content: pdfBase64 }],
       }),
     });
@@ -265,7 +281,7 @@ Deno.serve(async (req: Request) => {
     });
     if (activityError) console.error('Failed to log activity event "report_sent_to_client":', activityError.message);
 
-    return json({ status: 'sent' }, 200);
+    return json({ status: 'sent', messageUsed: customMessage !== null ? 'custom' : 'default' }, 200);
   } catch (err) {
     const message = errorMessage(err);
     return await fail(message, null);

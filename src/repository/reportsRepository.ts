@@ -346,11 +346,15 @@ export interface SendClientReportInput {
   contactId: string;
   /** Generated in the browser by src/lib/clientReportPdf.ts — see that function and the Edge Function's own header comment for why the PDF is never regenerated server-side. */
   pdfBase64: string;
+  /** The email text the manager confirmed. The server validates it again (non-empty, at most 2,000 characters) and uses the standard message when it is absent. */
+  message?: string;
 }
 
 export interface SendClientReportResult {
   status: 'sent' | 'failed';
   error?: string;
+  /** Which message the server actually sent. A function that predates custom messages leaves this out. */
+  messageUsed?: 'custom' | 'default';
 }
 
 /**

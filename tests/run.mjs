@@ -14,7 +14,19 @@ const entries = readdirSync(join(root, 'tests'))
   .filter((f) => /\.test\.tsx?$/.test(f))
   .map((f) => join(root, 'tests', f));
 
+// The Edge Functions import their packages Deno-style ('npm:@supabase/supabase-js@2'). Point those at the copy installed
+// here so a function's real code can be bundled and run in Node (the Deno runtime itself is faked by the test).
+const denoNpmSpecifiers = {
+  name: 'deno-npm-specifiers',
+  setup(b) {
+    b.onResolve({ filter: /^npm:@supabase\/supabase-js@2(\/cors)?$/ }, (args) =>
+      b.resolve(args.path.replace(/^npm:/, '').replace('@2', ''), { resolveDir: root, kind: args.kind }),
+    );
+  },
+};
+
 await build({
+  plugins: [denoNpmSpecifiers],
   entryPoints: entries,
   outdir: outDir,
   outExtension: { '.js': '.mjs' },

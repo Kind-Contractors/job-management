@@ -164,8 +164,13 @@ test('ACTIONS: a report completed by hand says it was delivered by hand', () => 
 const model: any = { buildingName: 'Bravo House', clientName: 'Acme Ltd', jobSummary: 'cleaning', visitDateLabel: '1 Oct', workCarriedOut: 'x', notes: null, issues: null, specMet: true, photos: [] };
 const contact: any = { id: 'ct1', name: 'Sam Client', email: 'sam@acme.test', phoneNumber: null, isPrimary: true, isAccountsContact: false };
 
+const STD = 'Hello Sam Client,\n\nPlease find attached the service report.';
+const msg = (message = STD) => ({ message, onMessageChange: noop, onResetMessage: noop });
+const dialog = (message: string, extra: Record<string, unknown> = {}) =>
+  renderToStaticMarkup(<SendConfirmDialog model={model} contact={contact} isSending={false} alreadySent={null} {...msg(message)} onCancel={noop} onConfirm={noop} {...extra} />);
+
 test('GUARD: sending a report that was already emailed warns first, names when and to whom, and offers "Send again"', () => {
-  const html = renderToStaticMarkup(<SendConfirmDialog model={model} contact={contact} isSending={false} alreadySent={{ at: SENT, to: 'sam@acme.test' }} onCancel={noop} onConfirm={noop} />);
+  const html = renderToStaticMarkup(<SendConfirmDialog model={model} contact={contact} isSending={false} alreadySent={{ at: SENT, to: 'sam@acme.test' }} {...msg()} onCancel={noop} onConfirm={noop} />);
   assert.match(html, /role="alert"/);
   assert.match(html, /Already sent\./);
   assert.match(html, /sam@acme\.test/);
@@ -176,11 +181,52 @@ test('GUARD: sending a report that was already emailed warns first, names when a
 });
 
 test('GUARD: a first send is the same confirmation as before - no warning', () => {
-  const html = renderToStaticMarkup(<SendConfirmDialog model={model} contact={contact} isSending={false} alreadySent={null} onCancel={noop} onConfirm={noop} />);
+  const html = renderToStaticMarkup(<SendConfirmDialog model={model} contact={contact} isSending={false} alreadySent={null} {...msg()} onCancel={noop} onConfirm={noop} />);
   assert.doesNotMatch(html, /Already sent/);
   assert.doesNotMatch(html, /role="alert"/);
   assert.match(html, />Confirm and send</);
   assert.match(html, /Sending to/);
+});
+
+// ---- the editable email message -------------------------------------------------------------------------------------------
+test('MESSAGE: the dialog shows the message in an editable box with a counter, a reset link and an enabled send button', () => {
+  const html = dialog(STD);
+  assert.match(html, /<textarea[^>]*id="client-email-message"/);
+  assert.match(html, /Hello Sam Client,/);
+  assert.match(html, /Reset to standard message/);
+  assert.match(html, new RegExp(`>${[...STD].length} / 2000<`));
+  assert.doesNotMatch(html, /<button[^>]*disabled=""[^>]*>Confirm and send/);
+  assert.match(html, /subject line is set by the system/);
+});
+
+test('MESSAGE: an empty or whitespace-only message blocks sending and says why', () => {
+  for (const m of ['', '   \n\t ']) {
+    const html = dialog(m);
+    assert.match(html, /The message cannot be empty\./);
+    assert.match(html, /<button[^>]*disabled=""[^>]*>Confirm and send/);
+  }
+});
+
+test('MESSAGE: 2,000 characters is accepted, 2,001 is blocked', () => {
+  const ok = dialog('a'.repeat(2000));
+  assert.match(ok, />2000 \/ 2000</);
+  assert.doesNotMatch(ok, /<button[^>]*disabled=""[^>]*>Confirm and send/);
+  const tooLong = dialog('a'.repeat(2001));
+  assert.match(tooLong, /too long/);
+  assert.match(tooLong, /<button[^>]*disabled=""[^>]*>Confirm and send/);
+});
+
+test('MESSAGE: the already-sent guard still shows, with "Send again", alongside the message box', () => {
+  const html = dialog(STD, { alreadySent: { at: SENT, to: 'sam@acme.test' } });
+  assert.match(html, /Already sent\./);
+  assert.match(html, />Send again</);
+  assert.match(html, /<textarea/);
+});
+
+test('MESSAGE: while sending, the box, reset link and send button are locked', () => {
+  const html = dialog(STD, { isSending: true });
+  assert.match(html, /<textarea[^>]*disabled=""/);
+  assert.match(html, /<button[^>]*disabled=""[^>]*>Sending/);
 });
 
 // ---- the controls ----------------------------------------------------------------------------------------------------------

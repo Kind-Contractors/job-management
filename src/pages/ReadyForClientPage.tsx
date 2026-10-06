@@ -31,6 +31,15 @@ import { buildClientReportModel, type ClientReportModel } from '../lib/clientRep
 import { FOOTER_CONTACT_LINE, ISSUE_HELPER_TEXT, generateClientReportPdf, prepareClientReportPhotos, type PreparedReportPhotos } from '../lib/clientReportPdf';
 import { PHOTO_CELL_ASPECT, PHOTO_GRID_COLUMNS, photoTag, planPhotoLayout, type OrderedPhotoEntry } from '../lib/clientReportPhotoLayout';
 import type { JobContactSummary } from '../domain/types';
+import { buildSendClientReportInput } from '../lib/clientEmailSend';
+import AutoGrowTextarea from '../components/shared/AutoGrowTextarea';
+import {
+  MAX_EMAIL_MESSAGE_LENGTH,
+  checkEmailMessage,
+  defaultEmailMessage,
+  emailMessageLength,
+  formatReportDateLong,
+} from '../../supabase/functions/_shared/reportEmail';
 import kindContractorsLogo from '../assets/kind_Contractors_logo.png';
 import kindLeaf from '../assets/kind_leaf.png';
 
@@ -50,12 +59,32 @@ interface SendConfirmDialogProps {
   isSending: boolean;
   /** Set when this report was ALREADY emailed through the system: the dialog then warns that sending again emails it a second time. Null for a first send. */
   alreadySent: { at: string; to: string | null } | null;
+  /** The email text the manager is about to send. Held by the page (not here) so it survives the skipped-photos warning. */
+  message: string;
+  onMessageChange: (message: string) => void;
+  /** Puts the standard message back. */
+  onResetMessage: () => void;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
 /** A confirmation step between clicking "Send to client" and anything actually happening — reuses ContactPopover.tsx's exact overlay pattern (the one modal precedent in this app). */
-export function SendConfirmDialog({ model, contact, isSending, alreadySent, onCancel, onConfirm }: SendConfirmDialogProps) {
+export function SendConfirmDialog({
+  model,
+  contact,
+  isSending,
+  alreadySent,
+  message,
+  onMessageChange,
+  onResetMessage,
+  onCancel,
+  onConfirm,
+}: SendConfirmDialogProps) {
+  // The same rules the server enforces (shared module), so the button is only enabled for a message that will be accepted.
+  const messageCheck = checkEmailMessage(message);
+  const messageLength = emailMessageLength(message);
+  const overLimit = messageLength > MAX_EMAIL_MESSAGE_LENGTH;
+  const messageProblem = messageCheck.ok ? null : message.trim() === '' ? 'The message cannot be empty.' : `The message is too long — the maximum is ${MAX_EMAIL_MESSAGE_LENGTH} characters.`;
   const sectionsIncluded: string[] = ['Work carried out'];
   if (model.notes) sectionsIncluded.push('Notes');
   if (model.issues) sectionsIncluded.push('Issues');
@@ -95,10 +124,44 @@ export function SendConfirmDialog({ model, contact, isSending, alreadySent, onCa
           </ul>
         </div>
 
+        <div className="mt-2.5">
+          <div className="flex items-baseline justify-between">
+            <label htmlFor="client-email-message" className="font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-600 uppercase">
+              Email message
+            </label>
+            <button
+              type="button"
+              onClick={onResetMessage}
+              disabled={isSending}
+              className="cursor-pointer text-[11.5px] text-teal underline disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Reset to standard message
+            </button>
+          </div>
+          <AutoGrowTextarea
+            id="client-email-message"
+            minRows={7}
+            value={message}
+            onChange={(e) => onMessageChange(e.target.value)}
+            disabled={isSending}
+            aria-invalid={messageProblem !== null}
+            className="mt-1 block w-full border border-neutral-300 p-2 text-[12.5px] text-ink disabled:opacity-60"
+          />
+          <div className="mt-1 flex justify-between text-[11.5px]">
+            <span role={messageProblem ? 'alert' : undefined} className="text-missed-fg">
+              {messageProblem}
+            </span>
+            <span className={`tabular-nums ${overLimit ? 'font-semibold text-missed-fg' : 'text-neutral-600'}`}>
+              {messageLength} / {MAX_EMAIL_MESSAGE_LENGTH}
+            </span>
+          </div>
+          <div className="mt-0.5 text-[11.5px] text-neutral-600">The PDF report is attached automatically. The subject line is set by the system.</div>
+        </div>
+
         <div className="mt-3.5 flex gap-1.5">
           <button
             onClick={onConfirm}
-            disabled={isSending}
+            disabled={isSending || messageProblem !== null}
             className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSending ? 'Sending…' : alreadySent ? 'Send again' : 'Confirm and send'}
@@ -326,6 +389,8 @@ export default function ReadyForClientPage({
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  // The email text shown in the confirm dialog. Lives here (not in the dialog) so it is still there after the skipped-photos warning.
+  const [emailMessage, setEmailMessage] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
   // Set when photo preparation couldn't include every photo — holds the already-prepared photos so continuing doesn't redo the work.
   const [skippedWarning, setSkippedWarning] = useState<{ action: 'download' | 'send'; prepared: PreparedReportPhotos } | null>(null);
@@ -485,6 +550,23 @@ export default function ReadyForClientPage({
   const alreadySentAt = selected?.visit.sentToClientAt ?? null;
   const model = selected && report ? buildClientReportModel(selected.job, selected.visit, report, photos, photoUrls) : null;
 
+  /** The standard message, built exactly as the server builds it when no message is supplied. */
+  const standardMessage = () =>
+    selected && selectedContact
+      ? defaultEmailMessage({
+          contactName: selectedContact.name,
+          buildingName: selected.job.buildingName || 'your property',
+          dateLabel: formatReportDateLong(selected.visit.scheduledDate ?? null),
+        })
+      : '';
+
+  /** Opening the dialog always starts from the standard message - an edit from an earlier, cancelled attempt is not kept. */
+  const openSendDialog = () => {
+    setEmailMessage(standardMessage());
+    setSendError(null);
+    setShowConfirmDialog(true);
+  };
+
   /**
    * Downloads a PDF built from the exact same `model` the on-screen
    * preview renders — never a separate re-fetch/re-selection, so the PDF
@@ -543,12 +625,25 @@ export default function ReadyForClientPage({
    * attempt leaves everything exactly as it was, ready to retry.
    */
   const sendPrepared = async (m: ClientReportModel, prepared: PreparedReportPhotos, id: string, contactId: string) => {
+    // Checked again here (not only in the dialog): exactly this cleaned text is what is sent, and nothing goes out if it is invalid.
+    if (!checkEmailMessage(emailMessage).ok) {
+      setSendError('The message cannot be sent - check it is not empty or longer than 2,000 characters.');
+      return;
+    }
     const blob = await generateClientReportPdf(m, prepared);
-    const pdfBase64 = await blobToBase64(blob);
-    const result = await sendClientReport({ reportId: id, contactId, pdfBase64 });
+    const built = buildSendClientReportInput(id, contactId, await blobToBase64(blob), emailMessage);
+    if (!built.ok) {
+      setSendError(built.error);
+      return;
+    }
+    const result = await sendClientReport(built.input);
     queryClient.invalidateQueries({ queryKey: ['clientSend', id] });
     if (result.status === 'sent') {
       setShowConfirmDialog(false);
+      // A function that has not been updated yet ignores the message and sends the standard one - never let that pass silently.
+      if (result.messageUsed !== 'custom') {
+        setNotice('The report was emailed, but the server used the standard message instead of yours. Please tell your administrator.');
+      }
       queryClient.invalidateQueries({ queryKey: ['jobRows'] });
     } else {
       setSendError(result.error ?? 'Failed to send.');
@@ -922,7 +1017,7 @@ export default function ReadyForClientPage({
                   {view === 'awaiting' && (
                     <>
                       <button
-                        onClick={() => setShowConfirmDialog(true)}
+                        onClick={openSendDialog}
                         disabled={!model || !selectedContact?.email}
                         title={!selectedContact?.email ? 'Choose a recipient with an email address on file first.' : undefined}
                         className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
@@ -968,6 +1063,9 @@ export default function ReadyForClientPage({
           contact={selectedContact}
           isSending={isSending}
           alreadySent={alreadySentAt ? { at: alreadySentAt, to: lastSend?.status === 'sent' ? lastSend.recipientEmail : null } : null}
+          message={emailMessage}
+          onMessageChange={setEmailMessage}
+          onResetMessage={() => setEmailMessage(standardMessage())}
           onCancel={() => (isSending ? null : setShowConfirmDialog(false))}
           onConfirm={() => void handleConfirmSend()}
         />
