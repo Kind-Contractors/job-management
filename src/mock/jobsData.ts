@@ -146,6 +146,7 @@ export const jobs: Job[] = RAW.map((r) => ({
   recontactDueAt: null,
   recontactNotes: null,
   recontactIntervalMonths: null,
+  serviceEndsOn: null,
 }));
 
 export function denormalizeJobRows(): JobRow[] {

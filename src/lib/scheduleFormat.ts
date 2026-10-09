@@ -248,3 +248,13 @@ export function suggestDateInMonth(s: Schedule, year: number, month: number): st
 
   return null;
 }
+
+/**
+ * True when a job's service has ended for the given month: from the month containing `serviceEndsOn` onward the job no
+ * longer asks for work, so nothing is derived as "due" or "needs booking" there. `monthPrefix` is 'YYYY-MM'. A job with
+ * no end date is never ended. Visits that really happened earlier in that month are unaffected (they are real rows).
+ */
+export function isDemandEndedForMonth(monthPrefix: string, serviceEndsOn: string | null | undefined): boolean {
+  if (!serviceEndsOn) return false;
+  return monthPrefix >= serviceEndsOn.slice(0, 7);
+}

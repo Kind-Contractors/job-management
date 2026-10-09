@@ -5,6 +5,7 @@ import { getVisitDetail, isDayItemDone, listTodayItems } from './api';
 import { getDraft, getVisitPhotos, subscribeSyncEngine, trySubmitIfReady } from './offline/syncEngine';
 import type { DraftReport, PendingPhoto } from './offline/db';
 import { technicianKeys, useTechnicianUserId } from './queryKeys';
+import { isReportSyncedToServer } from './reportSyncStatus';
 
 interface CompletedNavState {
   photoCount?: number;
@@ -72,7 +73,8 @@ export default function CompletedPage() {
   });
   const nextStop = todayItems?.find((item) => !(item.kind === 'visit' && item.visitId === visitId) && !isDayItemDone(item));
 
-  const isSyncedToServer = !!visit?.reportId;
+  // A report id alone is not proof for a resubmission (the report already exists) - see isReportSyncedToServer.
+  const isSyncedToServer = isReportSyncedToServer(visit, draft);
   const isWaitingToSync = !isSyncedToServer && !!draft?.readyToSubmit;
 
   if (isLoading || !draftLoaded) {

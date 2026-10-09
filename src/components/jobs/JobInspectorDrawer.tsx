@@ -11,6 +11,7 @@ import { activeSelection, splitPrimary } from '../../lib/visitTechnicianSelectio
 import ScheduleEditor from './ScheduleEditor';
 import JobEditor from './JobEditor';
 import JobLifecycleDialog, { type JobLifecycleTransition } from './JobLifecycleDialog';
+import CancelWorkDialog from './CancelWorkDialog';
 import { describeSchedule, suggestNextDate } from '../../lib/scheduleFormat';
 import { getStatusPresentation } from '../../lib/statusPresentation';
 import StatusPill from './StatusPill';
@@ -53,6 +54,8 @@ export default function JobInspectorDrawer({
   const [revealed, setRevealed] = useState(false);
   const [editingJob, setEditingJob] = useState(false);
   const [lifecycleTransition, setLifecycleTransition] = useState<JobLifecycleTransition | null>(null);
+  // "Mark as Cancelled" opens the shared cancellation dialog (this visit / this and future / the entire job), not the lifecycle dialog.
+  const [cancelOpen, setCancelOpen] = useState(false);
   const [visitDate, setVisitDate] = useState(presetVisitDate ?? todayISO());
   // Selected technician ids in selection order; the job's default technician (if any) is the initial selection and, being first, the visit's primary.
   const [visitTechnicianIds, setVisitTechnicianIds] = useState<string[]>(job.defaultTechnicianId ? [job.defaultTechnicianId] : []);
@@ -318,7 +321,7 @@ export default function JobInspectorDrawer({
               Mark as Lost
             </button>
             <button
-              onClick={() => setLifecycleTransition('cancelled')}
+              onClick={() => setCancelOpen(true)}
               className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-700 hover:bg-neutral-100"
             >
               Mark as Cancelled
@@ -342,6 +345,18 @@ export default function JobInspectorDrawer({
         </button>
       </div>
     </aside>
+    {cancelOpen && (
+      <CancelWorkDialog
+        job={job}
+        visit={null}
+        onClose={() => setCancelOpen(false)}
+        onDone={(result) => {
+          setCancelOpen(false);
+          // The job has just left the active dataset, so the drawer showing it closes (same as the other status changes).
+          if (result.lifecycleStatus === 'cancelled') onClose();
+        }}
+      />
+    )}
     {lifecycleTransition && (
       <JobLifecycleDialog
         job={job}

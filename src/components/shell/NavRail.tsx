@@ -17,7 +17,7 @@ import { listHistoricalJobRows, listJobRows } from '../../repository/jobsReposit
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import { listTechnicians } from '../../repository/techniciansRepository';
 import { listUsers } from '../../repository/usersRepository';
-import { isReportReadyForClient, isVisitReadyForAccounts } from '../../lib/statusPresentation';
+import { queueCounts, useQueueJobRows } from '../../lib/queueJobs';
 
 const DIVISIONS = ['General', 'Specialist', 'Both'] as const;
 
@@ -89,6 +89,8 @@ export default function NavRail() {
   const [collapsed, setCollapsed] = useState(false);
 
   const { data: jobRows = [] } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
+  // The three report-queue counts also include closed/cancelled jobs that still have open report work, like the queues do.
+  const { jobRows: queueJobRows } = useQueueJobRows();
   const { data: historicalJobRows = [] } = useQuery({ queryKey: ['historicalJobRows'], queryFn: listHistoricalJobRows });
   const { data: buildingRows = [] } = useQuery({ queryKey: ['buildingRows'], queryFn: listBuildingRows });
   const { data: technicians = [] } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
@@ -114,7 +116,8 @@ export default function NavRail() {
   // read the sibling needs_booking/overdue/missed counts) were removed —
   // that operational filtering still lives in All Live Jobs' own status
   // chips, unchanged.
-  const reviewCount = divisionFiltered.filter((j) => j.status === 'review').length;
+  const counts = queueCounts(queueJobRows, division);
+  const reviewCount = counts.review;
 
   // A report being "ready for accounts" is a per-visit condition (approved,
   // not yet sent to accounts), not a job-level status — a job can have this
@@ -122,19 +125,13 @@ export default function NavRail() {
   // directly rather than via `job.status`, using the one shared predicate
   // (isVisitReadyForAccounts) also used by AllLiveJobsPage's filter and
   // VisitRow's inline badge.
-  const readyForAccountsCount = divisionFiltered.reduce(
-    (n, j) => n + j.visits.filter(isVisitReadyForAccounts).length,
-    0,
-  );
+  const readyForAccountsCount = counts.readyForAccounts;
   const goToReadyForAccounts = () => navigate('/ready-for-accounts');
 
   // Same shape as readyForAccountsCount above, keyed on the sibling
   // isReportReadyForClient predicate — a report awaiting client-send, not
   // an invoicing concern.
-  const readyForClientCount = divisionFiltered.reduce(
-    (n, j) => n + j.visits.filter(isReportReadyForClient).length,
-    0,
-  );
+  const readyForClientCount = counts.readyForClient;
   const goToReadyForClient = () => navigate('/ready-for-client');
 
   const goToView = (nextGroup: 'client' | 'frequency') => {

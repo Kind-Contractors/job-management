@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { listJobRows } from '../repository/jobsRepository';
+import { isVisitInReviewQueue, useQueueJobRows } from '../lib/queueJobs';
 import { useAuth } from '../auth/AuthProvider';
 import { isVisitReadyForAccounts } from '../lib/statusPresentation';
 import ReportReviewQueue, { type ReportQueueRow } from '../components/jobs/ReportReviewQueue';
 import ReportPanel from '../components/jobs/ReportPanel';
+import ClosedJobsNotice from '../components/reports/ClosedJobsNotice';
 
 export default function ReportReviewPage() {
   const navigate = useNavigate();
@@ -16,19 +16,15 @@ export default function ReportReviewPage() {
 
   const division = searchParams.get('division') ?? 'Both';
 
-  const {
-    data: jobRows = [],
-    isLoading,
-    isError,
-    error,
-  } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
+  // Active jobs plus closed/cancelled jobs that still have a report to review (cancelling a job must not hide them).
+  const { jobRows, isLoading, isError, error, closedJobsError, retryClosedJobs } = useQueueJobRows();
 
   const queue = useMemo<ReportQueueRow[]>(() => {
     const rows: ReportQueueRow[] = [];
     for (const job of jobRows) {
       if (division !== 'Both' && job.division !== division) continue;
       for (const visit of job.visits) {
-        if (visit.reportId && (visit.reportReviewStatus === 'awaiting_review' || visit.reportReviewStatus === 'returned_for_correction')) {
+        if (isVisitInReviewQueue(visit)) {
           rows.push({ job, visit });
         }
       }
@@ -54,6 +50,7 @@ export default function ReportReviewPage() {
             {queue.length} awaiting review
           </div>
         </div>
+        <ClosedJobsNotice show={closedJobsError} onRetry={retryClosedJobs} />
 
         {isLoading ? (
           <div className="p-3.5">

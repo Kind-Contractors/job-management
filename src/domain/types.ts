@@ -155,6 +155,8 @@ export interface Job {
   recontactNotes: string | null;
   /** `jobs.recontact_interval_months` — e.g. 6/12/18/24, the cadence `recontactDueAt` was computed from. `null` for every job today; nothing writes it yet. */
   recontactIntervalMonths: number | null;
+  /** `jobs.service_ends_on` - the first date this job no longer asks for work (set by "cancel this and all future visits"). `null` = no end. Job rows cached before this existed have no such field; read it with `?? null`. */
+  serviceEndsOn: string | null;
 }
 
 export type ScheduleType = 'fixed_weekday' | 'fixed_date' | 'due_month' | 'ad_hoc';

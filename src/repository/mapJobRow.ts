@@ -28,7 +28,7 @@ import type {
   VisitStatus,
 } from '../domain/types';
 import { DEFAULT_ACCESS_NOTE } from '../lib/constants';
-import { describeScheduleShort, monthsDueInYear } from '../lib/scheduleFormat';
+import { describeScheduleShort, isDemandEndedForMonth, monthsDueInYear } from '../lib/scheduleFormat';
 
 export const FREQUENCY_TYPE_LABEL: Record<FrequencyType, Frequency> = {
   weekly: 'Weekly',
@@ -195,6 +195,7 @@ export interface SupabaseJobRecord {
   recontact_due_at: string | null;
   recontact_notes: string | null;
   recontact_interval_months: number | null;
+  service_ends_on: string | null;
   buildings: SupabaseBuilding | SupabaseBuilding[] | null;
   technicians: SupabaseTechnician | SupabaseTechnician[] | null;
   schedules: SupabaseSchedule | SupabaseSchedule[] | null;
@@ -252,7 +253,12 @@ interface VisitState {
  * two can never disagree about "is this due now." It only ever *reads*
  * schedules + visits; it never creates a visit row.
  */
-export function deriveVisitState(visits: SupabaseVisit[], todayISO: string, schedule: Schedule | null): VisitState {
+export function deriveVisitState(
+  visits: SupabaseVisit[],
+  todayISO: string,
+  schedule: Schedule | null,
+  serviceEndsOn: string | null = null,
+): VisitState {
   const active = visits.filter((v) => v.status !== 'cancelled');
 
   const needsReview = active
@@ -303,7 +309,8 @@ export function deriveVisitState(visits: SupabaseVisit[], todayISO: string, sche
     const currentMonthPrefix = todayISO.slice(0, 7); // 'YYYY-MM'
     const currentMonth = Number(todayISO.slice(5, 7));
     const hasVisitThisMonth = active.some((v) => v.scheduled_date?.startsWith(currentMonthPrefix));
-    if (!hasVisitThisMonth && monthsDueInYear(schedule)?.has(currentMonth)) {
+    // A job whose service has ended ("cancel this and all future visits") no longer asks for work from that month on.
+    if (!hasVisitThisMonth && !isDemandEndedForMonth(currentMonthPrefix, serviceEndsOn) && monthsDueInYear(schedule)?.has(currentMonth)) {
       return { status: 'needs_booking', nextDueLabel: 'Due this month — no date set yet' };
     }
   }
@@ -394,7 +401,7 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
 
   const todayISO = new Date().toISOString().slice(0, 10);
   const rawVisits = row.visits ?? [];
-  const { status, nextDueLabel } = deriveVisitState(rawVisits, todayISO, schedule);
+  const { status, nextDueLabel } = deriveVisitState(rawVisits, todayISO, schedule, row.service_ends_on ?? null);
 
   const visits: JobVisitSummary[] = [...rawVisits]
     .sort((a, b) => (a.scheduled_date ?? '').localeCompare(b.scheduled_date ?? ''))
@@ -424,6 +431,7 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
     recontactDueAt: row.recontact_due_at,
     recontactNotes: row.recontact_notes,
     recontactIntervalMonths: row.recontact_interval_months,
+    serviceEndsOn: row.service_ends_on ?? null,
     buildingName,
     street: '',
     postcode: building?.postcode ?? '',

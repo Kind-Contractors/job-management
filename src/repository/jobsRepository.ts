@@ -88,6 +88,7 @@ const JOB_SELECT = `
   recontact_due_at,
   recontact_notes,
   recontact_interval_months,
+  service_ends_on,
   buildings (
     id,
     client_id,
@@ -168,6 +169,87 @@ export async function listHistoricalJobRows(): Promise<JobRow[]> {
   }
 
   return ((data ?? []) as unknown as SupabaseJobRecord[]).map(mapJobRow);
+}
+
+/**
+ * NON-active jobs (completed, lost, cancelled, on hold) that still have report or accounting work a manager must act
+ * on - awaiting review, returned, approved and not Completed, or approved with no sent invoice. Cancelling a job must not
+ * make such work vanish from Report review / Ready for client / Ready for accounts, so those three queues read these rows
+ * IN ADDITION to listJobRows(). Nothing else does: All Live Jobs, the schedule, Month Matrix and the rest keep reading
+ * active jobs only. The database function only pre-selects job ids; the queues apply their own exact rules again (see
+ * src/lib/queueJobs.ts), so a job whose reports are all finished never appears.
+ */
+export async function listJobRowsWithOpenReportWork(): Promise<JobRow[]> {
+  const { data: ids, error: idsError } = await supabase.rpc('jobs_with_open_report_work');
+  if (idsError) {
+    throw new Error(`Failed to load open report work on closed jobs: ${idsError.message}`);
+  }
+  const jobIds = (ids ?? []) as string[];
+  if (jobIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('jobs')
+    .select(JOB_SELECT)
+    .in('id', jobIds)
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true });
+  if (error) {
+    throw new Error(`Failed to load open report work on closed jobs: ${error.message}`);
+  }
+  return ((data ?? []) as unknown as SupabaseJobRecord[]).map(mapJobRow);
+}
+
+export type CancelWorkScope = 'visit' | 'this_and_future' | 'job';
+
+export interface CancelWorkResult {
+  scope: CancelWorkScope;
+  /** True when there was nothing left to do (already cancelled) - nothing was changed. */
+  alreadyDone: boolean;
+  cancelledVisitIds: string[];
+  /** Visits that were NOT cancelled because they already have a report or an invoice line. They keep their status. */
+  keptVisits: { id: string; scheduledDate: string | null; reason: 'has_report' | 'has_invoice' }[];
+  serviceEndsOn: string | null;
+  lifecycleStatus: JobLifecycleStatus;
+}
+
+/**
+ * The one write path for cancelling work: this visit only, this and all future visits, or the entire job. A single
+ * manager-only database function does everything in one transaction (cancel the open visits, set the end date or move the
+ * job to Historical Jobs, write the audit rows), so it can never half-apply. Nothing is deleted: completed and missed
+ * visits, reports, photos, invoices and activities are never touched, and a visit that already has a report or an invoice
+ * line is kept (returned in keptVisits) rather than cancelled.
+ */
+export async function cancelJobWork(input: {
+  jobId: string;
+  scope: CancelWorkScope;
+  fromVisitId: string | null;
+  reason: string | null;
+}): Promise<CancelWorkResult> {
+  const { data, error } = await supabase.rpc('cancel_job_work', {
+    p_job_id: input.jobId,
+    p_scope: input.scope,
+    p_from_visit_id: input.fromVisitId,
+    p_reason: input.reason,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  const r = (data ?? {}) as {
+    scope: CancelWorkScope;
+    already_done?: boolean;
+    cancelled_visit_ids?: string[];
+    kept_visits?: { id: string; scheduled_date: string | null; reason: 'has_report' | 'has_invoice' }[];
+    service_ends_on?: string | null;
+    lifecycle_status: JobLifecycleStatus;
+  };
+  return {
+    scope: r.scope,
+    alreadyDone: r.already_done ?? false,
+    cancelledVisitIds: r.cancelled_visit_ids ?? [],
+    keptVisits: (r.kept_visits ?? []).map((k) => ({ id: k.id, scheduledDate: k.scheduled_date, reason: k.reason })),
+    serviceEndsOn: r.service_ends_on ?? null,
+    lifecycleStatus: r.lifecycle_status,
+  };
 }
 
 /** Same visit/report/invoice columns as JOB_SELECT's own `visits(...)` sub-select above — deliberately excludes buildings/clients/schedules, which the safeguards never look at. */

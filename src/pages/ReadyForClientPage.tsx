@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import type { JobRow, JobVisitSummary } from "../domain/types";
-import { listJobRows } from "../repository/jobsRepository";
+import { isActiveJob, useQueueJobRows } from "../lib/queueJobs";
+import ClosedJobsNotice from "../components/reports/ClosedJobsNotice";
 import {
   completeReport,
   getLatestClientSend,
@@ -570,12 +571,8 @@ export default function ReadyForClientPage({
   const { session } = useAuth();
   const actor = session?.user.email ?? "unknown";
 
-  const {
-    data: jobRows = [],
-    isLoading,
-    isError,
-    error,
-  } = useQuery({ queryKey: ["jobRows"], queryFn: listJobRows });
+  // Active jobs plus closed/cancelled jobs whose approved report is still awaiting completion.
+  const { jobRows, isLoading, isError, error, closedJobsError, retryClosedJobs } = useQueueJobRows();
 
   // A report stays in the queue from approval until a manager explicitly marks it Completed - whether it was emailed
   // through the system, downloaded and sent by hand, or both (see isReportReadyForClient).
@@ -585,7 +582,8 @@ export default function ReadyForClientPage({
     for (const job of jobRows) {
       for (const visit of job.visits) {
         if (isReportReadyForClient(visit)) awaiting.push({ job, visit });
-        else if (isReportCompleted(visit)) completed.push({ job, visit });
+        // The Completed tab is active jobs only: finished reports of closed jobs do not come back into view.
+        else if (isReportCompleted(visit) && isActiveJob(job)) completed.push({ job, visit });
       }
     }
     // Latest visit date first, same as Ready for accounts.
@@ -942,6 +940,7 @@ export default function ReadyForClientPage({
             onChange={changeView}
           />
         </div>
+        <ClosedJobsNotice show={closedJobsError} onRetry={retryClosedJobs} />
 
         {isLoading ? (
           <div className="p-3.5">
