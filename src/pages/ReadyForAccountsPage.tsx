@@ -1,13 +1,15 @@
 import { useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import type { JobRow, JobVisitSummary } from '../domain/types';
-import { listJobRows } from '../repository/jobsRepository';
+import { isVisitInAccountsQueue, useQueueJobRows, visitNeedsCompletion } from '../lib/queueJobs';
 import { createInvoiceDraft } from '../repository/invoicesRepository';
 import { useAuth } from '../auth/AuthProvider';
-import { isVisitReadyForAccounts, type StatusPresentation } from '../lib/statusPresentation';
+import { type StatusPresentation } from '../lib/statusPresentation';
 import StatusPill from '../components/jobs/StatusPill';
 import InvoiceEditor from '../components/jobs/InvoiceEditor';
+import CompleteVisitForm from '../components/jobs/CompleteVisitForm';
+import ClosedJobsNotice from '../components/reports/ClosedJobsNotice';
 
 interface AccountsRow {
   job: JobRow;
@@ -51,13 +53,15 @@ function accountsRowPresentation(row: AccountsRow): StatusPresentation {
  * JobInspectorDrawer/InvoiceEditor — this page only adds a different way to
  * reach them, it does not reimplement any invoice logic.
  */
-export default function ReadyForAccountsPage() {
+export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: { initialSelectedVisitId?: string | null } = {}) {
   const navigate = useNavigate();
   const { session } = useAuth();
   const actor = session?.user.email ?? 'unknown';
   const queryClient = useQueryClient();
 
-  const [selectedVisitId, setSelectedVisitId] = useState<string | null>(null);
+  const [selectedVisitId, setSelectedVisitId] = useState<string | null>(initialSelectedVisitId);
+  // The visit whose completion form was dismissed (so it shows a button instead); reset by completing it.
+  const [completionHiddenFor, setCompletionHiddenFor] = useState<string | null>(null);
   const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [selectedForInvoiceIds, setSelectedForInvoiceIds] = useState<Set<string>>(new Set());
@@ -65,12 +69,8 @@ export default function ReadyForAccountsPage() {
   const [singleReference, setSingleReference] = useState('');
   const [combinedReference, setCombinedReference] = useState('');
 
-  const {
-    data: jobRows = [],
-    isLoading,
-    isError,
-    error,
-  } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
+  // Active jobs plus closed/cancelled jobs that still have unbilled or unsent accounting work.
+  const { jobRows, isLoading, isError, error, closedJobsError, retryClosedJobs } = useQueueJobRows();
 
   // A visit belongs on this page once it's approved-and-unbilled, or once it
   // already has an invoice that still needs attention (draft/sending/failed/
@@ -80,7 +80,7 @@ export default function ReadyForAccountsPage() {
     const list: AccountsRow[] = [];
     for (const job of jobRows) {
       for (const visit of job.visits) {
-        if (isVisitReadyForAccounts(visit) || visit.invoiceId) list.push({ job, visit });
+        if (isVisitInAccountsQueue(job, visit)) list.push({ job, visit });
       }
     }
     // Most recent first — was oldest-first ascending; only the compare
@@ -89,6 +89,8 @@ export default function ReadyForAccountsPage() {
   }, [jobRows]);
 
   const selected = rows.find((r) => r.visit.id === selectedVisitId);
+  // Open visit on a cancelled/closed job: the completion form is shown and Create invoice stays disabled until it is completed.
+  const needsCompletion = !!selected && !selected.visit.invoiceId && visitNeedsCompletion(selected.job, selected.visit);
 
   const selectRow = (row: AccountsRow) => {
     setSelectedVisitId(row.visit.id);
@@ -235,6 +237,8 @@ export default function ReadyForAccountsPage() {
           </div>
         )}
 
+        <ClosedJobsNotice show={closedJobsError} onRetry={retryClosedJobs} />
+
         {isLoading ? (
           <div className="p-3.5">
             <div className="font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">Loading…</div>
@@ -262,7 +266,8 @@ export default function ReadyForAccountsPage() {
               const isSelected = row.visit.id === selectedVisitId;
               const dateLabel = row.visit.scheduledDate ? new Date(row.visit.scheduledDate).toLocaleDateString('en-GB') : 'No date set';
               const amount = row.visit.priceCharged ?? row.job.pricePerVisit;
-              const canSelectForInvoice = !row.visit.invoiceId;
+              // An open visit on a cancelled/closed job must be completed first, so it cannot be put on a combined invoice either.
+              const canSelectForInvoice = !row.visit.invoiceId && !visitNeedsCompletion(row.job, row.visit);
               const selectForInvoiceDisabled = combineJobId !== null && row.job.id !== combineJobId;
               return (
                 <div
@@ -350,6 +355,32 @@ export default function ReadyForAccountsPage() {
               </div>
             ) : (
               <div className="mt-3 border border-neutral-300 bg-white p-3">
+                {needsCompletion && (
+                  <div role="region" aria-label="Complete this visit" className="mb-3 border border-due bg-due/10 p-2.5">
+                    <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-due-fg uppercase">Complete this visit first</div>
+                    <div className="mt-1 text-[12.5px] text-ink">
+                      This visit is still marked {selected.visit.status === 'due' ? 'Due' : 'Booked'}, but its job has been {selected.job.lifecycleStatus === 'cancelled' ? 'cancelled' : 'closed'}.
+                      Complete it to record its price and date, then you can invoice it. Completing the visit does not reopen or reactivate the job: the job stays{' '}
+                      {selected.job.lifecycleStatus === 'cancelled' ? 'cancelled' : 'closed'} and off the schedule.
+                    </div>
+                    {completionHiddenFor === selected.visit.id ? (
+                      <button
+                        onClick={() => setCompletionHiddenFor(null)}
+                        className="mt-2 cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white"
+                      >
+                        Complete this visit
+                      </button>
+                    ) : (
+                      <CompleteVisitForm
+                        job={selected.job}
+                        visit={selected.visit}
+                        actor={actor}
+                        onDone={() => setCompletionHiddenFor(null)}
+                        onCancel={() => setCompletionHiddenFor(selected.visit.id)}
+                      />
+                    )}
+                  </div>
+                )}
                 <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
                   No invoice yet
                 </div>
@@ -373,11 +404,12 @@ export default function ReadyForAccountsPage() {
                   onClick={() =>
                     createInvoiceMutation.mutate({ row: selected, worksOrderNumber: singleReference.trim() || null })
                   }
-                  disabled={createInvoiceMutation.isPending}
+                  disabled={createInvoiceMutation.isPending || needsCompletion}
                   className="mt-2 cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {createInvoiceMutation.isPending ? 'Creating…' : 'Create invoice'}
                 </button>
+                {needsCompletion && <div className="mt-1 text-[11.5px] text-neutral-600">Complete the visit above first - then you can create the invoice.</div>}
               </div>
             )}
           </div>

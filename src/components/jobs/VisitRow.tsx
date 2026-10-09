@@ -1,16 +1,12 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { JobRow, JobVisitSummary, Technician } from '../../domain/types';
-import { completeVisit, createReport, markVisitCancelled, markVisitMissed } from '../../repository/reportsRepository';
+import { createReport, markVisitMissed } from '../../repository/reportsRepository';
 import { addVisitTechnician, assignVisitTechnician, removeVisitTechnician, rescheduleVisit } from '../../repository/techniciansRepository';
 import { getReportReviewStatusPresentation, getVisitStatusPresentation } from '../../lib/statusPresentation';
 import StatusPill from './StatusPill';
-
-function nowLocalDateTime(): string {
-  const d = new Date();
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-  return d.toISOString().slice(0, 16);
-}
+import CancelWorkDialog from './CancelWorkDialog';
+import CompleteVisitForm from './CompleteVisitForm';
 
 function invalidateAfterVisitChange(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: ['jobRows'] });
@@ -27,14 +23,11 @@ interface VisitRowProps {
 
 export default function VisitRow({ job, visit, actor, technicians }: VisitRowProps) {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<'summary' | 'complete' | 'report' | 'cancel'>('summary');
-  const [price, setPrice] = useState(job.pricePerVisit != null ? String(job.pricePerVisit) : '');
-  const [completedAt, setCompletedAt] = useState(nowLocalDateTime());
-  const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<'summary' | 'complete' | 'report'>('summary');
+  const [cancelOpen, setCancelOpen] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [dateError, setDateError] = useState<string | null>(null);
   const [extraError, setExtraError] = useState<string | null>(null);
-  const [cancelError, setCancelError] = useState<string | null>(null);
 
   /**
    * Manually moves THIS visit to a specific date — the exact same
@@ -94,38 +87,9 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
     onError: (err) => setExtraError(err instanceof Error ? err.message : 'Failed to remove technician.'),
   });
 
-  const completeMutation = useMutation({
-    mutationFn: () => completeVisit(visit.id, Number(price), new Date(completedAt).toISOString(), actor),
-    onSuccess: () => {
-      invalidateAfterVisitChange(queryClient);
-      setMode('summary');
-      setError(null);
-    },
-    onError: (err) => setError(err instanceof Error ? err.message : 'Failed to mark complete.'),
-  });
-
   const missedMutation = useMutation({
     mutationFn: () => markVisitMissed(visit.id, actor),
     onSuccess: () => invalidateAfterVisitChange(queryClient),
-  });
-
-  /**
-   * Cancels THIS visit only (status -> 'cancelled') — never touches the
-   * job, schedules, reports, photos, or invoices; a single-column update
-   * exactly like every other visit mutation here. Gated in the JSX below
-   * to due/booked visits only (mirrors the existing "Mark cancelled"
-   * button's own guard), and requires the inline confirmation step below
-   * before firing — the destination `mode` always resets afterwards so a
-   * stale confirmation panel can't linger past the mutation completing.
-   */
-  const cancelledMutation = useMutation({
-    mutationFn: () => markVisitCancelled(visit.id, actor),
-    onSuccess: () => {
-      invalidateAfterVisitChange(queryClient);
-      setMode('summary');
-      setCancelError(null);
-    },
-    onError: (err) => setCancelError(err instanceof Error ? err.message : 'Failed to cancel visit.'),
   });
 
   // `?? []`: job rows restored from a cache written before multi-technician visits have no additionalTechnicians.
@@ -280,84 +244,20 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
             Mark missed
           </button>
           <button
-            onClick={() => setMode('cancel')}
+            onClick={() => setCancelOpen(true)}
             className="cursor-pointer text-[11px] text-neutral-500 hover:underline"
           >
-            Cancel this visit
+            Cancel…
           </button>
         </div>
       )}
 
-      {mode === 'cancel' && (
-        <div className="mt-2 flex flex-col gap-1.5 border border-neutral-300 bg-neutral-100 p-2.5">
-          <div className="text-[11.5px] leading-relaxed text-ink">
-            Cancel the visit on {dateLabel}? This only cancels this one visit — it does <strong>not</strong> delete
-            the job, and any other visits, reports, photos, or invoices for this job are unaffected.
-          </div>
-          {cancelError && <div className="text-[11px] text-missed-fg">{cancelError}</div>}
-          <div className="flex gap-1.5">
-            <button
-              onClick={() => cancelledMutation.mutate()}
-              disabled={cancelledMutation.isPending}
-              className="cursor-pointer bg-missed px-2.5 py-1 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {cancelledMutation.isPending ? 'Cancelling…' : 'Yes, cancel this visit'}
-            </button>
-            <button
-              onClick={() => {
-                setMode('summary');
-                setCancelError(null);
-              }}
-              disabled={cancelledMutation.isPending}
-              className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-600 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Back
-            </button>
-          </div>
-        </div>
+      {cancelOpen && (
+        <CancelWorkDialog job={job} visit={visit} onClose={() => setCancelOpen(false)} onDone={() => setCancelOpen(false)} />
       )}
 
       {mode === 'complete' && (
-        <div className="mt-2 flex flex-col gap-1.5 border border-neutral-300 bg-neutral-100 p-2.5">
-          <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-            Price charged {job.pricePerVisit == null && <span className="text-due-fg">(variable job — enter actual amount)</span>}
-            <input
-              type="number"
-              step="0.01"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-            Completed at
-            <input
-              type="datetime-local"
-              value={completedAt}
-              onChange={(e) => setCompletedAt(e.target.value)}
-              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
-            />
-          </label>
-          {error && <div className="text-[11px] text-missed-fg">{error}</div>}
-          <div className="flex gap-1.5">
-            <button
-              onClick={() => {
-                if (!price) {
-                  setError('Enter a price charged.');
-                  return;
-                }
-                completeMutation.mutate();
-              }}
-              disabled={completeMutation.isPending}
-              className="cursor-pointer bg-teal px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-60"
-            >
-              {completeMutation.isPending ? 'Saving…' : 'Save'}
-            </button>
-            <button onClick={() => setMode('summary')} className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-600">
-              Cancel
-            </button>
-          </div>
-        </div>
+        <CompleteVisitForm job={job} visit={visit} actor={actor} onDone={() => setMode('summary')} onCancel={() => setMode('summary')} />
       )}
 
       {visit.status === 'completed' && !visit.reportId && mode === 'summary' && (

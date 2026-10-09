@@ -20,6 +20,8 @@ interface DayBookingsListProps {
   onSelectVisit: (jobId: string) => void;
   /** Opens this activity for editing. */
   onSelectActivity?: (activity: ScheduleActivity) => void;
+  /** Opens the cancellation dialog for this visit. Omitted = no cancel button (the list is then unchanged). */
+  onCancelVisit?: (visitId: string) => void;
 }
 
 const ACTIVITY_STYLE = 'border-dashed border-neutral-400 bg-white text-ink';
@@ -46,6 +48,7 @@ export default function DayBookingsList({
   visitStatusStyle,
   onSelectVisit,
   onSelectActivity,
+  onCancelVisit,
 }: DayBookingsListProps) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
@@ -129,7 +132,18 @@ export default function DayBookingsList({
             </span>
           )}
           {/* Fixed-width control area: the arrows line up on every row whatever the text length. */}
-          <div className="flex w-[78px] flex-none items-center justify-end gap-1">
+          <div className={`flex ${onCancelVisit ? 'w-[102px]' : 'w-[78px]'} flex-none items-center justify-end gap-1`}>
+            {onCancelVisit && (v.status === 'due' || v.status === 'booked') && (
+              <button
+                type="button"
+                onClick={() => onCancelVisit(v.id)}
+                aria-label={`Cancel ${building}`}
+                title="Cancel this visit, this and all future visits, or the entire job"
+                className={arrowClass}
+              >
+                ✕
+              </button>
+            )}
             {v.status !== 'cancelled' && (
               <button
                 type="button"

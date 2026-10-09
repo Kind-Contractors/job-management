@@ -13,6 +13,7 @@ import type { ActivityFormValues } from '../../lib/activityInput';
 import { timeRangeError } from '../../lib/timeRange';
 import SearchableSelect from '../shared/SearchableSelect';
 import JobCreator from '../jobs/JobCreator';
+import CancelWorkDialog from '../jobs/CancelWorkDialog';
 
 const DATE_HEADER_FORMAT = new Intl.DateTimeFormat('en-GB', {
   weekday: 'long',
@@ -81,6 +82,8 @@ export default function ScheduleDayDrawer({
   onSelectVisit: (jobId: string) => void;
 }) {
   const queryClient = useQueryClient();
+  // The visit whose cancellation dialog is open (the same dialog the Job Inspector uses).
+  const [cancellingVisitId, setCancellingVisitId] = useState<string | null>(null);
 
   const jobById = useMemo(() => new Map(jobRows.map((j) => [j.id, j])), [jobRows]);
   const technicianById = useMemo(() => new Map(technicians.map((t) => [t.id, t])), [technicians]);
@@ -89,6 +92,8 @@ export default function ScheduleDayDrawer({
   const dayVisits = useMemo(() => visits.filter((v) => v.scheduledDate === dateISO), [visits, dateISO]);
   // `?? []`: activities restored from a cache written before they existed must not crash the drawer.
   const dayActivities = useMemo(() => (activities ?? []).filter((a) => a.scheduledDate === dateISO), [activities, dateISO]);
+  const cancellingJob = cancellingVisitId ? jobRows.find((j) => j.visits.some((v) => v.id === cancellingVisitId)) ?? null : null;
+  const cancellingVisit = cancellingJob?.visits.find((v) => v.id === cancellingVisitId) ?? null;
   const liveCount = dayVisits.filter((v) => v.status !== 'cancelled').length + dayActivities.filter((a) => (a.cancelledAt ?? null) == null).length;
 
   const { data: buildingRows = [] } = useQuery({ queryKey: ['buildingRows'], queryFn: listBuildingRows });
@@ -247,6 +252,7 @@ export default function ScheduleDayDrawer({
             technicianById={technicianById}
             visitStatusStyle={visitStatusStyle}
             onSelectVisit={onSelectVisit}
+            onCancelVisit={setCancellingVisitId}
             onSelectActivity={(a) => {
               setActivityError(null);
               setActivityMessage(null);
@@ -437,6 +443,14 @@ export default function ScheduleDayDrawer({
           />
         </div>
       </div>
+    )}
+    {cancellingVisit && cancellingJob && (
+      <CancelWorkDialog
+        job={cancellingJob}
+        visit={cancellingVisit}
+        onClose={() => setCancellingVisitId(null)}
+        onDone={() => setCancellingVisitId(null)}
+      />
     )}
     </>
   );

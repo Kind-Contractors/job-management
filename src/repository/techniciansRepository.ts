@@ -35,11 +35,15 @@ export async function listTechnicians(): Promise<Technician[]> {
  * stays live-linked by construction (see the Calendar plan's §3.1/§3.6).
  */
 export async function listVisitsForRange(startDate: string, endDate: string): Promise<WeekVisit[]> {
+  // The ACTIVE schedule only: a cancelled visit, and any visit of a job that is no longer active (cancelled, completed, lost,
+  // on hold), is not part of anyone's schedule. It stays in the job's visit history and on the Historical Jobs page.
   const { data, error } = await supabase
     .from('visits')
-    .select('id, job_id, technician_id, scheduled_date, status, sort_order, created_at, start_time, end_time, visit_technicians ( technician_id )')
+    .select('id, job_id, technician_id, scheduled_date, status, sort_order, created_at, start_time, end_time, visit_technicians ( technician_id ), jobs!inner ( lifecycle_status )')
     .gte('scheduled_date', startDate)
-    .lte('scheduled_date', endDate);
+    .lte('scheduled_date', endDate)
+    .neq('status', 'cancelled')
+    .eq('jobs.lifecycle_status', 'active');
 
   if (error) {
     throw new Error(`Failed to load visits: ${error.message}`);

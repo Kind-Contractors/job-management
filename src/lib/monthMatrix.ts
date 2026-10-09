@@ -5,7 +5,7 @@
 // schedule can't honestly support (see monthsDueInYear in scheduleFormat.ts).
 
 import type { JobRow, JobVisitSummary } from '../domain/types';
-import { monthsDueInYear } from './scheduleFormat';
+import { isDemandEndedForMonth, monthsDueInYear } from './scheduleFormat';
 
 export type MonthCellStateKind =
   | 'done_approved'
@@ -82,6 +82,8 @@ export function deriveMonthCellStates(job: JobRow, year: number, todayISO: strin
       cells.push({ kind: 'ad_hoc', visitCount: 0, label: 'Ask / ad-hoc — booked on request, never automatically due' });
     } else if (dueMonths === null) {
       cells.push({ kind: 'schedule_not_determinable', visitCount: 0, label: "Schedule set, but this month can't be determined from it" });
+    } else if (dueMonths.has(month) && isDemandEndedForMonth(prefix, job.serviceEndsOn)) {
+      cells.push({ kind: 'not_due', visitCount: 0, label: 'Service ends — no longer due' });
     } else if (dueMonths.has(month)) {
       cells.push({ kind: 'due_no_date', visitCount: 0, label: 'Due this month — no date set yet' });
     } else {
