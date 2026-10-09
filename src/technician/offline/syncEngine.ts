@@ -288,7 +288,10 @@ async function submitIfReadyForOwner(ownerId: string, visitId: string): Promise<
   if (!navigator.onLine) return;
 
   const photos = await listPhotosForVisit(ownerId, visitId);
-  if (photos.length === 0) return;
+  // A first report needs at least one photo (the server requires it too). A resubmission of a returned report does not:
+  // a text-only correction is valid, and technician_resubmit_report accepts zero additional photos.
+  if (draft.mode === 'submit' && photos.length === 0) return;
+  // Whatever photos are queued must have finished uploading first.
   if (photos.some((p) => p.status !== 'uploaded')) return;
 
   submittingKeys.add(submitKey);
