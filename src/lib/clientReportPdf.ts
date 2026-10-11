@@ -41,7 +41,7 @@ const AMBER_TEXT: Rgb = [138, 102, 36];
  * Contact line shown under "Thank you for choosing Kind Contractors" on the
  * last page of every report and in the preview. Supplied by Luke.
  */
-export const FOOTER_CONTACT_LINE = '0203 038 4692  |  luke@kindcontractors.co.uk  |  Mon - Fri: 9am - 5.30pm';
+export const FOOTER_CONTACT_LINE = '0203 038 4692  |  luke@kindcontractors.co.uk';
 
 /** Sits under a "Flagged for your attention" issue — copy for the client, kept in one place so it's easy to change. */
 export const ISSUE_HELPER_TEXT = "We spotted this while on site. Get in touch if you'd like us to arrange a fix.";
