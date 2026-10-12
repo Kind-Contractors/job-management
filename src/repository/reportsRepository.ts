@@ -29,6 +29,7 @@ interface SupabaseReportRow {
   include_notes: boolean;
   include_issues: boolean;
   include_price: boolean;
+  include_videos: boolean;
   sent_to_client_at: string | null;
   sent_to_client_by: string | null;
   sent_to_accounts_at: string | null;
@@ -57,6 +58,8 @@ function mapReport(row: SupabaseReportRow): ReportDetail {
     includeNotes: row.include_notes,
     includeIssues: row.include_issues,
     includePrice: row.include_price,
+    // Reports from before video support have the column's default (true); a stale cached row without it is treated the same way.
+    includeVideos: row.include_videos ?? true,
     sentToClientAt: row.sent_to_client_at,
     sentToClientBy: row.sent_to_client_by,
     sentToAccountsAt: row.sent_to_accounts_at,
@@ -67,7 +70,7 @@ function mapReport(row: SupabaseReportRow): ReportDetail {
 }
 
 const REPORT_SELECT =
-  'id, visit_id, submitted_by, submitted_at, on_site_start, on_site_end, work_carried_out, technician_notes, issues, spec_met, review_status, reviewed_by, reviewed_at, return_reason, include_photos, include_notes, include_issues, include_price, sent_to_client_at, sent_to_client_by, sent_to_accounts_at, sent_to_accounts_by, completed_at, completed_by';
+  'id, visit_id, submitted_by, submitted_at, on_site_start, on_site_end, work_carried_out, technician_notes, issues, spec_met, review_status, reviewed_by, reviewed_at, return_reason, include_photos, include_notes, include_issues, include_price, include_videos, sent_to_client_at, sent_to_client_by, sent_to_accounts_at, sent_to_accounts_by, completed_at, completed_by';
 
 /**
  * A completed report cannot be returned for correction, or have a technician's contribution flagged, until it is

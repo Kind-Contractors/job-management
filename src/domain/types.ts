@@ -240,6 +240,11 @@ export interface JobVisitSummary {
    * must never be offered for selection into another invoice.
    */
   invoiceId: string | null;
+  /**
+   * True when the visit has at least one video that has not been removed. A visit with a video (and no report or invoice) is KEPT, not
+   * cancelled, by cancel_job_work - the same way one with a report is. Cached job rows from before this existed have no such field; read it as `?? false`.
+   */
+  hasActiveVideo?: boolean;
   invoiceStatus: LocalInvoiceStatus | null;
 }
 
@@ -270,6 +275,8 @@ export interface ReportDetail {
   includeNotes: boolean;
   includeIssues: boolean;
   includePrice: boolean;
+  /** `reports.include_videos` - report-level switch for videos in the client report (a video also needs its own include flag). */
+  includeVideos: boolean;
   sentToClientAt: string | null;
   sentToClientBy: string | null;
   sentToAccountsAt: string | null;

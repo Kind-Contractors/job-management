@@ -109,7 +109,8 @@ const JOB_SELECT = `
     technicians ( id, name, is_active ),
     visit_technicians ( technician_id, technicians ( id, name, is_active ) ),
     reports ( id, review_status, sent_to_client_at, sent_to_accounts_at, completed_at, completed_by, report_contributions ( technician_id, submitted_at, waived_at ) ),
-    invoice_line_items ( invoice_id, invoices ( status ) )
+    invoice_line_items ( invoice_id, invoices ( status ) ),
+    report_videos ( id, deleted_at )
   )
 `;
 
@@ -201,13 +202,16 @@ export async function listJobRowsWithOpenReportWork(): Promise<JobRow[]> {
 
 export type CancelWorkScope = 'visit' | 'this_and_future' | 'job';
 
+/** Why cancel_job_work kept a visit instead of cancelling it. Checked in this order: a report, then an invoice line, then a video. */
+export type KeptVisitReason = 'has_report' | 'has_invoice' | 'has_video';
+
 export interface CancelWorkResult {
   scope: CancelWorkScope;
   /** True when there was nothing left to do (already cancelled) - nothing was changed. */
   alreadyDone: boolean;
   cancelledVisitIds: string[];
-  /** Visits that were NOT cancelled because they already have a report or an invoice line. They keep their status. */
-  keptVisits: { id: string; scheduledDate: string | null; reason: 'has_report' | 'has_invoice' }[];
+  /** Visits that were NOT cancelled because they already have a report, an invoice line or a video. They keep their status. */
+  keptVisits: { id: string; scheduledDate: string | null; reason: KeptVisitReason }[];
   serviceEndsOn: string | null;
   lifecycleStatus: JobLifecycleStatus;
 }
@@ -238,7 +242,7 @@ export async function cancelJobWork(input: {
     scope: CancelWorkScope;
     already_done?: boolean;
     cancelled_visit_ids?: string[];
-    kept_visits?: { id: string; scheduled_date: string | null; reason: 'has_report' | 'has_invoice' }[];
+    kept_visits?: { id: string; scheduled_date: string | null; reason: KeptVisitReason }[];
     service_ends_on?: string | null;
     lifecycle_status: JobLifecycleStatus;
   };
@@ -258,7 +262,8 @@ const JOB_LIFECYCLE_SAFEGUARD_VISIT_SELECT = `
   technicians ( id, name, is_active ),
   visit_technicians ( technician_id, technicians ( id, name, is_active ) ),
   reports ( id, review_status, sent_to_client_at, sent_to_accounts_at, completed_at, completed_by, report_contributions ( technician_id, submitted_at, waived_at ) ),
-  invoice_line_items ( invoice_id, invoices ( status ) )
+  invoice_line_items ( invoice_id, invoices ( status ) ),
+  report_videos ( id, deleted_at )
 `;
 
 /**

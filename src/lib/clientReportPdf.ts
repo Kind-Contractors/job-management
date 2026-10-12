@@ -3,11 +3,13 @@ import type { ClientReportModel } from './clientReportModel';
 import kindContractorsLogo from '../assets/kind_Contractors_logo.png';
 import kindLeaf from '../assets/kind_leaf.png';
 import { fitInside, prepareImageForPdf, type PdfImage } from './pdfImage';
+import { NO_VIDEOS, type PreparedReportVideo, type PreparedReportVideos } from './clientVideoLinks';
 import {
   PHOTO_CELL_ASPECT,
   PHOTO_GRID_COLUMNS,
   photoTag,
   planPhotoLayout,
+  orderedPhotoEntries,
   type OrderedPhotoEntry,
   type PhotoPhase,
 } from './clientReportPhotoLayout';
@@ -242,7 +244,7 @@ function drawWarningIcon(ctx: Ctx, x: number, y: number): void {
 }
 
 /** The page-1 header (with its facts strip). Returns the y just below the strip. */
-function drawHeader(ctx: Ctx, photoCount: number): number {
+function drawHeader(ctx: Ctx, photoCount: number, videoCount: number): number {
   const { doc, model, marginX, pageWidth, contentWidth } = ctx;
 
   setFont(ctx, 'bold', 28, WHITE);
@@ -286,6 +288,7 @@ function drawHeader(ctx: Ctx, photoCount: number): number {
     ['Service', model.jobSummary],
   ];
   if (photoCount > 0) facts.push(['Photos', `${photoCount} ${photoCount === 1 ? 'photo' : 'photos'}`]);
+  if (videoCount > 0) facts.push(['Videos', `${videoCount} ${videoCount === 1 ? 'video' : 'videos'}`]);
 
   const bandHeight = 58;
   doc.setFillColor(...TEAL_BAND);
@@ -371,6 +374,65 @@ function drawPhoto(ctx: Ctx, entry: OrderedPhotoEntry<PreparedReportPhoto>, x: n
   drawPhotoTag(ctx, entry, x + (size === 'large' ? 12 : 7), y + (size === 'large' ? 12 : 7), size);
 }
 
+/** Width / height of a video thumbnail frame (16:9). */
+export const VIDEO_CELL_ASPECT = 16 / 9;
+/** Height of the "Watch video" strip under a video's thumbnail. */
+const VIDEO_LABEL_HEIGHT = 26;
+/** How many video cards sit side by side. Two - larger than photos, so the thumbnail and its play button are easy to see and tap. */
+export const VIDEO_GRID_COLUMNS = 2;
+
+/** A round play button: a dark disc with a white triangle, centred on (cx, cy). Drawn with shapes (the PDF's built-in font has no play symbol). */
+function drawPlayIndicator(ctx: Ctx, cx: number, cy: number, radius: number): void {
+  const { doc } = ctx;
+  doc.saveGraphicsState();
+  doc.setGState(new GState({ opacity: 0.82 }));
+  doc.setFillColor(...TEXT_DARK);
+  doc.circle(cx, cy, radius, 'F');
+  doc.restoreGraphicsState();
+  doc.setDrawColor(...WHITE);
+  doc.setLineWidth(1.6);
+  doc.circle(cx, cy, radius, 'S');
+  doc.setLineWidth(1);
+  doc.setFillColor(...WHITE);
+  const h = radius * 0.62; // half the triangle's height
+  const left = cx - h * 0.62;
+  doc.triangle(left, cy - h, left, cy + h, left + h * 1.5, cy, 'F');
+}
+
+/**
+ * One video: its thumbnail (or a plain dark placeholder when there is none) with a play button and its Before/During/After tag, and a
+ * "Watch video" strip beneath with the length. The thumbnail AND the strip are both clickable link annotations to the secure watch link,
+ * so the link works wherever the PDF goes (downloaded, emailed, printed to another PDF). The video itself is never embedded.
+ */
+function drawVideoCard(ctx: Ctx, entry: OrderedPhotoEntry<PreparedReportVideo>, x: number, y: number, w: number, h: number): void {
+  const { doc } = ctx;
+  const video = entry.photo;
+  withRoundedClip(ctx, x, y, w, h, 10, () => {
+    doc.setFillColor(...(video.thumbnail ? PHOTO_MAT : TEXT_DARK));
+    doc.rect(x, y, w, h, 'F');
+    if (video.thumbnail) {
+      const fitted = fitInside(video.thumbnail.width, video.thumbnail.height, w, h);
+      doc.addImage(video.thumbnail.dataUrl, 'JPEG', x + (w - fitted.width) / 2, y + (h - fitted.height) / 2, fitted.width, fitted.height, `video-thumb-${video.id}`, 'FAST');
+    }
+  });
+  drawPlayIndicator(ctx, x + w / 2, y + h / 2, Math.min(26, h * 0.16));
+  drawPhotoTag(ctx, entry, x + 12, y + 12, 'large');
+
+  // The "Watch video" strip.
+  const stripY = y + h + 4;
+  doc.setFillColor(...CARD);
+  doc.roundedRect(x, stripY, w, VIDEO_LABEL_HEIGHT - 4, 6, 6, 'F');
+  setFont(ctx, 'bold', 10.5, DARK_TEAL);
+  doc.text('Watch video', x + 12, stripY + 14.5);
+  if (video.durationLabel) {
+    setFont(ctx, 'normal', 9.5, TEXT_MED);
+    doc.text(video.durationLabel, x + w - 12, stripY + 14.5, { align: 'right' });
+  }
+  // Clickable: the thumbnail and the strip.
+  doc.link(x, y, w, h, { url: video.url });
+  doc.link(x, stripY, w, VIDEO_LABEL_HEIGHT - 4, { url: video.url });
+}
+
 /**
  * Builds a client-facing PDF from the same ClientReportModel the on-screen
  * preview renders — never re-reads ReportDetail/ReportPhoto/JobRow itself,
@@ -390,6 +452,10 @@ function drawPhoto(ctx: Ctx, entry: OrderedPhotoEntry<PreparedReportPhoto>, x: n
  * cropped or stretched, and each is embedded once (jsPDF alias). Nothing
  * photo-identifying beyond its phase tag ever reaches the PDF.
  *
+ * `videos` — the result of prepareClientReportVideos (clientVideoLinks.ts): for each included video its secure watch link, length and
+ * thumbnail. Videos are drawn as a "Videos" section after the photos - thumbnail, play button, "Watch video" - with clickable links; they
+ * are never embedded. Omitted/empty means a report with no videos, which renders exactly as before.
+ *
  * `prepared` — the result of prepareClientReportPhotos(model). Callers that
  * want to warn about skipped photos before proceeding should prepare first
  * and pass it in; if omitted it is prepared here and any skipped photos are
@@ -398,7 +464,11 @@ function drawPhoto(ctx: Ctx, entry: OrderedPhotoEntry<PreparedReportPhoto>, x: n
  * The logo and leaf follow the old rule: if either can't be fetched or
  * decoded, the header simply renders without it rather than failing the PDF.
  */
-export async function generateClientReportPdf(model: ClientReportModel, prepared?: PreparedReportPhotos): Promise<Blob> {
+export async function generateClientReportPdf(
+  model: ClientReportModel,
+  prepared?: PreparedReportPhotos,
+  videos: PreparedReportVideos = NO_VIDEOS,
+): Promise<Blob> {
   const preparedPhotos = (prepared ?? (await prepareClientReportPhotos(model))).photos;
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
   const marginX = 48;
@@ -420,7 +490,7 @@ export async function generateClientReportPdf(model: ClientReportModel, prepared
   };
   const { contentWidth, pageBottom } = ctx;
 
-  let y = drawHeader(ctx, preparedPhotos.length) + 24;
+  let y = drawHeader(ctx, preparedPhotos.length, videos.videos.length) + 24;
   y = drawStatus(ctx, y) + 30;
 
   /** Starts a new report page (with the running header) if `needed` more points won't fit on this one. */
@@ -557,6 +627,24 @@ export async function generateClientReportPdf(model: ClientReportModel, prepared
       ensureSpace(cellHeight);
       for (let col = 0; col < PHOTO_GRID_COLUMNS && rowStart + col < plan.rest.length; col += 1) {
         drawPhoto(ctx, plan.rest[rowStart + col], marginX + col * (cellWidth + gap), y, cellWidth, cellHeight, 'small');
+      }
+      y += rowHeight;
+    }
+  }
+
+  // --- Videos ---
+  if (videos.videos.length > 0) {
+    const gap = 16;
+    const cellWidth = (contentWidth - gap * (VIDEO_GRID_COLUMNS - 1)) / VIDEO_GRID_COLUMNS;
+    const cellHeight = cellWidth / VIDEO_CELL_ASPECT;
+    const rowHeight = cellHeight + VIDEO_LABEL_HEIGHT + gap;
+    const entries = orderedPhotoEntries(videos.videos);
+    ensureSpace(HEADING_HEIGHT + 2 + cellHeight + VIDEO_LABEL_HEIGHT);
+    drawPhotoSectionHeading('Videos', 'Select a video to watch it online');
+    for (let rowStart = 0; rowStart < entries.length; rowStart += VIDEO_GRID_COLUMNS) {
+      ensureSpace(cellHeight + VIDEO_LABEL_HEIGHT);
+      for (let col = 0; col < VIDEO_GRID_COLUMNS && rowStart + col < entries.length; col += 1) {
+        drawVideoCard(ctx, entries[rowStart + col], marginX + col * (cellWidth + gap), y, cellWidth, cellHeight);
       }
       y += rowHeight;
     }

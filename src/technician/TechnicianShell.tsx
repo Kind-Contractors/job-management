@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../auth/AuthProvider';
 import ChangePasswordDialog from '../auth/ChangePasswordDialog';
 import { startSyncEngine, subscribeReportSynced, useSyncStatus } from './offline/syncEngine';
+import { startVideoSyncEngine, useVideoSyncStatus } from './offline/videoSyncEngine';
 import { getCurrentTechnician } from './api';
 import { technicianKeys, useTechnicianUserId, visitListQueryKeys } from './queryKeys';
 import kindContractorsLogo from '../assets/kind_Contractors_logo.png';
@@ -31,6 +32,7 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
 export default function TechnicianShell() {
   const { signOut } = useAuth();
   const sync = useSyncStatus();
+  const videoSync = useVideoSyncStatus();
   const queryClient = useQueryClient();
   const [changingPassword, setChangingPassword] = useState(false);
   const userId = useTechnicianUserId();
@@ -52,6 +54,8 @@ export default function TechnicianShell() {
   // visibilitychange handling; never touches auth/session state.
   useEffect(() => {
     startSyncEngine();
+    // The video queue's own engine (separate from the photo/report one): uploads queued videos while the app is open and online.
+    startVideoSyncEngine();
   }, []);
 
   // Newly booked/assigned jobs, and reports returned for correction, are
@@ -102,7 +106,7 @@ export default function TechnicianShell() {
     });
   }, [queryClient, userId]);
 
-  const hasPending = sync.pendingPhotoCount > 0 || sync.failedDraftCount > 0;
+  const hasPending = sync.pendingPhotoCount > 0 || sync.failedDraftCount > 0 || videoSync.pending > 0;
 
   return (
     <div className="flex h-screen min-h-[640px] flex-col overflow-hidden bg-neutral-200">
@@ -123,8 +127,14 @@ export default function TechnicianShell() {
           hasPending && (
             <span className="border border-due bg-due/10 px-1.5 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.08em] text-due-fg uppercase">
               Syncing {sync.pendingPhotoCount}
+              {videoSync.pending > 0 && ` + ${videoSync.pending} video${videoSync.pending === 1 ? '' : 's'}`}
             </span>
           )
+        )}
+        {sync.online && sync.failedDraftCount === 0 && videoSync.failed > 0 && (
+          <span className="border border-missed bg-missed/10 px-1.5 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.08em] text-missed-fg uppercase">
+            Video needs attention
+          </span>
         )}
         <span className="ml-auto font-heading text-[11px] font-semibold tracking-[0.1em] text-neutral-600 uppercase">
           {dateFormatter.format(new Date())}

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { JobRow, JobVisitSummary } from '../../domain/types';
 import { cancelJobWork, type CancelWorkResult, type CancelWorkScope } from '../../repository/jobsRepository';
-import { isOpenVisit, planCancelWork } from '../../lib/cancelWork';
+import { isOpenVisit, keptReasonLabel, keptStayText, keptSubject, planCancelWork } from '../../lib/cancelWork';
 
 function dateLabel(date: string | null): string {
   return date ? new Date(date).toLocaleDateString('en-GB') : 'No date set';
@@ -40,6 +40,34 @@ interface CancelWorkDialogProps {
   onClose: () => void;
   /** Called after the server has confirmed (and the person has seen any "kept" notice). result.lifecycleStatus === 'cancelled' means the job itself moved to Historical Jobs, so a caller showing that job should close. */
   onDone: (result: CancelWorkResult) => void;
+}
+
+/** What was cancelled and what was kept (and why), shown after the server has confirmed. Exported so it can be rendered on its own. */
+export function CancelResultView({ result, onDone }: { result: CancelWorkResult; onDone: (result: CancelWorkResult) => void }) {
+  return (
+    <div className="mt-3 flex flex-col gap-2.5">
+      <div role="status" className="text-[12.5px] text-ink">
+        {plural(result.cancelledVisitIds.length, 'visit was', 'visits were')} cancelled.
+      </div>
+      <div role="alert" className="border border-due bg-due/10 p-3 text-[12.5px] text-due-fg">
+        {plural(result.keptVisits.length, 'visit was', 'visits were')} not cancelled because{' '}
+        {result.keptVisits.length === 1 ? 'it already has' : 'they already have'} {keptSubject(result.keptVisits)}.{' '}
+        {result.keptVisits.some((k) => k.reason === 'has_video')
+          ? keptStayText(result.keptVisits, result.keptVisits.length !== 1)
+          : 'They stay in Report review, Ready for client and Ready for accounts until finished.'}
+        <ul className="mt-1.5 list-inside list-disc">
+          {result.keptVisits.map((k) => (
+            <li key={k.id}>
+              {dateLabel(k.scheduledDate)} — {keptReasonLabel(k.reason)}
+            </li>
+          ))}
+        </ul>
+      </div>
+      <button onClick={() => onDone(result)} className="mt-1 w-fit cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white">
+        Done
+      </button>
+    </div>
+  );
 }
 
 /**
@@ -86,24 +114,7 @@ export default function CancelWorkDialog({ job, visit, onClose, onDone }: Cancel
         </div>
 
         {result ? (
-          <div className="mt-3 flex flex-col gap-2.5">
-            <div role="status" className="text-[12.5px] text-ink">
-              {plural(result.cancelledVisitIds.length, 'visit was', 'visits were')} cancelled.
-            </div>
-            <div role="alert" className="border border-due bg-due/10 p-3 text-[12.5px] text-due-fg">
-              {plural(result.keptVisits.length, 'visit was', 'visits were')} not cancelled because{' '}
-              {result.keptVisits.length === 1 ? 'it already has' : 'they already have'} a report or an invoice. They stay in Report review,
-              Ready for client and Ready for accounts until finished.
-              <ul className="mt-1.5 list-inside list-disc">
-                {result.keptVisits.map((k) => (
-                  <li key={k.id}>{dateLabel(k.scheduledDate)}</li>
-                ))}
-              </ul>
-            </div>
-            <button onClick={() => onDone(result)} className="mt-1 w-fit cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white">
-              Done
-            </button>
-          </div>
+          <CancelResultView result={result} onDone={onDone} />
         ) : (
           <div className="mt-3 flex flex-col gap-2.5">
             <div role="radiogroup" aria-label="What to cancel" className="flex flex-col gap-1.5">
@@ -148,13 +159,12 @@ export default function CancelWorkDialog({ job, visit, onClose, onDone }: Cancel
 
             {plan.kept.length > 0 && (
               <div role="alert" className="border border-due bg-due/10 p-3 text-[12.5px] text-due-fg">
-                {plural(plan.kept.length, 'visit', 'visits')} already {plan.kept.length === 1 ? 'has' : 'have'} a report or an invoice, so{' '}
-                {plan.kept.length === 1 ? 'it won’t' : 'they won’t'} be cancelled. {plan.kept.length === 1 ? 'It stays' : 'They stay'} in the report
-                queues until finished.
+                {plural(plan.kept.length, 'visit', 'visits')} already {plan.kept.length === 1 ? 'has' : 'have'} {keptSubject(plan.kept)}, so{' '}
+                {plan.kept.length === 1 ? 'it won’t' : 'they won’t'} be cancelled. {keptStayText(plan.kept, plan.kept.length !== 1)}
                 <ul className="mt-1.5 list-inside list-disc">
                   {plan.kept.map((k) => (
                     <li key={k.visit.id}>
-                      {dateLabel(k.visit.scheduledDate)} — {k.reason === 'has_invoice' ? 'has an invoice' : 'has a report'}
+                      {dateLabel(k.visit.scheduledDate)} — {keptReasonLabel(k.reason)}
                     </li>
                   ))}
                 </ul>

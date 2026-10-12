@@ -1,5 +1,7 @@
 import type { JobRow, JobVisitSummary, ReportDetail } from '../domain/types';
 import type { ReportPhoto } from '../repository/reportsRepository';
+import type { ReportVideo } from '../repository/reportVideosRepository';
+import { VIDEO_PHASES, formatDuration, type VideoPhase } from './reportVideoRules';
 
 /**
  * The one shape both the on-screen preview (ReadyForClientPage.tsx) and
@@ -24,6 +26,12 @@ export interface ClientReportModel {
   issues: string | null;
   specMet: boolean;
   photos: { id: string; phase: ReportPhoto['phase']; url: string }[];
+  /**
+   * Videos the client may watch: the report's "Include videos" switch is on AND the video's own "Include for client" is on (removed videos
+   * are never loaded). No storage path and no watch link live here - the link is made only when a PDF is actually delivered
+   * (clientVideoLinks.ts), so merely looking at the preview never creates one. `thumbnailUrl` is a short-lived preview image for the screen.
+   */
+  videos: { id: string; phase: VideoPhase; durationLabel: string; thumbnailUrl: string | null }[];
 }
 
 /** Reused unchanged by both the preview and PDF generation — see ClientReportModel's own doc comment for why this is the one place client-safe fields are picked. */
@@ -33,6 +41,8 @@ export function buildClientReportModel(
   report: ReportDetail,
   photos: ReportPhoto[],
   photoUrls: Record<string, string>,
+  videos: ReportVideo[] = [],
+  videoThumbnailUrls: Record<string, string> = {},
 ): ClientReportModel {
   return {
     clientName: job.clientName,
@@ -46,5 +56,18 @@ export function buildClientReportModel(
     photos: report.includePhotos
       ? photos.filter((p) => p.includeInClientReport && photoUrls[p.id]).map((p) => ({ id: p.id, phase: p.phase, url: photoUrls[p.id] }))
       : [],
+    videos: report.includeVideos
+      ? orderVideosForReport(videos.filter((v) => v.includeInClientReport)).map((v) => ({
+          id: v.id,
+          phase: v.phase,
+          durationLabel: formatDuration(v.durationSeconds),
+          thumbnailUrl: videoThumbnailUrls[v.id] || null,
+        }))
+      : [],
   };
+}
+
+/** Before, then During, then After; within a phase, the order they were added. */
+export function orderVideosForReport<T extends { phase: VideoPhase; createdAt: string }>(videos: T[]): T[] {
+  return VIDEO_PHASES.flatMap((phase) => videos.filter((v) => v.phase === phase).sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
 }

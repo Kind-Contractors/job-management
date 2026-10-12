@@ -6,6 +6,7 @@ import { getDraft, getVisitPhotos, subscribeSyncEngine, trySubmitIfReady } from 
 import type { DraftReport, PendingPhoto } from './offline/db';
 import { technicianKeys, useTechnicianUserId } from './queryKeys';
 import { isReportSyncedToServer } from './reportSyncStatus';
+import TechnicianVideos from './TechnicianVideos';
 
 interface CompletedNavState {
   photoCount?: number;
@@ -187,6 +188,13 @@ export default function CompletedPage() {
           </div>
         )}
       </div>
+
+      {/* Videos can still be added (or watched, or removed before approval) after the report has been sent; the database decides what is allowed. */}
+      {visitId && (
+        <div className="bg-white">
+          <TechnicianVideos visitId={visitId} userId={userId} />
+        </div>
+      )}
 
       <div className="p-4">
         {nextStop ? (

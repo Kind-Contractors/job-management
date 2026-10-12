@@ -12,11 +12,13 @@ import {
   HiOutlinePaperAirplane,
   HiOutlineTableCells,
   HiOutlineUsers,
+  HiOutlineVideoCamera,
 } from 'react-icons/hi2';
 import { listHistoricalJobRows, listJobRows } from '../../repository/jobsRepository';
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import { listTechnicians } from '../../repository/techniciansRepository';
 import { listUsers } from '../../repository/usersRepository';
+import { listVisitsWithVideosNoReport } from '../../repository/reportVideosRepository';
 import { queueCounts, useQueueJobRows } from '../../lib/queueJobs';
 
 const DIVISIONS = ['General', 'Specialist', 'Both'] as const;
@@ -95,6 +97,8 @@ export default function NavRail() {
   const { data: buildingRows = [] } = useQuery({ queryKey: ['buildingRows'], queryFn: listBuildingRows });
   const { data: technicians = [] } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: listUsers });
+  // Visits that have a video but no report - a technician's video can arrive before the report, and a cancelled job keeps such a visit.
+  const { data: videoVisits = [] } = useQuery({ queryKey: ['videosWithoutReport'], queryFn: listVisitsWithVideosNoReport });
 
   const status = searchParams.get('status');
   const division = searchParams.get('division') ?? 'Both';
@@ -105,6 +109,7 @@ export default function NavRail() {
   const onReportReview = pathname === '/report-review';
   const onReadyForAccounts = pathname === '/ready-for-accounts';
   const onReadyForClient = pathname === '/ready-for-client';
+  const onVideosWithoutReport = pathname === '/videos-without-report';
   const onUsers = pathname === '/users';
   const onHistoricalJobs = pathname === '/historical-jobs';
 
@@ -201,6 +206,15 @@ export default function NavRail() {
         icon={HiOutlinePaperAirplane}
         label="Ready for client"
         count={readyForClientCount}
+        collapsed={collapsed}
+      />
+      <NavItem
+        active={onVideosWithoutReport}
+        onClick={() => navigate('/videos-without-report')}
+        dotClass="bg-teal"
+        icon={HiOutlineVideoCamera}
+        label="Videos without a report"
+        count={videoVisits.length}
         collapsed={collapsed}
       />
       <div className="mx-4 my-4 h-px bg-divider" />

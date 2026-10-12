@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, defaultShouldDehydrateQuery } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { useAuth } from './AuthProvider';
 import { QUERY_CACHE_MAX_AGE_MS, createUserQueryPersister, queryCacheBuster } from '../lib/userQueryCache';
@@ -29,7 +29,13 @@ function PersistedForUser({ userId, children }: ScopedProps) {
   return (
     <PersistQueryClientProvider
       client={client}
-      persistOptions={{ persister, maxAge: QUERY_CACHE_MAX_AGE_MS, buster: queryCacheBuster(userId) }}
+      persistOptions={{
+        persister,
+        maxAge: QUERY_CACHE_MAX_AGE_MS,
+        buster: queryCacheBuster(userId),
+        // A query marked `meta: { persist: false }` (short-lived signed video links) is kept in memory only, never written to localStorage.
+        dehydrateOptions: { shouldDehydrateQuery: (query) => defaultShouldDehydrateQuery(query) && query.meta?.persist !== false },
+      }}
     >
       {children}
     </PersistQueryClientProvider>

@@ -18,6 +18,7 @@ import type { PendingPhoto } from './offline/db';
 import { technicianKeys, useTechnicianUserId } from './queryKeys';
 import ExistingReportPhotos from './ExistingReportPhotos';
 import PhotoDeleteButton from './PhotoDeleteButton';
+import TechnicianVideos from './TechnicianVideos';
 
 /** See JobFilePage.tsx's identical constant — same query key, same value, so the two screens never disagree about how long this visit stays fresh-enough-to-skip-a-refetch. */
 const VISIT_DETAIL_STALE_TIME_MS = 5 * 60 * 1000;
@@ -508,6 +509,9 @@ export default function JobReportPage() {
           </div>
 
           {photoSection}
+
+          {/* Optional, and independent of everything below: a video that is waiting, uploading or failed never blocks "Complete job". */}
+          {visitId && <TechnicianVideos visitId={visitId} userId={userId} />}
 
           <div className="border-b border-divider px-4 py-3">
             <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">

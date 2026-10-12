@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import type { JobRow, JobVisitSummary } from "../domain/types";
 import { isActiveJob, useQueueJobRows } from "../lib/queueJobs";
 import ClosedJobsNotice from "../components/reports/ClosedJobsNotice";
+import ReportVideos from "../components/reports/ReportVideos";
 import {
   completeReport,
   getLatestClientSend,
@@ -42,9 +43,20 @@ import {
   prepareClientReportPhotos,
   type PreparedReportPhotos,
 } from "../lib/clientReportPdf";
+import { prepareImageForPdf } from "../lib/pdfImage";
+import {
+  prepareClientReportVideos,
+  type PreparedReportVideos,
+} from "../lib/clientVideoLinks";
+import {
+  issueClientVideoLinks,
+  listVideosForVisit,
+  signVideoThumbnailUrls,
+} from "../repository/reportVideosRepository";
 import {
   PHOTO_CELL_ASPECT,
   PHOTO_GRID_COLUMNS,
+  orderedPhotoEntries,
   photoTag,
   planPhotoLayout,
   type OrderedPhotoEntry,
@@ -326,6 +338,11 @@ function ClientReportPreview({ model }: { model: ClientReportModel }) {
       "Photos",
       `${model.photos.length} ${model.photos.length === 1 ? "photo" : "photos"}`,
     ]);
+  if (model.videos.length > 0)
+    facts.push([
+      "Videos",
+      `${model.videos.length} ${model.videos.length === 1 ? "video" : "videos"}`,
+    ]);
 
   const plan = planPhotoLayout(model.photos);
 
@@ -513,6 +530,61 @@ function ClientReportPreview({ model }: { model: ClientReportModel }) {
             </div>
           )}
 
+          {model.videos.length > 0 && (
+            <div className="mt-6" data-testid="client-preview-videos">
+              <div className="flex items-end justify-between gap-2">
+                {sectionHeading("Videos")}
+                <div className="text-[10px] text-neutral-500">
+                  Select a video to watch it online
+                </div>
+              </div>
+              {/* The PDF shows the same: thumbnail, a play button and "Watch video" (a real link there; the link is only made when the PDF is sent or downloaded). */}
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                {orderedPhotoEntries(model.videos).map((entry) => (
+                  <div key={entry.photo.id}>
+                    <div
+                      className="relative flex items-center justify-center overflow-hidden rounded-xl bg-ink"
+                      style={{ aspectRatio: 16 / 9 }}
+                    >
+                      {entry.photo.thumbnailUrl && (
+                        <img
+                          src={entry.photo.thumbnailUrl}
+                          alt={photoTag(entry)}
+                          className="absolute inset-0 h-full w-full object-contain"
+                        />
+                      )}
+                      <span
+                        aria-hidden
+                        className="relative flex h-9 w-9 items-center justify-center rounded-full border-2 border-white bg-ink/80"
+                      >
+                        <svg
+                          viewBox="0 0 16 16"
+                          className="ml-0.5 h-4 w-4"
+                          fill="white"
+                        >
+                          <path d="M4 2.5v11l9-5.5z" />
+                        </svg>
+                      </span>
+                      <span
+                        className={`absolute top-1.5 left-1.5 rounded-full px-2 py-0.5 font-heading text-[9px] font-semibold text-teal ${entry.phase === "after" ? "bg-green" : entry.phase === "during" ? "bg-green-light" : "bg-white"}`}
+                      >
+                        {photoTag(entry)}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex justify-between rounded-md bg-neutral-100 px-2 py-1 text-[11px]">
+                      <span className="font-heading font-semibold text-teal">
+                        Watch video
+                      </span>
+                      <span className="text-neutral-600 tabular-nums">
+                        {entry.photo.durationLabel}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="mt-6 border-t border-divider pt-3 font-heading text-[12px] font-semibold text-teal">
             Thank you for choosing Kind Contractors
             <div className="mt-1 font-body text-[10px] font-normal text-neutral-600">
@@ -561,6 +633,7 @@ export default function ReadyForClientPage({
   const [skippedWarning, setSkippedWarning] = useState<{
     action: "download" | "send";
     prepared: PreparedReportPhotos;
+    videos: PreparedReportVideos;
   } | null>(null);
   // Which list is showing: reports still awaiting completion (the queue), or reports a manager has completed.
   const [view, setView] = useState<QueueView>(initialView);
@@ -632,6 +705,22 @@ export default function ReadyForClientPage({
     queryKey: ["reportPhotoUrls", reportId, photos.map((p) => p.id).join(",")],
     queryFn: () => signReportPhotoUrls(photos),
     enabled: photos.length > 0,
+  });
+  // Same query keys as ReportVideos.tsx, so both share one cache entry and a change made there is reflected in the preview/PDF.
+  const visitIdForVideos = report?.visitId ?? null;
+  const { data: videos = [] } = useQuery({
+    queryKey: ["reportVideos", visitIdForVideos],
+    queryFn: () => listVideosForVisit(visitIdForVideos!),
+    enabled: !!visitIdForVideos,
+  });
+  const { data: videoPosters = {} } = useQuery({
+    queryKey: [
+      "reportVideoPosters",
+      visitIdForVideos,
+      videos.map((v) => v.id).join(","),
+    ],
+    queryFn: () => signVideoThumbnailUrls(videos),
+    enabled: videos.length > 0,
   });
   const {
     data: lastSend,
@@ -762,6 +851,8 @@ export default function ReadyForClientPage({
           report,
           photos,
           photoUrls,
+          videos,
+          videoPosters,
         )
       : null;
 
@@ -783,6 +874,20 @@ export default function ReadyForClientPage({
   };
 
   /**
+   * Gets the secure watch link and thumbnail for every video the client report includes. Does nothing (no server call) when the
+   * report has no included videos. Throws a readable error when a link cannot be made - callers must then NOT download or send.
+   */
+  const prepareVideos = (m: ClientReportModel) =>
+    prepareClientReportVideos(m, {
+      requestLinks: () => issueClientVideoLinks(reportId!),
+      signThumbnails: () =>
+        signVideoThumbnailUrls(
+          videos.filter((v) => m.videos.some((mv) => mv.id === v.id)),
+        ),
+      prepareImage: prepareImageForPdf,
+    });
+
+  /**
    * Downloads a PDF built from the exact same `model` the on-screen
    * preview renders — never a separate re-fetch/re-selection, so the PDF
    * can never show something the preview doesn't. Purely a local browser
@@ -792,8 +897,9 @@ export default function ReadyForClientPage({
   const downloadPdf = async (
     m: ClientReportModel,
     prepared: PreparedReportPhotos,
+    preparedVideos: PreparedReportVideos,
   ) => {
-    const blob = await generateClientReportPdf(m, prepared);
+    const blob = await generateClientReportPdf(m, prepared, preparedVideos);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -826,12 +932,18 @@ export default function ReadyForClientPage({
   const handleDownloadPdf = async () => {
     if (!model) return;
     await runDownload(async () => {
+      // Video links first: if they cannot be made this throws and nothing is downloaded (the error shows under the buttons).
+      const preparedVideos = await prepareVideos(model);
       const prepared = await prepareClientReportPhotos(model);
       if (prepared.skippedCount > 0) {
-        setSkippedWarning({ action: "download", prepared });
+        setSkippedWarning({
+          action: "download",
+          prepared,
+          videos: preparedVideos,
+        });
         return;
       }
-      await downloadPdf(model, prepared);
+      await downloadPdf(model, prepared, preparedVideos);
     });
   };
 
@@ -847,6 +959,7 @@ export default function ReadyForClientPage({
   const sendPrepared = async (
     m: ClientReportModel,
     prepared: PreparedReportPhotos,
+    preparedVideos: PreparedReportVideos,
     id: string,
     contactId: string,
   ) => {
@@ -857,7 +970,7 @@ export default function ReadyForClientPage({
       );
       return;
     }
-    const blob = await generateClientReportPdf(m, prepared);
+    const blob = await generateClientReportPdf(m, prepared, preparedVideos);
     const built = buildSendClientReportInput(
       id,
       contactId,
@@ -902,24 +1015,28 @@ export default function ReadyForClientPage({
     if (!model || !selected || !reportId || !selectedContact?.email) return;
     const contactId = selectedContact.id;
     await runSend(async () => {
+      // Links first: if they cannot be made nothing is sent (and the report is not touched).
+      const preparedVideos = await prepareVideos(model);
       const prepared = await prepareClientReportPhotos(model);
       if (prepared.skippedCount > 0) {
-        setSkippedWarning({ action: "send", prepared });
+        setSkippedWarning({ action: "send", prepared, videos: preparedVideos });
         return;
       }
-      await sendPrepared(model, prepared, reportId, contactId);
+      await sendPrepared(model, prepared, preparedVideos, reportId, contactId);
     });
   };
 
   const handleContinueDespiteSkipped = async () => {
     if (!skippedWarning || !model) return;
-    const { action, prepared } = skippedWarning;
+    const { action, prepared, videos: preparedVideos } = skippedWarning;
     setSkippedWarning(null);
     if (action === "download") {
-      await runDownload(() => downloadPdf(model, prepared));
+      await runDownload(() => downloadPdf(model, prepared, preparedVideos));
     } else if (selected && reportId && selectedContact?.email) {
       const contactId = selectedContact.id;
-      await runSend(() => sendPrepared(model, prepared, reportId, contactId));
+      await runSend(() =>
+        sendPrepared(model, prepared, preparedVideos, reportId, contactId),
+      );
     }
   };
 
@@ -1266,6 +1383,25 @@ export default function ReadyForClientPage({
                       </div>
                     </div>
                   )}
+
+                  {/* Videos: play, choose which the client may see, the report-level switch, remove. Uploading stays in Report review. */}
+                  <div className="mt-3 border-t border-divider pt-3">
+                    <div className="font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
+                      Videos — select which to include
+                    </div>
+                    <div className="mt-1.5">
+                      <ReportVideos
+                        mode="client"
+                        reportId={report.id}
+                        visitId={report.visitId}
+                        reviewStatus={report.reviewStatus}
+                        reviewedAt={report.reviewedAt}
+                        completed={(report.completedAt ?? null) != null}
+                        includeVideos={report.includeVideos !== false}
+                        actor={actor}
+                      />
+                    </div>
+                  </div>
                 </section>
 
                 <section className="mt-3 border border-neutral-300 bg-white p-3">

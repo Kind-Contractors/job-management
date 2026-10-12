@@ -176,6 +176,8 @@ export interface SupabaseVisit {
   visit_technicians: SupabaseVisitTechnician[] | null;
   reports: SupabaseReport | SupabaseReport[] | null;
   invoice_line_items: SupabaseInvoiceLineItem | SupabaseInvoiceLineItem[] | null;
+  /** Only id and deleted_at are read - enough to know whether the visit has a video that has not been removed. */
+  report_videos?: { id: string; deleted_at: string | null }[] | null;
 }
 
 export interface SupabaseJobRecord {
@@ -360,6 +362,7 @@ export function mapVisitRow(v: SupabaseVisit): JobVisitSummary {
     reportCompletedBy: report?.completed_by ?? null,
     invoiceId: invoiceLineItem?.invoice_id ?? null,
     invoiceStatus: invoice?.status ?? null,
+    hasActiveVideo: (v.report_videos ?? []).some((rv) => rv.deleted_at == null),
   };
 }
 

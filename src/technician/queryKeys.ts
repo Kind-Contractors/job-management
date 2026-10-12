@@ -16,6 +16,8 @@ export const technicianKeys = {
   needsCorrection: (userId: string) => ['technician', userId, 'needsCorrection'] as const,
   visitDetail: (userId: string, visitId: string | undefined) => ['technician', userId, 'visitDetail', visitId] as const,
   myPhotos: (userId: string, visitId: string | undefined) => ['technician', userId, 'myPhotos', visitId] as const,
+  /** The technician's own videos already recorded for a visit (technician_my_videos). */
+  myVideos: (userId: string, visitId: string | undefined) => ['technician', userId, 'myVideos', visitId] as const,
 };
 
 /** The three list queries a newly booked/assigned visit or a newly synced/returned report could affect. */

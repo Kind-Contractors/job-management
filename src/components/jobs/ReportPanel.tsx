@@ -14,6 +14,7 @@ import {
 import { getReportReviewStatusPresentation } from '../../lib/statusPresentation';
 import { getApprovalBlockers } from '../../lib/approvalBlockers';
 import ReportContributionsSection from './ReportContributionsSection';
+import ReportVideos from '../reports/ReportVideos';
 import { ReopenFirstNotice } from '../reports/ReportCompletionControls';
 import AutoGrowTextarea from '../shared/AutoGrowTextarea';
 import StatusPill from './StatusPill';
@@ -198,6 +199,19 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
           <div>
             <div className="mb-1 font-heading text-[10.5px] font-semibold tracking-[0.09em] text-neutral-700 uppercase">Photos</div>
             <ReportPhotos reportId={reportId} />
+          </div>
+
+          <div>
+            <div className="mb-1 font-heading text-[10.5px] font-semibold tracking-[0.09em] text-neutral-700 uppercase">Videos</div>
+            <ReportVideos
+              reportId={reportId}
+              visitId={report.visitId}
+              reviewStatus={report.reviewStatus}
+              reviewedAt={report.reviewedAt}
+              completed={(report.completedAt ?? null) != null}
+              includeVideos={report.includeVideos !== false}
+              actor={actor}
+            />
           </div>
 
           <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
