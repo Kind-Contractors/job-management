@@ -112,6 +112,32 @@ export async function addReportPhoto(input: AddReportPhotoInput): Promise<Report
   return mapPhoto(data as unknown as PhotoRow);
 }
 
+/**
+ * Moves one photo to another section (Before / During / After) - for when a technician filed everything under one heading. ONLY the
+ * phase column is written: the file is not touched or re-uploaded (its path keeps the old section's folder name, which is just how it
+ * was named - nothing reads the section from the path), and "Include for client", the upload status and the technician stay as they are.
+ *
+ * The update is conditional on the photo still being in the section the manager moved it from, so two people moving the same photo
+ * cannot silently overwrite each other - the second one is told instead. Only a manager can do this at all: `photos` has one policy
+ * (manager_full_access), and technicians reach photos solely through the SECURITY DEFINER submit RPCs.
+ */
+export async function moveReportPhoto(photo: Pick<ReportPhoto, 'id' | 'phase'>, toPhase: PhotoPhase, reportId: string, actor: string): Promise<void> {
+  if (toPhase === photo.phase) return;
+
+  const { data, error } = await supabase
+    .from('photos')
+    .update({ phase: toPhase })
+    .eq('id', photo.id)
+    .eq('report_id', reportId)
+    .eq('phase', photo.phase)
+    .select('id');
+
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error('That photo has already been moved or removed. Reload the report to see where it is now.');
+
+  await logActivityEvent('report', reportId, 'report_photo_moved', actor, `${photo.phase}:${toPhase}`);
+}
+
 export interface RemoveReportPhotoResult {
   /** True when the record was removed but its file could not be deleted (nothing references it any more; it is only wasted space). */
   fileCleanupFailed: boolean;

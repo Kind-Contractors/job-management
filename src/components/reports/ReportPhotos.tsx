@@ -4,13 +4,14 @@
 // What a manager can do here:
 //   * add photos (several at once; each is shrunk to 1600 px like a technician's) - not on a Completed report;
 //   * tick / untick "Include for client" per photo (photos are included by default) - not on a Completed report;
-//   * remove a photo, after a confirmation popup (permanent: the record and its file) - not on a Completed report.
+//   * remove a photo, after a confirmation popup (permanent: the record and its file) - not on a Completed report;
+//   * move a photo to another section, for when a technician filed everything under one heading - not on a Completed report.
 // The database does not itself stop photo changes on a Completed report (it does for videos), so that rule is enforced here only.
 // Orchestration lives in ReportPhotos; ReportPhotosView is presentational so it can be rendered and checked on its own.
 import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listPhotosForReport, signReportPhotoUrls, updatePhotoClientInclusion, type ReportPhoto } from '../../repository/reportsRepository';
-import { addReportPhoto, checkPhotoFile, explainPhotoError, removeReportPhoto } from '../../repository/reportPhotosRepository';
+import { addReportPhoto, checkPhotoFile, explainPhotoError, moveReportPhoto, removeReportPhoto } from '../../repository/reportPhotosRepository';
 import PhotoDeleteButton from '../../technician/PhotoDeleteButton';
 
 const PHASES = ['before', 'during', 'after'] as const;
@@ -28,6 +29,9 @@ export interface ReportPhotosViewProps {
   notice: string | null;
   rowError: { id: string; message: string } | null;
   includePendingId: string | null;
+  /** The photo whose move is still being saved: its "Move to" control is locked until it finishes. */
+  movePendingId: string | null;
+  onMove: (photo: ReportPhoto, toPhase: ReportPhoto['phase']) => void;
   onPick: (phase: ReportPhoto['phase'], files: FileList | null) => void;
   onToggleInclude: (photo: ReportPhoto, included: boolean) => void;
   onDelete: (photo: ReportPhoto) => Promise<void>;
@@ -42,7 +46,7 @@ export function ReportPhotosView(p: ReportPhotosViewProps) {
     <div className="flex flex-col gap-2" data-testid="report-photos">
       {p.completed && (
         <div className="text-[11px] text-neutral-500">
-          This report is Completed, so photos can’t be added, removed or unticked. Reopen it first (Ready for client → Completed → Reopen).
+          This report is Completed, so photos can’t be added, removed, moved or unticked. Reopen it first (Ready for client → Completed → Reopen).
         </div>
       )}
       {p.notice && (
@@ -94,6 +98,30 @@ export function ReportPhotosView(p: ReportPhotosViewProps) {
                       />
                       Include for client
                     </label>
+                    {!p.completed && (
+                      <label className="flex items-center gap-1 text-[10px] text-neutral-600">
+                        <span className="sr-only">Move {PHASE_LABEL[phase].toLowerCase()} photo to another section</span>
+                        {/* A plain select: compact, and it opens as the native picker on a phone. */}
+                        <select
+                          value=""
+                          disabled={p.movePendingId === photo.id}
+                          onChange={(e) => {
+                            const to = e.target.value as ReportPhoto['phase'] | '';
+                            e.target.value = '';
+                            if (to) p.onMove(photo, to);
+                          }}
+                          aria-label={`Move ${PHASE_LABEL[phase].toLowerCase()} photo to another section`}
+                          className="w-full cursor-pointer border border-neutral-300 bg-white px-1 py-0.5 text-[10px] text-neutral-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <option value="">{p.movePendingId === photo.id ? 'Moving…' : 'Move to…'}</option>
+                          {PHASES.filter((other) => other !== phase).map((other) => (
+                            <option key={other} value={other}>
+                              {PHASE_LABEL[other]}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
                     {p.rowError?.id === photo.id && (
                       <div role="alert" className="text-[10px] leading-snug text-missed-fg">
                         {p.rowError.message}
@@ -134,7 +162,7 @@ export function ReportPhotosView(p: ReportPhotosViewProps) {
           );
         })}
       </div>
-      <div className="text-[10.5px] text-neutral-500">Photos are shown to the client unless you untick them. Deleting a photo removes it permanently.</div>
+      <div className="text-[10.5px] text-neutral-500">Photos are shown to the client unless you untick them. “Move to” puts a photo in a different section. Deleting a photo removes it permanently.</div>
     </div>
   );
 }
@@ -154,6 +182,8 @@ export default function ReportPhotos({ reportId, visitId, completed, actor }: Re
   const [notice, setNotice] = useState<string | null>(null);
   const [rowError, setRowError] = useState<ReportPhotosViewProps['rowError']>(null);
   const [includePendingId, setIncludePendingId] = useState<string | null>(null);
+  const [movePendingId, setMovePendingId] = useState<string | null>(null);
+  const moving = useRef(new Set<string>());
   const inputs = useRef<Record<ReportPhoto['phase'], HTMLInputElement | null>>({ before: null, during: null, after: null });
   const busy = useRef(false);
 
@@ -211,6 +241,31 @@ export default function ReportPhotos({ reportId, visitId, completed, actor }: Re
     }
   };
 
+  /**
+   * Moves a photo to another section. The screen shows it in its new place straight away; if the save fails the photo goes back where it
+   * was and the reason is shown under it. A second move of the SAME photo is ignored while the first is still saving.
+   */
+  const onMove = async (photo: ReportPhoto, toPhase: ReportPhoto['phase']) => {
+    if (completed || toPhase === photo.phase || moving.current.has(photo.id)) return;
+    moving.current.add(photo.id);
+    setRowError(null);
+    setMovePendingId(photo.id);
+    const key = ['reportPhotos', reportId];
+    const previous = queryClient.getQueryData<ReportPhoto[]>(key);
+    queryClient.setQueryData<ReportPhoto[]>(key, (old) => (old ?? []).map((x) => (x.id === photo.id ? { ...x, phase: toPhase } : x)));
+    try {
+      await moveReportPhoto(photo, toPhase, reportId, actor);
+      await refresh();
+    } catch (e) {
+      if (previous) queryClient.setQueryData(key, previous);
+      else await refresh();
+      setRowError({ id: photo.id, message: explainPhotoError(e) });
+    } finally {
+      moving.current.delete(photo.id);
+      setMovePendingId(null);
+    }
+  };
+
   const onDelete = async (photo: ReportPhoto) => {
     setRowError(null);
     setNotice(null);
@@ -229,6 +284,8 @@ export default function ReportPhotos({ reportId, visitId, completed, actor }: Re
       notice={notice}
       rowError={rowError}
       includePendingId={includePendingId}
+      movePendingId={movePendingId}
+      onMove={(photo, toPhase) => void onMove(photo, toPhase)}
       onPick={(phase, files) => void onPick(phase, files)}
       onToggleInclude={(photo, included) => void onToggleInclude(photo, included)}
       onDelete={onDelete}

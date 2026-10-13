@@ -14,8 +14,8 @@ const photo = (id: string, phase: ReportPhoto['phase'], over: Partial<ReportPhot
 
 function view(over: Partial<ReportPhotosViewProps> = {}) {
   const props: ReportPhotosViewProps = {
-    photos: [], urls: {}, completed: false, adding: null, phaseError: null, notice: null, rowError: null, includePendingId: null,
-    onPick: noop, onToggleInclude: noop, onDelete: async () => {}, onDeleteError: noop, inputRef: noop, onAddClick: noop, ...over,
+    photos: [], urls: {}, completed: false, adding: null, phaseError: null, notice: null, rowError: null, includePendingId: null, movePendingId: null,
+    onPick: noop, onToggleInclude: noop, onMove: noop, onDelete: async () => {}, onDeleteError: noop, inputRef: noop, onAddClick: noop, ...over,
   };
   return renderToStaticMarkup(<ReportPhotosView {...props} />);
 }
@@ -89,7 +89,7 @@ test('A per-photo failure (for example the database refused a change) shows unde
 
 test('COMPLETED: add, delete and the include ticks are all locked and the reason is shown', () => {
   const html = view({ photos: [photo('a', 'before')], urls: { a: 'https://x/a.jpg' }, completed: true });
-  assert.match(html, /This report is Completed, so photos can’t be added, removed or unticked\. Reopen it first/);
+  assert.match(html, /This report is Completed, so photos can’t be added, removed, moved or unticked\. Reopen it first/);
   for (const p of ['before', 'during', 'after']) {
     assert.match(addButton(phaseBlock(html, p)), /\sdisabled=""/);
     assert.match(addButton(phaseBlock(html, p)), /This report is Completed/);
@@ -97,16 +97,40 @@ test('COMPLETED: add, delete and the include ticks are all locked and the reason
   const tile = html.split('data-testid="report-photo"')[1];
   assert.match(tile, /<input type="checkbox"[^>]*\sdisabled=""/);
   assert.doesNotMatch(tile, /aria-label="Delete before photo"/, 'no delete button on a Completed report');
+  assert.doesNotMatch(tile, /<select/, 'and no "Move to" control either');
 });
 
 test('NOT COMPLETED: everything is enabled (awaiting review, returned and approved all behave the same here)', () => {
   const html = view({ photos: [photo('a', 'before')], urls: { a: 'https://x/a.jpg' } });
   assert.doesNotMatch(html, /report is Completed/);
   assert.doesNotMatch(html.split('data-testid="report-photo"')[1], /<input type="checkbox"[^>]*\sdisabled=""/);
+  assert.match(html.split('data-testid="report-photo"')[1], /aria-label="Move before photo to another section"/);
+});
+
+test('MOVE: every photo offers the OTHER two sections only, never the one it is already in', () => {
+  const html = view({ photos: [photo('a', 'before'), photo('c', 'after')], urls: { a: 'https://x/a.jpg', c: 'https://x/c.jpg' } });
+  const [first, second] = html.split('data-testid="report-photo"').slice(1);
+  assert.match(first, /aria-label="Move before photo to another section"/);
+  assert.match(first, />Move to…</);
+  assert.match(first, /<option value="during">During<\/option>/);
+  assert.match(first, /<option value="after">After<\/option>/);
+  assert.doesNotMatch(first, /<option value="before">/);
+  assert.match(second, /<option value="before">Before<\/option>/);
+  assert.match(second, /<option value="during">During<\/option>/);
+  assert.doesNotMatch(second, /<option value="after">/);
+});
+
+test('MOVE: while a move is saving that photo is locked and says so; other photos stay movable', () => {
+  const html = view({ photos: [photo('a', 'before'), photo('b', 'before')], urls: { a: 'https://x/a.jpg', b: 'https://x/b.jpg' }, movePendingId: 'a' });
+  const [first, second] = html.split('data-testid="report-photo"').slice(1);
+  assert.match(first, /<select[^>]*\sdisabled=""/);
+  assert.match(first, />Moving…</);
+  assert.doesNotMatch(second, /<select[^>]*\sdisabled=""/);
+  assert.match(second, />Move to…</);
 });
 
 test('The footnote says photos are shown unless unticked, and that deleting is permanent', () => {
-  assert.match(view(), /Photos are shown to the client unless you untick them\. Deleting a photo removes it permanently\./);
+  assert.match(view(), /Photos are shown to the client unless you untick them\. “Move to” puts a photo in a different section\. Deleting a photo removes it permanently\./);
 });
 
 test('The connected section loads this report\'s photos from the cache the Ready for client page shares (same query key)', () => {
@@ -128,4 +152,8 @@ test('HISTORY: photo added / removed have friendly titles and show the section',
   assert.equal(historyEventDetail('report_photo_added', 'before'), 'Before section');
   assert.equal(historyEventDetail('report_photo_removed', 'after'), 'After section');
   assert.equal(historyEventDetail('report_photo_removed', null), null, 'a technician\'s removal has no detail');
+  assert.equal(HISTORY_EVENT_LABEL.report_photo_moved, 'Photo moved');
+  assert.equal(historyEventDetail('report_photo_moved', 'before:during'), 'Before section → During section');
+  assert.equal(historyEventDetail('report_photo_moved', 'after:before'), 'After section → Before section');
+  assert.equal(historyEventDetail('report_photo_moved', 'nonsense'), 'nonsense', 'an unknown detail is shown as it is');
 });

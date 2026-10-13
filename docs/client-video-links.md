@@ -13,8 +13,10 @@ Before / During / After tag, and a **Watch video** strip showing the length (for
 clickable. If a video has no thumbnail it is drawn as a dark placeholder with the same play button and the same working link. The video
 file is never put inside the PDF.
 
-A video appears only if **both** the report's "Include videos" switch and that video's own "Include for client" tick are on. Removed videos
-never appear. A report with no included videos produces exactly the PDF it did before.
+Every video is **included by default** (technician and manager uploads alike); the manager unticks a video's "Include for client" box in Report
+Review or Ready for client to keep it from the client. There is no report-level "Include videos" switch any more (the hidden `reports.include_videos`
+column stays, always true, and the database still honours it). Removed videos never appear. A report with no included videos produces exactly
+the PDF it did before.
 
 Links are made when a PDF is **downloaded or emailed**, not when the preview is looked at. If the links cannot be made, nothing is
 downloaded or sent, and the manager sees a message saying so. Downloading or emailing does not complete the report or change its approval;
@@ -46,7 +48,7 @@ The database function `resolve_report_video_link` (callable by the service role 
 | link not revoked | stops |
 | video not removed (soft-deleted) | stops (removing a video also revokes its links) |
 | video's own "Include for client" is on | stops |
-| report's "Include videos" is on | stops |
+| the report's hidden `include_videos` flag is on (always, now that nothing switches it off) | stops |
 | report is **approved** | stops - a report returned for correction (or resubmitted but not yet approved) stops working, and the **same** link works again after re-approval |
 | the file exists in Storage | stops |
 

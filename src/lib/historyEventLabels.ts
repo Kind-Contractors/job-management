@@ -37,6 +37,7 @@ export const HISTORY_EVENT_LABEL: Record<string, string> = {
   report_reopened: 'Report reopened',
   report_photo_added: 'Photo added',
   report_photo_removed: 'Photo removed',
+  report_photo_moved: 'Photo moved',
   report_video_added: 'Video added',
   report_video_removed: 'Video removed',
   report_video_links_issued: 'Client video links created',
@@ -49,6 +50,11 @@ const VIDEO_PHASE_DETAIL: Record<string, string> = { before: 'Before section', d
 export function historyEventDetail(eventType: string, detail: string | null): string | null {
   if (!detail) return detail;
   if (eventType === 'report_video_added' || eventType === 'report_video_removed' || eventType === 'report_photo_added' || eventType === 'report_photo_removed') return VIDEO_PHASE_DETAIL[detail] ?? detail;
+  // A move is written as "from:to" (for example "before:during").
+  if (eventType === 'report_photo_moved') {
+    const [from, to] = detail.split(':');
+    if (from && to && VIDEO_PHASE_DETAIL[from] && VIDEO_PHASE_DETAIL[to]) return `${VIDEO_PHASE_DETAIL[from]} → ${VIDEO_PHASE_DETAIL[to]}`;
+  }
   if (eventType === 'report_video_links_issued') {
     const m = /^(\d+) link\(s\), valid (\d+) days?$/.exec(detail);
     if (m) return `${m[1]} ${m[1] === '1' ? 'link' : 'links'}, valid for ${m[2]} days`;
