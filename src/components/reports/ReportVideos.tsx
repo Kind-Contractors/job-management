@@ -21,6 +21,7 @@ import {
   type VideoPhase,
 } from '../../lib/reportVideoRules';
 import { readVideoMetadata } from '../../lib/videoMetadata';
+import ConfirmDeleteDialog from '../../technician/ConfirmDeleteDialog';
 import { VideoUploadController, type UploadState } from '../../lib/videoUploadController';
 import {
   listVideosForVisit,
@@ -178,26 +179,18 @@ export function VideoCard(p: VideoCardProps) {
             Include for client
           </label>
         )}
-        {p.confirmingRemove ? (
-          <div role="alertdialog" aria-label="Confirm removing this video" className="border border-due bg-due/10 p-1.5 text-due-fg">
-            Remove this video? The client will no longer be able to open it and any links already sent stop working. The file is kept.
-            <div className="mt-1 flex gap-1.5">
-              <button
-                onClick={p.onConfirmRemove}
-                disabled={p.removePending}
-                className="cursor-pointer bg-missed px-2 py-0.5 text-[11px] font-semibold text-white disabled:opacity-50"
-              >
-                {p.removePending ? 'Removing…' : 'Remove video'}
-              </button>
-              <button onClick={p.onCancelRemove} disabled={p.removePending} className="cursor-pointer border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-700">
-                Keep
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button onClick={p.onAskRemove} className="w-fit cursor-pointer text-[11px] text-missed-fg hover:underline">
-            Remove
-          </button>
+        <button onClick={p.onAskRemove} className="w-fit cursor-pointer text-[11px] text-missed-fg hover:underline">
+          Remove
+        </button>
+        {/* The same centred popup the technician view uses for deleting a photo or video. */}
+        {p.confirmingRemove && (
+          <ConfirmDeleteDialog
+            ariaLabel={`Delete ${VIDEO_PHASE_LABEL[v.phase]} video`}
+            message="Are you sure you want to delete this video? The client will no longer be able to open it and any links already sent stop working. The file is kept."
+            busy={p.removePending}
+            onCancel={p.onCancelRemove}
+            onConfirm={p.onConfirmRemove}
+          />
         )}
         {p.removeError && (
           <div role="alert" className="text-missed-fg">
@@ -275,7 +268,10 @@ export default function ReportVideos({ visitId, reviewStatus, reviewedAt, comple
       if (playing?.id === id) setPlaying(null);
       void refreshVideos();
     },
-    onError: (e, id) => setRowError({ id, message: explainVideoError(e) }),
+    onError: (e, id) => {
+      setConfirmRemoveId(null); // close the popup so the reason, shown under the video, is visible
+      setRowError({ id, message: explainVideoError(e) });
+    },
   });
 
   // One controller per mounted report (ReportPanel remounts this per report): it owns the "one upload at a time" rule, the checks,
