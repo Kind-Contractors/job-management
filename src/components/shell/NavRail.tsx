@@ -20,6 +20,7 @@ import { listTechnicians } from '../../repository/techniciansRepository';
 import { listUsers } from '../../repository/usersRepository';
 import { listVisitsWithVideosNoReport } from '../../repository/reportVideosRepository';
 import { queueCounts, useQueueJobRows } from '../../lib/queueJobs';
+import { confirmLeave } from '../../lib/unsavedEditsGuard';
 
 const DIVISIONS = ['General', 'Specialist', 'Both'] as const;
 
@@ -87,7 +88,9 @@ function navLinkClasses(active: boolean) {
 export default function NavRail() {
   const { pathname } = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const navigate = useNavigate();
+  const routerNavigate = useNavigate();
+  // Leaving Report Review with typing that is not safely stored saves it first and asks if that fails (lib/unsavedEditsGuard.ts).
+  const navigate = (to: string) => void confirmLeave().then((ok) => ok && routerNavigate(to));
   const [collapsed, setCollapsed] = useState(false);
 
   const { data: jobRows = [] } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
@@ -152,7 +155,7 @@ export default function NavRail() {
     const next = new URLSearchParams(searchParams);
     if (d === 'Both') next.delete('division');
     else next.set('division', d);
-    setSearchParams(next, { replace: true });
+    void confirmLeave().then((ok) => ok && setSearchParams(next, { replace: true })); // the division filter can drop the open report from the queue
   };
 
   const viewItems: { key: string; label: string; icon: IconType; active: boolean; count: number; onClick: () => void }[] = [

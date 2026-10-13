@@ -86,7 +86,6 @@ export function VisitVideosCard({
             reviewStatus={null}
             reviewedAt={null}
             completed={false}
-            includeVideos
             actor={actor}
           />
         </div>

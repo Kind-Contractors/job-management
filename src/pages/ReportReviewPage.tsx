@@ -6,6 +6,7 @@ import { isVisitReadyForAccounts } from '../lib/statusPresentation';
 import ReportReviewQueue, { type ReportQueueRow } from '../components/jobs/ReportReviewQueue';
 import ReportPanel from '../components/jobs/ReportPanel';
 import ClosedJobsNotice from '../components/reports/ClosedJobsNotice';
+import { confirmLeave } from '../lib/unsavedEditsGuard';
 
 export default function ReportReviewPage() {
   const navigate = useNavigate();
@@ -35,10 +36,18 @@ export default function ReportReviewPage() {
   const selected = queue.find((r) => r.visit.reportId === selectedReportId);
   const currentIndex = queue.findIndex((r) => r.visit.reportId === selectedReportId);
 
+  // Choosing another report first saves what is typed in this one; if that fails the manager is asked before it is lost
+  // (see lib/unsavedEditsGuard.ts). Relying on the old panel's unmount alone would lose a failed save without a word.
+  const selectReport = async (reportId: string | null) => {
+    if (reportId === selectedReportId) return;
+    if (!(await confirmLeave())) return;
+    setSelectedReportId(reportId);
+  };
+
   const goToOffset = (offset: number) => {
     if (queue.length === 0) return;
     const nextIndex = (((currentIndex + offset) % queue.length) + queue.length) % queue.length;
-    setSelectedReportId(queue[nextIndex].visit.reportId);
+    void selectReport(queue[nextIndex].visit.reportId ?? null);
   };
 
   return (
@@ -68,7 +77,7 @@ export default function ReportReviewPage() {
             </div>
           </div>
         ) : (
-          <ReportReviewQueue rows={queue} selectedReportId={selectedReportId} onSelect={setSelectedReportId} />
+          <ReportReviewQueue rows={queue} selectedReportId={selectedReportId} onSelect={(id) => void selectReport(id)} />
         )}
       </div>
 
@@ -90,7 +99,9 @@ export default function ReportReviewPage() {
                   {selected.visit.scheduledDate && ` · Visit ${new Date(selected.visit.scheduledDate).toLocaleDateString('en-GB')}`}
                 </div>
                 <button
-                  onClick={() => navigate(`/buildings/${selected.job.buildingId}`)}
+                  onClick={async () => {
+                    if (await confirmLeave()) navigate(`/buildings/${selected.job.buildingId}`);
+                  }}
                   className="mt-1.5 cursor-pointer text-[11.5px] text-teal-700 hover:underline"
                 >
                   Open building file

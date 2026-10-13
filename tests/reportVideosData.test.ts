@@ -9,7 +9,6 @@ import {
   REPORT_VIDEO_BUCKET,
   listVideosForVisit,
   removeReportVideo,
-  setReportIncludeVideos,
   setVideoClientInclusion,
   signVideoPlaybackUrl,
   signVideoThumbnailUrls,
@@ -137,15 +136,9 @@ test('INCLUDE FOR CLIENT: a Completed report\'s refusal is passed through readab
   await assert.rejects(setVideoClientInclusion('v1', true), /no longer available/);
 });
 
-test('REPORT-LEVEL switch updates only include_videos on that report; a Completed report\'s refusal is passed through', async () => {
-  await setReportIncludeVideos('r1', false);
-  const [patch] = calls(/^PATCH \/rest\/v1\/reports$/);
-  assert.match(patch.search, /id=eq\.r1/);
-  assert.deepEqual(patch.body, { include_videos: false });
-  server.failNext = { match: /PATCH \/rest\/v1\/reports/, status: 400, body: { message: 'This report has been marked Completed; reopen it before changing whether videos are included.' } };
-  await assert.rejects(setReportIncludeVideos('r1', true), /marked Completed; reopen it/);
-  server.patchRows = [];
-  await assert.rejects(setReportIncludeVideos('r1', true), /could not be found/);
+test('THERE IS NO report-level video switch any more: the repository no longer exports one and nothing writes reports.include_videos', async () => {
+  const repo = await import('../src/repository/reportVideosRepository');
+  assert.equal('setReportIncludeVideos' in repo, false);
 });
 
 // ---- removal ---------------------------------------------------------------------------------------------------------------
@@ -171,7 +164,7 @@ test('REMOVE: refusals and an already-removed video are reported', async () => {
 });
 
 // ---- uploading ----------------------------------------------------------------------------------------------------------------
-test('UPLOAD: poster, then the resumable video file, then the record - source manager, NOT included for the client, private bucket', async () => {
+test('UPLOAD: poster, then the resumable video file, then the record - source manager, INCLUDED for the client by default, private bucket', async () => {
   const order: string[] = [];
   let args!: ResumableUploadArgs;
   server.insertRow = row({ id: 'new1', source: 'manager', phase: 'during', technicians: null, size_bytes: FILE.size, duration_seconds: 20 });
@@ -197,7 +190,7 @@ test('UPLOAD: poster, then the resumable video file, then the record - source ma
   const [insert] = calls(/^POST \/rest\/v1\/report_videos$/);
   assert.deepEqual(insert.body, {
     visit_id: VISIT, phase: 'during', storage_path: args.objectName, thumbnail_path: thumbPost[0].path.replace(`/storage/v1/object/${REPORT_VIDEO_BUCKET}/`, ''),
-    mime_type: 'video/mp4', size_bytes: FILE.size, duration_seconds: 20, source: 'manager', include_in_client_report: false,
+    mime_type: 'video/mp4', size_bytes: FILE.size, duration_seconds: 20, source: 'manager', include_in_client_report: true,
   });
   assert.equal(video.id, 'new1');
   assert.equal(calls(/\/object\/public\//).length, 0);

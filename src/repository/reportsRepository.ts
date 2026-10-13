@@ -273,6 +273,40 @@ export async function updateReport(reportId: string, input: UpdateReportInput): 
   if (error) throw new Error(`Failed to update report: ${error.message}`);
 }
 
+/** Thrown when the stored text is no longer what an autosave expected to replace (someone else saved it first). Nothing was written. */
+export class ReportTextChangedError extends Error {
+  constructor() {
+    super('This report’s text was changed elsewhere, so your version was not saved.');
+    this.name = 'ReportTextChangedError';
+  }
+}
+
+export type ReportTextPatch = Partial<Record<'workCarriedOut' | 'issues' | 'technicianNotes', string>>;
+export type ReportTextExpected = Partial<Record<'workCarriedOut' | 'issues' | 'technicianNotes', string | null>>;
+
+const TEXT_COLUMN = { workCarriedOut: 'work_carried_out', issues: 'issues', technicianNotes: 'technician_notes' } as const;
+
+/**
+ * Report Review's automatic save. Writes only the fields in `patch`, and only if each still holds the text the manager started from
+ * (`expected`): the update is conditional, so it cannot overwrite text someone else saved in the meantime (a technician resubmitting,
+ * another tab). Also refuses once the report is approved, Completed or sent, as the screen does - the database itself has no such rule
+ * for report text, so this guard is what stops a stray autosave changing text that has already been approved.
+ */
+export async function saveReportText(reportId: string, patch: ReportTextPatch, expected: ReportTextExpected): Promise<void> {
+  const columns: Record<string, string> = {};
+  for (const field of Object.keys(patch) as (keyof ReportTextPatch)[]) columns[TEXT_COLUMN[field]] = patch[field] as string;
+  if (Object.keys(columns).length === 0) return;
+
+  let query = supabase.from('reports').update(columns).eq('id', reportId).neq('review_status', 'approved').is('completed_at', null).is('sent_to_client_at', null);
+  for (const field of Object.keys(patch) as (keyof ReportTextPatch)[]) {
+    const was = expected[field] ?? null;
+    query = was === null ? query.is(TEXT_COLUMN[field], null) : query.eq(TEXT_COLUMN[field], was);
+  }
+  const { data, error } = await query.select('id');
+  if (error) throw new Error(`Failed to update report: ${error.message}`);
+  if (!data || data.length === 0) throw new ReportTextChangedError();
+}
+
 export async function approveReport(reportId: string, actor: string): Promise<void> {
   const now = new Date().toISOString();
   const { error } = await supabase

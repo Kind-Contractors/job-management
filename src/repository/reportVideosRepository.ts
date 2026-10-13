@@ -26,7 +26,7 @@ export interface ReportVideo {
   source: 'technician' | 'manager';
   /** The technician's name for a technician's video; null for one added by the office. */
   uploadedByName: string | null;
-  /** Opt-in: false until a manager ticks it. The client report shows a video only if this AND reports.include_videos are on. */
+  /** True by default (the manager unticks a video to keep it from the client). The client report shows a video only while this is on. */
   includeInClientReport: boolean;
   createdAt: string;
 }
@@ -134,7 +134,7 @@ async function currentAccessToken(): Promise<string> {
  * Adds a video to a visit as the signed-in manager:
  *   1. the JPEG poster (small, one request) - if this fails the video still goes ahead without a poster;
  *   2. the video file, resumable, straight to the private bucket under {visit}/{phase}/{new uuid}.{ext};
- *   3. the report_videos record (source 'manager', NOT included for the client until the manager ticks it).
+ *   3. the report_videos record (source 'manager', included for the client by default; the manager can untick it).
  * Every attempt uses fresh names, so a retry can never collide with or reuse a half-finished earlier attempt. If anything after
  * the file upload fails, the files THIS attempt uploaded are removed again (allowed because no record points at them yet), so
  * failed attempts do not leave files behind.
@@ -186,7 +186,7 @@ export async function uploadReportVideo(input: UploadReportVideoInput, deps: Upl
         size_bytes: input.file.size,
         duration_seconds: input.durationSeconds,
         source: 'manager',
-        include_in_client_report: false,
+        include_in_client_report: true,
       })
       .select(VIDEO_SELECT)
       .single();
@@ -226,13 +226,6 @@ export async function removeReportVideo(videoId: string, actor: string): Promise
     .select('id');
   if (error) throw new Error(error.message);
   if (!data || data.length === 0) throw new Error('That video has already been removed.');
-}
-
-/** The report-level "Include videos in the client report" switch. Refused by the database on a Completed report. */
-export async function setReportIncludeVideos(reportId: string, included: boolean): Promise<void> {
-  const { data, error } = await supabase.from('reports').update({ include_videos: included }).eq('id', reportId).select('id');
-  if (error) throw new Error(error.message);
-  if (!data || data.length === 0) throw new Error('That report could not be found.');
 }
 
 // ---- visits that have videos but no report yet -------------------------------------------------------------------------------

@@ -28,7 +28,7 @@ const DONE = '2026-10-03T09:00:00Z';
 function video(id: string, phase: 'before' | 'during' | 'after', over: Partial<ReportVideo> = {}): ReportVideo {
   return {
     id, visitId: 'va', phase, storagePath: `va/${phase}/${id}.mp4`, thumbnailPath: `va/${phase}/${id}.jpg`, mimeType: 'video/mp4', sizeBytes: 5 * 1024 * 1024, durationSeconds: 42,
-    source: 'technician', uploadedByName: 'Mo', includeInClientReport: false, createdAt: '2026-10-01T10:00:00Z', ...over,
+    source: 'technician', uploadedByName: 'Mo', includeInClientReport: true, createdAt: '2026-10-01T10:00:00Z', ...over,
   };
 }
 const has = (html: string, text: string) => html.includes(text);
@@ -102,26 +102,28 @@ test('READY FOR CLIENT: no uploading here (that stays in Report review) - no Add
   assert.match(phaseBlock(html, 'after'), />None</);
 });
 
-test('READY FOR CLIENT: each video has Play, its own Include tick (unticked by default) and Remove; the report-level switch is there and on', () => {
-  const html = clientPage({ videos: [video('a', 'before'), video('b', 'before', { includeInClientReport: true })] });
+test('READY FOR CLIENT: each video has Play, its own Include tick (ticked by default) and Remove; there is no report-level switch', () => {
+  const html = clientPage({ videos: [video('a', 'before'), video('b', 'before', { includeInClientReport: false })] });
   const [first, second] = cards(html);
   assert.match(first, /aria-label="Play Before video"/);
-  assert.match(first, /<input type="checkbox"(?![^>]*\schecked)[^>]*\/>\s*Include for client/);
-  assert.match(second, /<input type="checkbox"[^>]*\schecked=""[^>]*\/>\s*Include for client/);
+  assert.match(first, /<input type="checkbox"[^>]*\schecked=""[^>]*\/>\s*Include for client/);
+  assert.match(second, /<input type="checkbox"(?![^>]*\schecked)[^>]*\/>\s*Include for client/);
   assert.match(first, />\s*Remove\s*<\/button>/);
-  assert.match(html, /<input type="checkbox"[^>]*\schecked=""[^>]*\/>\s*Include videos in the client report/);
+  assert.doesNotMatch(html, /Include videos in the client report/);
+  assert.doesNotMatch(html, /switched off for the client report/);
 });
 
-test('READY FOR CLIENT: the report-level switch off is shown as off and explained', () => {
-  const html = clientPage({ videos: [video('a', 'before', { includeInClientReport: true })], reportOver: { includeVideos: false } });
-  assert.doesNotMatch(html, /<input type="checkbox"[^>]*\schecked=""[^>]*\/>\s*Include videos in the client report/);
-  assert.match(html, /Videos are switched off for the client report, so none will be shown to the client whatever is ticked below/);
+test('READY FOR CLIENT: an old report that has the hidden include_videos flag off shows no switch and no misleading message either', () => {
+  const html = clientPage({ videos: [video('a', 'before')], reportOver: { includeVideos: false } });
+  assert.doesNotMatch(html, /Include videos in the client report/);
+  assert.doesNotMatch(html, /switched off for the client report/);
 });
 
-test('READY FOR CLIENT: it says plainly that videos are not in the emailed or downloaded report yet (nothing is promised that does not happen)', () => {
+test('READY FOR CLIENT: it says plainly that ticked videos appear in the client report as a "Watch video" link (client links are live; the old "not yet" note is gone)', () => {
   const html = clientPage({ videos: [video('a', 'before')] });
-  assert.match(html, /data-testid="videos-not-yet-sent-note"[^>]*>\s*Videos are not part of the emailed or downloaded report yet/);
-  assert.match(html, /Only ticked videos will ever be shared/);
+  assert.match(html, /data-testid="videos-in-report-note"[^>]*>\s*Each ticked video appears in the client report as a thumbnail with a “Watch video” link/);
+  assert.doesNotMatch(html, /not part of the emailed or downloaded report yet/);
+  assert.doesNotMatch(html, /videos-not-yet-sent-note/);
 });
 
 test('READY FOR CLIENT: a video that arrived after the report was approved is flagged; earlier ones are not', () => {
@@ -131,19 +133,17 @@ test('READY FOR CLIENT: a video that arrived after the report was approved is fl
   assert.match(late, /Added after approval/);
 });
 
-test('READY FOR CLIENT, COMPLETED: the ticks and the switch are locked with the reason (Reopen first); Remove is still offered', () => {
+test('READY FOR CLIENT, COMPLETED: the ticks are locked with the reason (Reopen first); Remove is still offered', () => {
   const html = clientPage({ completed: true, videos: [video('a', 'before', { includeInClientReport: true })] });
   assert.match(html, /This report is Completed, so the “Include” choices can’t be changed \(Reopen it first\)\. A video can still be removed\./);
   assert.match(cards(html)[0], /<input type="checkbox"[^>]*\sdisabled=""[^>]*\/>\s*Include for client/);
-  assert.match(html, /<input type="checkbox"[^>]*\sdisabled=""[^>]*\/>\s*Include videos in the client report/);
   assert.match(cards(html)[0], />\s*Remove\s*<\/button>/);
   assert.ok(has(html, 'Completed'), 'the completed banner is still there');
 });
 
-test('READY FOR CLIENT, NOT COMPLETED: the ticks and the switch are enabled', () => {
+test('READY FOR CLIENT, NOT COMPLETED: the ticks are enabled', () => {
   const html = clientPage({ videos: [video('a', 'before')] });
   assert.doesNotMatch(cards(html)[0], /<input type="checkbox"[^>]*\sdisabled=""/);
-  assert.doesNotMatch(html, /<input type="checkbox"[^>]*\sdisabled=""[^>]*\/>\s*Include videos in the client report/);
   assert.doesNotMatch(html, /report is Completed/);
 });
 
@@ -171,7 +171,7 @@ test('READY FOR CLIENT: no video controls appear for a report that is not select
   qc.setQueryData(['reportVideos', 'va'], [video('a', 'before')]);
   const html = renderToStaticMarkup(
     <QueryClientProvider client={qc}>
-      <ReportVideos reportId="r1" visitId="va" reviewStatus="awaiting_review" reviewedAt={null} completed={false} includeVideos actor="luke@x" />
+      <ReportVideos reportId="r1" visitId="va" reviewStatus="awaiting_review" reviewedAt={null} completed={false} actor="luke@x" />
     </QueryClientProvider>,
   );
   assert.equal((html.match(/\+ Add video/g) ?? []).length, 3, 'review mode: an Add button per section');

@@ -23,11 +23,11 @@ const VISIT = 'visit-1';
 function video(id: string, phase: 'before' | 'during' | 'after', over: Partial<ReportVideo> = {}): ReportVideo {
   return {
     id, visitId: VISIT, phase, storagePath: `${VISIT}/${phase}/${id}.mp4`, thumbnailPath: `${VISIT}/${phase}/${id}.jpg`, mimeType: 'video/mp4', sizeBytes: 5 * 1024 * 1024,
-    durationSeconds: 42, source: 'technician', uploadedByName: 'Mo', includeInClientReport: false, createdAt: '2026-10-12T10:00:00Z', ...over,
+    durationSeconds: 42, source: 'technician', uploadedByName: 'Mo', includeInClientReport: true, createdAt: '2026-10-12T10:00:00Z', ...over,
   };
 }
 
-function section(opts: { videos?: ReportVideo[]; completed?: boolean; includeVideos?: boolean; reviewStatus?: any; reviewedAt?: string | null } = {}) {
+function section(opts: { videos?: ReportVideo[]; completed?: boolean; reviewStatus?: any; reviewedAt?: string | null } = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
   qc.setQueryData(['reportVideos', VISIT], opts.videos ?? []);
   return renderToStaticMarkup(
@@ -38,7 +38,6 @@ function section(opts: { videos?: ReportVideo[]; completed?: boolean; includeVid
         reviewStatus={opts.reviewStatus ?? 'awaiting_review'}
         reviewedAt={opts.reviewedAt ?? null}
         completed={opts.completed ?? false}
-        includeVideos={opts.includeVideos ?? true}
         actor="luke@x"
       />
     </QueryClientProvider>,
@@ -79,10 +78,11 @@ test('LIMITS: a full report (8) disables every Add button', () => {
   assert.match(phaseHtml(html, 'after'), /At most 8 videos per report/);
 });
 
-test('The stated limits are on screen: types, size, length, per-section and per-report counts, and that nothing is shown to the client unless ticked', () => {
+test('The stated limits are on screen: types, size, length, per-section and per-report counts, and that videos are shown to the client unless unticked', () => {
   const html = section();
   assert.match(html, /MP4, MOV or WebM · up to 150 MB and 1:00 each · 3 per section, 8 per report/);
-  assert.match(html, /not shown to the client unless ticked/);
+  assert.match(html, /Videos are shown to the client unless you untick them/);
+  assert.doesNotMatch(html, /not shown to the client unless ticked/);
 });
 
 test('EMPTY: a report with no videos (every older report) shows empty sections, no error, nothing about the client', () => {
@@ -92,24 +92,23 @@ test('EMPTY: a report with no videos (every older report) shows empty sections, 
 });
 
 // ---- inclusion --------------------------------------------------------------------------------------------------------------
-test('INCLUDE FOR CLIENT: unticked by default, ticked when included, one tick per video', () => {
-  const html = section({ videos: [video('a', 'before'), video('b', 'before', { includeInClientReport: true })] });
+test('INCLUDE FOR CLIENT: ticked by default (the manager unticks to keep a video from the client), one tick per video', () => {
+  const html = section({ videos: [video('a', 'before'), video('b', 'before', { includeInClientReport: false })] });
   const [first, second] = html.split('data-testid="video-card"').slice(1);
-  assert.match(first, /<input type="checkbox"(?![^>]*\schecked)[^>]*\/>\s*Include for client/);
-  assert.match(second, /<input type="checkbox"[^>]*\schecked=""[^>]*\/>\s*Include for client/);
+  assert.match(first, /<input type="checkbox"[^>]*\schecked=""[^>]*\/>\s*Include for client/);
+  assert.match(second, /<input type="checkbox"(?![^>]*\schecked)[^>]*\/>\s*Include for client/);
 });
 
-test('REPORT-LEVEL switch: ticked by default (as for older reports); when off it says no video reaches the client whatever is ticked', () => {
-  const on = section({ videos: [video('a', 'before', { includeInClientReport: true })] });
-  assert.match(on, /<input type="checkbox"[^>]*\schecked=""[^>]*\/>\s*Include videos in the client report/);
-  assert.doesNotMatch(on, /switched off for the client report/);
-  const off = section({ videos: [video('a', 'before', { includeInClientReport: true })], includeVideos: false });
-  assert.doesNotMatch(off, /<input type="checkbox"[^>]*\schecked=""[^>]*\/>\s*Include videos in the client report/);
-  assert.match(off, /Videos are switched off for the client report, so none will be shown to the client whatever is ticked below/);
+test('NO report-level switch: there is no "Include videos in the client report" checkbox and no "switched off" message, with or without videos', () => {
+  for (const videos of [[], [video('a', 'before')], [video('a', 'before', { includeInClientReport: false })]]) {
+    const html = section({ videos });
+    assert.doesNotMatch(html, /Include videos in the client report/);
+    assert.doesNotMatch(html, /switched off for the client report/);
+  }
 });
 
 // ---- report states ------------------------------------------------------------------------------------------------------------
-test('COMPLETED: add buttons, the inclusion ticks and the report switch are all locked, the reason is shown, and Remove is still offered', () => {
+test('COMPLETED: add buttons and the inclusion ticks are locked, the reason is shown, and Remove is still offered', () => {
   const html = section({ videos: [video('a', 'before')], completed: true });
   assert.match(html, /This report is Completed, so videos can’t be added and the “Include” choices can’t be changed\. A video can still be removed\./);
   for (const p of ['before', 'during', 'after']) {
@@ -118,7 +117,6 @@ test('COMPLETED: add buttons, the inclusion ticks and the report switch are all 
   }
   const card = html.split('data-testid="video-card"')[1];
   assert.match(card, /<input type="checkbox"[^>]*\sdisabled=""[^>]*\/>\s*Include for client/);
-  assert.match(html, /<input type="checkbox"[^>]*\sdisabled=""[^>]*\/>\s*Include videos in the client report/);
   assert.match(card, />\s*Remove\s*<\/button>/, 'removal is still allowed on a Completed report');
 });
 
@@ -227,9 +225,11 @@ const wrapPanel = (el: ReactElement, over: Record<string, unknown> = {}, videos:
   return renderToStaticMarkup(<QueryClientProvider client={qc}><MemoryRouter>{el}</MemoryRouter></QueryClientProvider>);
 };
 
-test('REPORT PANEL: the Videos block sits right after Photos; the photos section and its empty message are exactly as before', () => {
+test('REPORT PANEL: the Videos block sits right after Photos, then the text fields; photos have their own add controls', () => {
   const html = wrapPanel(<ReportPanel reportId="rp" reviewStatus="awaiting_review" actor="luke@x" readyForAccounts={false} />, {}, [video('a', 'before')]);
-  assert.match(html, /No photos on this visit yet\./);
+  assert.match(html, /data-testid="report-photos"/);
+  assert.match(html, /\+ Add photo/);
+  assert.doesNotMatch(html, /Save changes/);
   const photos = html.indexOf('>Photos<');
   const videos = html.indexOf('>Videos<');
   const work = html.indexOf('Work carried out');
@@ -243,7 +243,10 @@ test('REPORT PANEL: a Completed report passes its state down - videos locked, Re
   assert.match(addButton(phaseHtml(html, 'before')), /\sdisabled=""/);
 });
 
-test('REPORT PANEL: a report cached before video support (no includeVideos field) is treated as including videos, like the database default', () => {
-  const html = wrapPanel(<ReportPanel reportId="rp" reviewStatus="awaiting_review" actor="luke@x" readyForAccounts={false} />, { includeVideos: undefined });
-  assert.match(html, /<input type="checkbox"[^>]*\schecked=""[^>]*\/>\s*Include videos in the client report/);
+test('REPORT PANEL: no "Include videos" switch and no "Save changes" button, whatever the cached report looks like (including an older one with no includeVideos field)', () => {
+  for (const over of [{}, { includeVideos: undefined }, { includeVideos: false }]) {
+    const html = wrapPanel(<ReportPanel reportId="rp" reviewStatus="awaiting_review" actor="luke@x" readyForAccounts={false} />, over, [video('a', 'before')]);
+    assert.doesNotMatch(html, /Include videos in the client report/);
+    assert.doesNotMatch(html, /Save changes/);
+  }
 });

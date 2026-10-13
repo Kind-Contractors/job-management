@@ -15,6 +15,8 @@ interface ReportContributionsSectionProps {
   completed?: boolean;
   actor: string;
   overview: ReportContributionOverview;
+  /** Called after the combined text was rebuilt from the technicians' versions, so the panel can drop any unsaved local edits. */
+  onCombinedReset?: () => void;
 }
 
 const timeFmt = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' });
@@ -33,7 +35,7 @@ function statusLabel(p: ReportParticipant): { text: string; className: string } 
  * waive. Only rendered for reports that have contributions; the ordinary
  * single-technician report never reaches this component.
  */
-export default function ReportContributionsSection({ reportId, reviewStatus, completed = false, actor, overview }: ReportContributionsSectionProps) {
+export default function ReportContributionsSection({ reportId, reviewStatus, completed = false, actor, overview, onCombinedReset }: ReportContributionsSectionProps) {
   const queryClient = useQueryClient();
   const [returningId, setReturningId] = useState<string | null>(null);
   const [reason, setReason] = useState('');
@@ -75,6 +77,7 @@ export default function ReportContributionsSection({ reportId, reviewStatus, com
   const resetMutation = useMutation({
     mutationFn: () => resetCombinedReport(reportId),
     onSuccess: () => {
+      onCombinedReset?.(); // the text was rebuilt from the technicians' versions: drop any unsaved local text
       refresh();
       setError(null);
     },

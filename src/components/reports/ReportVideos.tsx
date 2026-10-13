@@ -1,10 +1,10 @@
-// Videos in Report review: one column per section (Before / During / After), each with its videos and an "Add video" button, plus
-// the report-level "Include videos in the client report" switch.
+// Videos in Report review: one column per section (Before / During / After), each with its videos and an "Add video" button.
+// Every video is included for the client by default; the manager unticks the ones the client should not see.
 //
 // What a manager can do here, and what the database allows (the database is the authority - this only reflects it):
 //   * add a video (resumable upload, with progress; cancel; try again) - not on a Completed report;
 //   * play it (a short-lived signed link made only when Play is pressed; the browser streams it with Range requests);
-//   * tick "Include for client" per video, and the report-level switch - not on a Completed report;
+//   * tick / untick "Include for client" per video - not on a Completed report;
 //   * remove a video (soft delete: its client links stop working, the file is kept) - allowed on a Completed report too.
 // Orchestration (uploading, mutations, which video is playing / being removed) lives in ReportVideos; the pieces below it are
 // presentational so they can be rendered and checked on their own.
@@ -25,7 +25,6 @@ import { VideoUploadController, type UploadState } from '../../lib/videoUploadCo
 import {
   listVideosForVisit,
   removeReportVideo,
-  setReportIncludeVideos,
   setVideoClientInclusion,
   signVideoPlaybackUrl,
   signVideoThumbnailUrls,
@@ -215,25 +214,24 @@ export function VideoCard(p: VideoCardProps) {
 /**
  * Where the videos are shown:
  *  - 'review'   Report review: add, play, include, remove.
- *  - 'client'   Ready for client: play, include, remove and the report-level switch - no uploading (that belongs to review).
+ *  - 'client'   Ready for client: play, include, remove - no uploading (that belongs to review).
  *  - 'noReport' a visit that has videos but no report yet (so no inclusion choices and no report switch): play and remove only.
  */
 export type ReportVideosMode = 'review' | 'client' | 'noReport';
 
 export interface ReportVideosProps {
-  /** Null for a visit that has no report yet (mode 'noReport'). */
+  /** Null for a visit that has no report yet (mode 'noReport'). Videos belong to the visit, so the list itself does not need it. */
   reportId: string | null;
   visitId: string;
   reviewStatus: 'awaiting_review' | 'approved' | 'returned_for_correction' | null;
   reviewedAt: string | null;
   /** Completed reports refuse new videos and inclusion changes (a video can still be removed). */
   completed: boolean;
-  includeVideos: boolean;
   actor: string;
   mode?: ReportVideosMode;
 }
 
-export default function ReportVideos({ reportId, visitId, reviewStatus, reviewedAt, completed, includeVideos, actor, mode = 'review' }: ReportVideosProps) {
+export default function ReportVideos({ visitId, reviewStatus, reviewedAt, completed, actor, mode = 'review' }: ReportVideosProps) {
   const queryClient = useQueryClient();
   const [upload, setUpload] = useState<UploadState | null>(null);
   const [pickError, setPickError] = useState<{ phase: VideoPhase; message: string } | null>(null);
@@ -279,10 +277,6 @@ export default function ReportVideos({ reportId, visitId, reviewStatus, reviewed
     },
     onError: (e, id) => setRowError({ id, message: explainVideoError(e) }),
   });
-  const reportSwitchMutation = useMutation({
-    mutationFn: (included: boolean) => setReportIncludeVideos(reportId!, included),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['report', reportId] }),
-  });
 
   // One controller per mounted report (ReportPanel remounts this per report): it owns the "one upload at a time" rule, the checks,
   // retry and cancel. It always reads the latest list and report state through `latest`.
@@ -324,30 +318,9 @@ export default function ReportVideos({ reportId, visitId, reviewStatus, reviewed
   };
 
   const total = videos.length;
-  const reportSwitchError = reportSwitchMutation.error ? explainVideoError(reportSwitchMutation.error) : null;
 
   return (
     <div className="flex flex-col gap-2" data-testid="report-videos">
-      {mode !== 'noReport' && (
-        <label className={`flex w-fit items-center gap-1.5 text-[11.5px] ${completed ? 'cursor-not-allowed text-neutral-500' : 'cursor-pointer text-neutral-700'}`}>
-          <input
-            type="checkbox"
-            checked={includeVideos}
-            disabled={completed || reportSwitchMutation.isPending}
-            onChange={(e) => reportSwitchMutation.mutate(e.target.checked)}
-            className="accent-teal"
-          />
-          Include videos in the client report
-        </label>
-      )}
-      {reportSwitchError && (
-        <div role="alert" className="text-[11px] text-missed-fg">
-          {reportSwitchError}
-        </div>
-      )}
-      {mode !== 'noReport' && !includeVideos && total > 0 && (
-        <div className="text-[11px] text-neutral-500">Videos are switched off for the client report, so none will be shown to the client whatever is ticked below.</div>
-      )}
       {completed && mode === 'review' && (
         <div className="text-[11px] text-neutral-500">
           This report is Completed, so videos can’t be added and the “Include” choices can’t be changed. A video can still be removed.
@@ -463,13 +436,12 @@ export default function ReportVideos({ reportId, visitId, reviewStatus, reviewed
       {mode === 'review' && (
         <div className="text-[10.5px] text-neutral-500">
           MP4, MOV or WebM · up to {formatBytes(REPORT_VIDEO_LIMITS.maxBytes)} and {formatDuration(REPORT_VIDEO_LIMITS.maxSeconds)} each · {REPORT_VIDEO_LIMITS.maxPerPhase} per section, {REPORT_VIDEO_LIMITS.maxPerVisit} per report.
-          Videos are not shown to the client unless ticked.
+          Videos are shown to the client unless you untick them.
         </div>
       )}
       {mode === 'client' && (
-        <div className="text-[10.5px] text-neutral-500" data-testid="videos-not-yet-sent-note">
-          Videos are not part of the emailed or downloaded report yet. Your choices here are saved and will apply once client video links are switched on.
-          Only ticked videos will ever be shared.
+        <div className="text-[10.5px] text-neutral-500" data-testid="videos-in-report-note">
+          Each ticked video appears in the client report as a thumbnail with a “Watch video” link. Untick a video to keep it from the client.
         </div>
       )}
     </div>

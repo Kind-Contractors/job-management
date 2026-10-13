@@ -1397,7 +1397,6 @@ export default function ReadyForClientPage({
                         reviewStatus={report.reviewStatus}
                         reviewedAt={report.reviewedAt}
                         completed={(report.completedAt ?? null) != null}
-                        includeVideos={report.includeVideos !== false}
                         actor={actor}
                       />
                     </div>
