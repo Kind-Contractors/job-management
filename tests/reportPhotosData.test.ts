@@ -3,19 +3,21 @@
 import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { PHOTO_MAX_ORIGINAL_BYTES, addReportPhoto, checkPhotoFile, explainPhotoError, removeReportPhoto } from '../src/repository/reportPhotosRepository';
+import { PHOTO_MAX_ORIGINAL_BYTES, addReportPhoto, checkPhotoFile, explainPhotoError, moveReportPhoto, removeReportPhoto } from '../src/repository/reportPhotosRepository';
 
 interface Logged { method: string; path: string; search: string; body: any; headers: Headers }
 const server = {
   log: [] as Logged[],
   failNext: null as null | { match: RegExp; status: number; body: unknown },
   deleteRows: [{ id: 'p1' }] as unknown[],
+  patchRows: [{ id: 'p1' }] as unknown[],
   removeStatus: 200,
 };
 function reset() {
   server.log = [];
   server.failNext = null;
   server.deleteRows = [{ id: 'p1' }];
+  server.patchRows = [{ id: 'p1' }];
   server.removeStatus = 200;
 }
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -38,6 +40,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
     return json(201, wantsObject ? row : [row]);
   }
   if (path === '/rest/v1/photos' && method === 'DELETE') return json(200, server.deleteRows);
+  if (path === '/rest/v1/photos' && method === 'PATCH') return json(200, server.patchRows);
   if (path === '/rest/v1/activity_events' && method === 'POST') return new Response(null, { status: 201 });
   if (path.startsWith('/storage/v1/object/visit-photos/') && method === 'POST') return json(200, { Key: 'ok' });
   if (path === '/storage/v1/object/visit-photos' && method === 'DELETE') return server.removeStatus === 200 ? json(200, [{ name: 'x' }]) : json(server.removeStatus, { message: 'storage is down' });
@@ -158,6 +161,48 @@ test('REMOVE: if only the FILE cannot be deleted the photo is still removed from
   const result = await removeReportPhoto(PHOTO, REPORT, 'luke@x');
   assert.deepEqual(result, { fileCleanupFailed: true });
   assert.equal(calls(/^POST \/rest\/v1\/activity_events$/).length, 1, 'the removal is still recorded');
+});
+
+// ---- moving between sections -------------------------------------------------------------------------------------------------
+test('MOVE: writes ONLY the new section, on that one photo of that one report, and only while it is still where it was', async () => {
+  await moveReportPhoto({ id: 'p1', phase: 'after' }, 'before', REPORT, 'luke@x');
+  const patch = server.log.find((l) => l.method === 'PATCH' && l.path === '/rest/v1/photos')!;
+  assert.deepEqual(patch.body, { phase: 'before' }, 'no include_in_client_report, no storage_path, no technician_id, no upload_status');
+  assert.match(patch.search, /id=eq\.p1/);
+  assert.match(patch.search, new RegExp(`report_id=eq\.${REPORT}`));
+  assert.match(patch.search, /phase=eq\.after/, 'conditional on the section it is being moved FROM');
+});
+
+test('MOVE: never touches Storage - the file and its path stay exactly as they were', async () => {
+  await moveReportPhoto({ id: 'p1', phase: 'before' }, 'during', REPORT, 'luke@x');
+  assert.equal(calls(/storage/).length, 0);
+});
+
+test('MOVE: the report history records it as from:to', async () => {
+  await moveReportPhoto({ id: 'p1', phase: 'during' }, 'after', REPORT, 'luke@x');
+  const event = server.log.find((l) => l.path === '/rest/v1/activity_events')!;
+  assert.equal(event.body.event_type, 'report_photo_moved');
+  assert.equal(event.body.detail, 'during:after');
+  assert.equal(event.body.entity_id, REPORT);
+  assert.equal(event.body.actor, 'luke@x');
+});
+
+test('MOVE to the section it is already in does nothing at all (no request, no history)', async () => {
+  await moveReportPhoto({ id: 'p1', phase: 'before' }, 'before', REPORT, 'luke@x');
+  assert.equal(server.log.length, 0);
+});
+
+test('MOVE: if someone else moved or removed it first, nothing is changed and the manager is told to reload', async () => {
+  server.patchRows = [];
+  await assert.rejects(moveReportPhoto({ id: 'p1', phase: 'before' }, 'after', REPORT, 'luke@x'), /already been moved or removed/);
+  assert.equal(calls(/activity_events/).length, 0, 'and nothing is written to the history');
+});
+
+test('MOVE: a refusal from the database is passed on and nothing is recorded', async () => {
+  server.failNext = { match: /PATCH \/rest\/v1\/photos/, status: 403, body: { message: 'new row violates row-level security policy' } };
+  await assert.rejects(moveReportPhoto({ id: 'p1', phase: 'before' }, 'after', REPORT, 'luke@x'), /row-level security/);
+  assert.equal(calls(/activity_events/).length, 0);
+  assert.match(explainPhotoError(new Error('new row violates row-level security policy')), /You don’t have permission to change photos/);
 });
 
 // ---- errors ----------------------------------------------------------------------------------------------------------------------
