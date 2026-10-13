@@ -21,6 +21,7 @@ import type { QueuedVideo } from './offline/videoDb';
 import { countsForPhase, videoDisplay, type VideoDisplay } from './offline/videoQueueLogic';
 import { useSyncStatus } from './offline/syncEngine';
 import { readVideoMetadata } from '../lib/videoMetadata';
+import ConfirmDeleteDialog from './ConfirmDeleteDialog';
 import {
   REPORT_VIDEO_LIMITS,
   VIDEO_ACCEPT,
@@ -86,29 +87,28 @@ export function QueuedVideoTile(p: QueuedVideoTileProps) {
             {v.lastError}
           </div>
         )}
-        {p.confirmingRemove ? (
-          <div role="alertdialog" aria-label="Confirm removing this video" className="border border-due bg-due/10 p-1 text-due-fg">
-            {v.status === 'uploading' ? 'Cancel this upload and remove the video?' : 'Remove this video? It has not reached the office yet, so it will be lost.'}
-            <div className="mt-1 flex gap-1">
-              <button onClick={p.onConfirmRemove} className="cursor-pointer bg-missed px-1.5 py-0.5 font-semibold text-white">
-                Remove
-              </button>
-              <button onClick={p.onKeep} className="cursor-pointer border border-neutral-300 px-1.5 py-0.5 text-neutral-700">
-                Keep
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="flex gap-2">
-            {p.display.retryable && (
-              <button onClick={p.onRetry} className="cursor-pointer font-semibold text-teal-700 underline">
-                Try again
-              </button>
-            )}
-            <button onClick={p.onAskRemove} className="cursor-pointer text-missed-fg underline">
-              {v.status === 'uploading' ? 'Cancel' : 'Remove'}
+        <div className="flex gap-2">
+          {p.display.retryable && (
+            <button onClick={p.onRetry} className="cursor-pointer font-semibold text-teal-700 underline">
+              Try again
             </button>
-          </div>
+          )}
+          <button onClick={p.onAskRemove} className="cursor-pointer text-missed-fg underline">
+            {v.status === 'uploading' ? 'Cancel' : 'Delete'}
+          </button>
+        </div>
+        {p.confirmingRemove && (
+          <ConfirmDeleteDialog
+            ariaLabel="Delete this video"
+            message={
+              v.status === 'uploading'
+                ? 'Are you sure you want to cancel this upload and delete the video?'
+                : 'Are you sure you want to delete this video? It has not reached the office yet, so it will be lost.'
+            }
+            busy={false}
+            onCancel={p.onKeep}
+            onConfirm={p.onConfirmRemove}
+          />
         )}
       </div>
     </div>
@@ -151,24 +151,21 @@ export function ServerVideoTile(p: ServerVideoTileProps) {
             {p.playError}
           </div>
         )}
-        {p.confirmingRemove ? (
-          <div role="alertdialog" aria-label="Confirm removing this video" className="border border-due bg-due/10 p-1 text-due-fg">
-            Remove this video from the report?
-            <div className="mt-1 flex gap-1">
-              <button onClick={p.onConfirmRemove} disabled={p.removePending} className="cursor-pointer bg-missed px-1.5 py-0.5 font-semibold text-white disabled:opacity-50">
-                {p.removePending ? 'Removing…' : 'Remove'}
-              </button>
-              <button onClick={p.onKeep} disabled={p.removePending} className="cursor-pointer border border-neutral-300 px-1.5 py-0.5 text-neutral-700">
-                Keep
-              </button>
-            </div>
-          </div>
-        ) : v.canDelete ? (
-          <button onClick={p.onAskRemove} className="w-fit cursor-pointer text-missed-fg underline">
-            Remove
+        {v.canDelete ? (
+          <button onClick={p.onAskRemove} disabled={p.removePending} className="w-fit cursor-pointer text-missed-fg underline disabled:opacity-50">
+            Delete
           </button>
         ) : (
           <div className="text-neutral-500">The office has approved this report</div>
+        )}
+        {p.confirmingRemove && v.canDelete && (
+          <ConfirmDeleteDialog
+            ariaLabel="Delete this video"
+            message="Are you sure you want to delete this video?"
+            busy={p.removePending}
+            onCancel={p.onKeep}
+            onConfirm={p.onConfirmRemove}
+          />
         )}
         {p.removeError && (
           <div role="alert" className="text-missed-fg">
@@ -277,12 +274,12 @@ export default function TechnicianVideos({ visitId, userId }: { visitId: string;
     setRemoveError(null);
     try {
       await deleteMyVideo(v.id);
-      setConfirmId(null);
       if (playing?.id === v.id) setPlaying(null);
       await queryClient.invalidateQueries({ queryKey: key });
     } catch (e) {
       setRemoveError({ id: v.id, message: online ? explainVideoError(e) : 'You need to be online to remove a video that has already reached the office.' });
     } finally {
+      setConfirmId(null); // close the popup either way; on a failure the message shows on the tile and the video stays
       setRemovePendingId(null);
     }
   };

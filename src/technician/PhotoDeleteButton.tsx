@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { createPortal } from 'react-dom';
 import { HiOutlineTrash } from 'react-icons/hi2';
+import ConfirmDeleteDialog from './ConfirmDeleteDialog';
 
 interface PhotoDeleteButtonProps {
   /** True for a photo that has already uploaded / is already in the report: the technician must confirm first. A photo that never left the device is removed straight away. */
@@ -21,8 +21,8 @@ interface PhotoDeleteButtonProps {
  *
  *   idle  ->  (confirm dialog, if needed)  ->  deleting  ->  gone (the parent drops the tile) or back to idle with an error
  *
- * The confirmation is a centred dialog over a dimmed page (rendered in a portal so the small photo tile
- * cannot clip it). A photo that never left the device skips the dialog and shows "Deleting…" on its tile.
+ * The confirmation is the shared centred dialog over a dimmed page (ConfirmDeleteDialog, also used for videos). A photo that never
+ * left the device skips the dialog and shows "Deleting…" on its tile.
  */
 export default function PhotoDeleteButton({ needsConfirm, disabled, ariaLabel, onDelete, onError }: PhotoDeleteButtonProps) {
   const [state, setState] = useState<'idle' | 'confirming' | 'deleting'>('idle');
@@ -66,48 +66,15 @@ export default function PhotoDeleteButton({ needsConfirm, disabled, ariaLabel, o
         </div>
       )}
 
-      {(state === 'confirming' || (busy && confirmed)) &&
-        createPortal(
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-near-black/50 p-4"
-            onClick={() => {
-              if (!busy) setState('idle');
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape' && !busy) setState('idle');
-            }}
-          >
-            <div
-              role="alertdialog"
-              aria-modal="true"
-              aria-label={ariaLabel}
-              className="w-full max-w-xs rounded-lg border border-neutral-300 bg-white px-5 py-6 text-center shadow-xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <p className="text-sm leading-snug text-ink">Are you sure you want to delete this photo?</p>
-              <div className="mt-5 flex gap-3">
-                <button
-                  type="button"
-                  autoFocus
-                  disabled={busy}
-                  onClick={() => setState('idle')}
-                  className="h-11 flex-1 cursor-pointer rounded-md border border-neutral-300 bg-white text-sm font-semibold text-neutral-700 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void run(true)}
-                  className="h-11 flex-1 cursor-pointer rounded-md bg-missed text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-70"
-                >
-                  {busy ? 'Deleting…' : 'Delete'}
-                </button>
-              </div>
-            </div>
-          </div>,
-          document.body,
-        )}
+      {(state === 'confirming' || (busy && confirmed)) && (
+        <ConfirmDeleteDialog
+          ariaLabel={ariaLabel}
+          message="Are you sure you want to delete this photo?"
+          busy={busy}
+          onCancel={() => setState('idle')}
+          onConfirm={() => void run(true)}
+        />
+      )}
     </>
   );
 }

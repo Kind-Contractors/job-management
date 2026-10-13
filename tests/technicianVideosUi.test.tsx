@@ -6,6 +6,8 @@ import 'fake-indexeddb/auto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
+import PhotoDeleteButton from '../src/technician/PhotoDeleteButton';
+import ConfirmDeleteDialog from '../src/technician/ConfirmDeleteDialog';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import TechnicianVideos, { QueuedVideoTile, ServerVideoTile } from '../src/technician/TechnicianVideos';
@@ -75,7 +77,7 @@ test('LIMITS: three in a section disables that section\'s button (with the reaso
   assert.match(phaseBlock(eight, 'after'), /At most 8 videos per job/);
 });
 
-test('VIDEOS ALREADY WITH THE OFFICE: shown under their section, with length, size, Play and Remove; after approval Remove is replaced by a note', () => {
+test('VIDEOS ALREADY WITH THE OFFICE: shown under their section, with length, size, Play and Delete; after approval Delete is replaced by a note', () => {
   const html = section([server('a', 'during'), server('b', 'during', { canDelete: false })]);
   const during = phaseBlock(html, 'during');
   assert.match(during, /During \(2\)/);
@@ -83,7 +85,7 @@ test('VIDEOS ALREADY WITH THE OFFICE: shown under their section, with length, si
   assert.match(during, /0:42 · 5\.0 MB/);
   assert.match(during, /Uploaded · with the office/);
   assert.match(during, /aria-label="Play During video"/);
-  assert.match(during, />\s*Remove\s*<\/button>/);
+  assert.match(during, />\s*Delete\s*<\/button>/);
   assert.match(during, /The office has approved this report/);
 });
 
@@ -123,30 +125,36 @@ test('QUEUED TILE: waiting online, waiting OFFLINE, retrying - each says plainly
   assert.match(tile(queued()), /0:30 · 12 MB/);
 });
 
-test('QUEUED TILE: uploading shows a live percentage and progress bar, and offers Cancel (not Remove)', () => {
+test('QUEUED TILE: uploading shows a live percentage and progress bar, and offers Cancel (not Delete)', () => {
   const html = tile(queued({ status: 'uploading' }), {}, true, 0.42);
   assert.match(html, /Uploading… 42%/);
   assert.match(html, /role="progressbar"[^>]*aria-valuenow="42"/);
   assert.match(html, /width:42%/);
   assert.match(html, />Cancel<\/button>/);
-  assert.doesNotMatch(html, />Remove<\/button>/);
+  assert.doesNotMatch(html, />Delete<\/button>/);
 });
 
-test('QUEUED TILE: a failed video shows why, with Try again and Remove; a refused one says it could not be sent', () => {
+test('QUEUED TILE: a failed video shows why, with Try again and Delete; a refused one says it could not be sent', () => {
   const failed = tile(queued({ status: 'failed', attempts: 6, lastError: 'The upload was interrupted. Check your connection and try again.' }));
   assert.match(failed, /Failed — tap to retry/);
   assert.match(failed, /role="alert"[^>]*>The upload was interrupted/);
   assert.match(failed, />Try again<\/button>/);
-  assert.match(failed, />Remove<\/button>/);
+  assert.match(failed, />Delete<\/button>/);
   const refused = tile(queued({ status: 'failed', permanentFailure: true, lastError: 'This report is marked Completed, so videos can’t be added or changed.' }));
   assert.match(refused, /Could not be sent/);
   assert.match(refused, /marked Completed/);
 });
 
-test('QUEUED TILE: removing asks first and warns the video has not reached the office; cancelling an upload says so', () => {
-  assert.match(tile(queued(), { confirmingRemove: true }), /Remove this video\? It has not reached the office yet, so it will be lost\./);
-  assert.match(tile(queued({ status: 'uploading' }), { confirmingRemove: true }, true, 0.1), /Cancel this upload and remove the video\?/);
-  assert.match(tile(queued(), { confirmingRemove: true }), /role="alertdialog"/);
+test('QUEUED TILE: deleting opens the same popup as a photo and warns the video has not reached the office; cancelling an upload says so', () => {
+  const idle = tile(queued());
+  assert.doesNotMatch(idle, /role="alertdialog"/, 'no popup until Delete is pressed');
+  const open = tile(queued(), { confirmingRemove: true });
+  assert.match(open, /role="alertdialog"[^>]*aria-modal="true"[^>]*aria-label="Delete this video"/);
+  assert.match(open, /Are you sure you want to delete this video\? It has not reached the office yet, so it will be lost\./);
+  assert.match(open, />Cancel<\/button>/);
+  assert.match(open, />Delete<\/button>/);
+  assert.match(open, /fixed inset-0/, 'a full-screen dimmed overlay, like the photo popup');
+  assert.match(tile(queued({ status: 'uploading' }), { confirmingRemove: true }, true, 0.1), /Are you sure you want to cancel this upload and delete the video\?/);
 });
 
 test('POSTER FALLBACK: with no poster the tile still has a Play button on a plain placeholder; with a poster it is shown', () => {
@@ -165,13 +173,29 @@ test('PREVIEW: a queued video plays from the file on the device (no network); a 
   assert.match(html, /<video[^>]*controls=""[^>]*src="https:\/\/x\.supabase\.co\/storage\/v1\/object\/sign\/report-videos\/p\.mp4\?token=t"/);
 });
 
-test('SERVER TILE: removal asks first, shows its own progress and its own failure (for example after the office approved)', () => {
+test('SERVER TILE: deleting opens the same popup as a photo, shows its own progress and its own failure (for example after the office approved)', () => {
   const render = (over: Record<string, unknown>) =>
     renderToStaticMarkup(
       <ServerVideoTile video={server('a', 'before')} posterUrl={null} playUrl={null} playError={null} confirmingRemove={false} removePending={false} removeError={null} onPlay={noop} onAskRemove={noop} onConfirmRemove={noop} onKeep={noop} {...over} />,
     );
-  assert.match(render({ confirmingRemove: true }), /Remove this video from the report\?/);
-  assert.match(render({ confirmingRemove: true, removePending: true }), /Removing…/);
+  assert.doesNotMatch(render({}), /role="alertdialog"/, 'no popup until Delete is pressed');
+  const open = render({ confirmingRemove: true });
+  assert.match(open, /role="alertdialog"[^>]*aria-modal="true"[^>]*aria-label="Delete this video"/);
+  assert.match(open, /Are you sure you want to delete this video\?/);
+  assert.match(open, /<button[^>]*autofocus=""[^>]*>Cancel<\/button>/, 'Cancel has focus, so a stray Enter does not delete');
+  assert.match(open, />Delete<\/button>/);
+  const busy = render({ confirmingRemove: true, removePending: true });
+  assert.match(busy, />Deleting…<\/button>/, 'the popup stays up and shows progress while the delete runs');
+  assert.equal((busy.match(/disabled=""/g) ?? []).length >= 2, true, 'both popup buttons are disabled while deleting');
   assert.match(render({ removeError: 'A video can only be removed before the office has approved the report. Please ask the office.' }), /role="alert"[^>]*>A video can only be removed before the office has approved/);
   assert.match(render({ playError: 'Connect to the internet to watch this video.' }), /Connect to the internet/);
+});
+
+test('POPUP PARITY: videos and photos use the same dialog component, so wording style, buttons and behaviour match', () => {
+  const photo = renderToStaticMarkup(<PhotoDeleteButton needsConfirm ariaLabel="Delete before photo" onDelete={async () => {}} onError={() => {}} />);
+  assert.doesNotMatch(photo, /role="alertdialog"/, 'idle photo button shows no popup');
+  const dialog = (message: string) => renderToStaticMarkup(<ConfirmDeleteDialog ariaLabel="x" message={message} busy={false} onCancel={() => {}} onConfirm={() => {}} />);
+  const photoPopup = dialog('Are you sure you want to delete this photo?');
+  const videoPopup = dialog('Are you sure you want to delete this video?');
+  assert.equal(photoPopup.replace('photo', 'video'), videoPopup, 'identical markup apart from the word');
 });
