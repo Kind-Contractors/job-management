@@ -169,15 +169,20 @@ test('CARD: a playback failure says so and offers Reload; a video with no poster
   assert.doesNotMatch(bare, /<img/);
 });
 
-test('REMOVE needs confirmation, says what it does (links stop, file kept), and shows its own failure', () => {
+test('REMOVE asks in the same centred popup as the technician view (not inline), says what it does, and shows its own failure', () => {
   const idle = renderToStaticMarkup(<VideoCard {...cardProps()} />);
   assert.doesNotMatch(idle, /alertdialog/);
+  assert.match(idle, />Remove<\/button>/);
   const asking = renderToStaticMarkup(<VideoCard {...cardProps({ confirmingRemove: true })} />);
-  assert.match(asking, /role="alertdialog"/);
-  assert.match(asking, /Remove this video\? The client will no longer be able to open it and any links already sent stop working\. The file is kept\./);
-  assert.match(asking, />Remove video<\/button>/);
-  assert.match(asking, />Keep<\/button>/);
-  assert.match(renderToStaticMarkup(<VideoCard {...cardProps({ confirmingRemove: true, removePending: true })} />), /Removing…/);
+  assert.match(asking, /class="fixed inset-0 z-50[^"]*"/, 'a popup over a dimmed page');
+  assert.match(asking, /role="alertdialog" aria-modal="true" aria-label="Delete Before video"/);
+  assert.match(asking, /Are you sure you want to delete this video\? The client will no longer be able to open it and any links already sent stop working\. The file is kept\./);
+  assert.match(asking, />Cancel<\/button>/);
+  assert.match(asking, />Delete<\/button>/);
+  assert.doesNotMatch(asking, />Keep<\/button>|>Remove video<\/button>/, 'the old inline box is gone');
+  const busy = renderToStaticMarkup(<VideoCard {...cardProps({ confirmingRemove: true, removePending: true })} />);
+  assert.match(busy, /Deleting…/);
+  assert.equal((busy.match(/<button[^>]*disabled=""[^>]*>(Cancel|Deleting…)<\/button>/g) ?? []).length, 2, 'both popup buttons are disabled while it runs');
   assert.match(renderToStaticMarkup(<VideoCard {...cardProps({ removeError: 'You don’t have permission to do that.' })} />), /role="alert"[^>]*>You don’t have permission/);
 });
 
