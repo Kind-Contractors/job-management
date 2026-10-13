@@ -45,8 +45,9 @@ followed by a fingerprint comparison: only the intended objects may differ.
 | 3 | `20261012140100_report_videos_hardening` | stricter limits/guards, soft-delete + revocation, storage policies | #1 |
 | 4 | `20261013100000_report_video_link_reuse` | `token_scheme`, link plan + register functions | #3 |
 | 5 | `20261013110000_watch_rate_limits` | rate-limit counter table + 2 functions (service role only) | #4 |
+| 6 | `20261014100000_report_video_default_included` | one column default: videos are included for the client by default (no existing row changes) | #1 |
 
-Rehearsal done: #1-#4 on a local Postgres 17 container and on DEV (regression suites 159/159 + 25/25); #5 on local (9/9 behaviour, privileges) and DEV.
+Rehearsal done: #1-#4 on a local Postgres 17 container and on DEV (regression suites 159/159 + 25/25); #5 on local (9/9 behaviour, privileges) and DEV; #6 on local (existing video rows keep their flags; refused out of order or twice) and DEV. The production kit scripts `prod-apply-01` to `prod-apply-06` are the same files rehearsed together on a database built to production's pre-video state.
 
 ## 5. Secret and Edge Functions (production)
 
@@ -58,6 +59,8 @@ Rehearsal done: #1-#4 on a local Postgres 17 container and on DEV (regression su
 6. Verify the list shows `verify_jwt = true` for the issuing function and `false` for the watch function.
 
 ## 6. Frontend
+
+**Before merging:** `main` has moved on since this plan was written (`e1fe370`, a mobile-logout change committed directly on `main`), so `dev` can no longer fast-forward into it. Merge `origin/main` into `dev` first (expected to be clean: it touches `TopBar.tsx`, a new `LogoutButton.tsx` and a new test), re-run the tests and build, then fast-forward `main`. `dev` now also carries the delete-confirmation popup commit and the Report Review changes (autosave instead of a Save button, no report-level video switch, manager photo add/remove).
 
 Merge the reviewed commit(s) from `dev` to `main`, build (`npm run build`), deploy the build **after** steps 2-5 (the app calls the issuing function when a PDF is
 downloaded or emailed; without the function that action stops with a clear message). The only new dependency is `tus-js-client`.
