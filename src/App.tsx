@@ -9,6 +9,7 @@ import BuildingsPage from './pages/BuildingsPage';
 import BuildingFilePage from './pages/BuildingFilePage';
 import ThisWeekPage from './pages/ThisWeekPage';
 import MonthMatrixPage from './pages/MonthMatrixPage';
+import MonthlyPlanPage from './pages/MonthlyPlanPage';
 import ReportReviewPage from './pages/ReportReviewPage';
 import ReadyForAccountsPage from './pages/ReadyForAccountsPage';
 import ReadyForClientPage from './pages/ReadyForClientPage';
@@ -62,6 +63,7 @@ export default function App() {
         <Route path="/buildings" element={<BuildingsPage />} />
         <Route path="/buildings/:buildingId" element={<BuildingFilePage />} />
         <Route path="/this-week" element={<ThisWeekPage />} />
+        <Route path="/monthly-plan" element={<MonthlyPlanPage />} />
         <Route path="/month-matrix" element={<MonthMatrixPage />} />
         <Route path="/report-review" element={<ReportReviewPage />} />
         <Route path="/ready-for-accounts" element={<ReadyForAccountsPage />} />

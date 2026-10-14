@@ -181,6 +181,12 @@ export interface Schedule {
   dayOfMonth: number | null;
   rollForwardOnWeekend: boolean;
   dueMonth: number | null;
+  /**
+   * One real date this recurrence is counted from, supplying the cycle's PHASE only - never the day. Null means it was
+   * never recorded, and every derivation then falls back to its pre-anchor behaviour rather than guessing a phase.
+   * See the 20261014164016_schedules_anchor_date migration.
+   */
+  anchorDate: string | null;
   notes: string | null;
 }
 

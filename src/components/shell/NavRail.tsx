@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useSearchParams, useNavigate } from 'react-router-dom';
 import type { IconType } from 'react-icons';
@@ -20,6 +20,7 @@ import { listTechnicians } from '../../repository/techniciansRepository';
 import { listUsers } from '../../repository/usersRepository';
 import { listVisitsWithVideosNoReport } from '../../repository/reportVideosRepository';
 import { queueCounts, useQueueJobRows } from '../../lib/queueJobs';
+import { buildMonthlyPlan, needsBookingCount, shiftMonthPrefix } from '../../lib/monthlyPlan';
 import { confirmLeave } from '../../lib/unsavedEditsGuard';
 
 const DIVISIONS = ['General', 'Specialist', 'Both'] as const;
@@ -108,6 +109,7 @@ export default function NavRail() {
   const onJobs = pathname === '/jobs';
   const onBuildings = pathname.startsWith('/buildings');
   const onThisWeek = pathname === '/this-week';
+  const onMonthlyPlan = pathname === '/monthly-plan';
   const onMonthMatrix = pathname === '/month-matrix';
   const onReportReview = pathname === '/report-review';
   const onReadyForAccounts = pathname === '/ready-for-accounts';
@@ -126,6 +128,13 @@ export default function NavRail() {
   // chips, unchanged.
   const counts = queueCounts(queueJobRows, division);
   const reviewCount = counts.review;
+
+  // Next month's outstanding work, derived from the already-cached jobRows - no extra query. Matches the page's
+  // own default month so the badge and the page always agree.
+  const monthlyPlanToBook = useMemo(() => {
+    const todayISO = new Date().toISOString().slice(0, 10);
+    return needsBookingCount(buildMonthlyPlan(divisionFiltered, shiftMonthPrefix(todayISO.slice(0, 7), 1), todayISO));
+  }, [divisionFiltered]);
 
   // A report being "ready for accounts" is a per-visit condition (approved,
   // not yet sent to accounts), not a job-level status — a job can have this
@@ -162,6 +171,7 @@ export default function NavRail() {
     { key: 'jobs', label: 'All live jobs', icon: HiOutlineBriefcase, active: onJobs && !status, count: divisionFiltered.length, onClick: () => goToView('client') },
     { key: 'buildings', label: 'Buildings', icon: HiOutlineBuildingOffice2, active: onBuildings, count: buildingRows.length, onClick: () => navigate('/buildings') },
     { key: 'schedule', label: 'Schedule', icon: HiOutlineCalendarDays, active: onThisWeek, count: technicians.length, onClick: () => navigate('/this-week') },
+    { key: 'monthlyPlan', label: 'Monthly plan', icon: HiOutlineCalendarDays, active: onMonthlyPlan, count: monthlyPlanToBook, onClick: () => navigate('/monthly-plan') },
     { key: 'matrix', label: 'Month matrix', icon: HiOutlineTableCells, active: onMonthMatrix, count: divisionFiltered.length, onClick: () => navigate('/month-matrix') },
     { key: 'reviews', label: 'Report review', icon: HiOutlineClipboardDocumentCheck, active: onReportReview, count: reviewCount, onClick: () => navigate('/report-review') },
     { key: 'users', label: 'Users', icon: HiOutlineUsers, active: onUsers, count: users.filter((u) => u.isActive).length, onClick: () => navigate('/users') },

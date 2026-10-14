@@ -57,7 +57,7 @@ const VISIT_LABEL: Record<keyof typeof VISIT_KIND_PRIORITY, string> = {
  */
 export function deriveMonthCellStates(job: JobRow, year: number, todayISO: string): MonthCellState[] {
   const dueMonths =
-    job.schedule && job.schedule.scheduleType !== 'ad_hoc' ? monthsDueInYear(job.schedule) : null;
+    job.schedule && job.schedule.scheduleType !== 'ad_hoc' ? monthsDueInYear(job.schedule, year) : null;
 
   const cells: MonthCellState[] = [];
 

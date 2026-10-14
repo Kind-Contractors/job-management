@@ -37,6 +37,8 @@ interface FormState {
   dayOfMonth: string;
   rollForwardOnWeekend: boolean;
   dueMonth: string;
+  /** 'YYYY-MM-DD' or '' — the cycle's phase. Empty is legitimate: only a monthly cadence is determinable without it. */
+  anchorDate: string;
   notes: string;
 }
 
@@ -49,6 +51,7 @@ const BLANK_FORM: FormState = {
   dayOfMonth: '1',
   rollForwardOnWeekend: true,
   dueMonth: '1',
+  anchorDate: '',
   notes: '',
 };
 
@@ -62,6 +65,7 @@ function formFromSchedule(s: Schedule): FormState {
     dayOfMonth: s.dayOfMonth != null ? String(s.dayOfMonth) : '1',
     rollForwardOnWeekend: s.rollForwardOnWeekend,
     dueMonth: s.dueMonth != null ? String(s.dueMonth) : '1',
+    anchorDate: s.anchorDate ?? '',
     notes: s.notes ?? '',
   };
 }
@@ -69,6 +73,8 @@ function formFromSchedule(s: Schedule): FormState {
 /** Builds a validated ScheduleInput, or null while the form is incomplete/invalid — never inferred from frequency, only from what's typed here. */
 function toInput(form: FormState): ScheduleInput | null {
   const notes = form.notes.trim() || null;
+  // Only ever a phase, never a day. An ad_hoc schedule has no cycle, so it never carries one (the database refuses it).
+  const anchorDate = form.anchorDate.trim() || null;
 
   if (form.scheduleType === 'ad_hoc') {
     return { scheduleType: 'ad_hoc', notes };
@@ -84,6 +90,7 @@ function toInput(form: FormState): ScheduleInput | null {
       intervalCount,
       weekday: form.weekday,
       weekOrdinal: form.weekOrdinal,
+      anchorDate,
       notes,
     };
   }
@@ -97,6 +104,7 @@ function toInput(form: FormState): ScheduleInput | null {
       intervalCount,
       dayOfMonth,
       rollForwardOnWeekend: form.rollForwardOnWeekend,
+      anchorDate,
       notes,
     };
   }
@@ -104,7 +112,7 @@ function toInput(form: FormState): ScheduleInput | null {
   if (form.scheduleType === 'due_month') {
     const dueMonth = Number(form.dueMonth);
     if (!Number.isInteger(dueMonth) || dueMonth < 1 || dueMonth > 12) return null;
-    return { scheduleType: 'due_month', intervalUnit: form.intervalUnit, intervalCount, dueMonth, notes };
+    return { scheduleType: 'due_month', intervalUnit: form.intervalUnit, intervalCount, dueMonth, anchorDate, notes };
   }
 
   return null;
@@ -335,6 +343,25 @@ export default function ScheduleEditor({ jobId, schedule }: ScheduleEditorProps)
                   </option>
                 ))}
               </select>
+            </label>
+          )}
+
+          {/* The cycle's PHASE. Only meaningful for a cadence longer than a month - a monthly job is due every
+              month, so there is nothing to phase - and never allowed on ad_hoc, which has no cycle at all. */}
+          {form.scheduleType !== '' && form.scheduleType !== 'ad_hoc' && (
+            <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
+              Counted from (optional)
+              <input
+                type="date"
+                value={form.anchorDate}
+                onChange={(e) => setForm({ ...form, anchorDate: e.target.value })}
+                className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+              />
+              <span className="text-[10.5px] text-neutral-500">
+                {Number(form.intervalCount) === 1 && form.intervalUnit === 'month'
+                  ? 'Not needed for a monthly job — every month is in the cycle.'
+                  : 'A date this job was genuinely due. Without it, the app can’t tell which months a less-than-monthly cycle falls in (for example “3rd Wednesday every quarter” starting July).'}
+              </span>
             </label>
           )}
 

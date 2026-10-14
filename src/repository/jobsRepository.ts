@@ -103,7 +103,7 @@ const JOB_SELECT = `
     building_access ( access_notes )
   ),
   technicians ( id, name, is_active ),
-  schedules ( schedule_type, interval_unit, interval_count, weekday, week_ordinal, day_of_month, roll_forward_on_weekend, due_month, notes ),
+  schedules ( schedule_type, interval_unit, interval_count, weekday, week_ordinal, day_of_month, roll_forward_on_weekend, due_month, anchor_date, notes ),
   visits (
     id, technician_id, scheduled_date, status, price_charged, completed_at,
     technicians ( id, name, is_active ),

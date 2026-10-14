@@ -54,6 +54,18 @@ function dayOfMonthSuffix(day: number): string {
 }
 
 export function describeSchedule(s: Schedule): string {
+  return s.anchorDate ? `${describeScheduleCore(s)}${anchorSuffix(s)}` : describeScheduleCore(s);
+}
+
+/** " (counted from Jul 2026)" — only worth saying for a cadence longer than a month, where it decides which months are in cycle. */
+function anchorSuffix(s: Schedule): string {
+  const step = stepMonths(s);
+  if (s.anchorDate == null || step == null || step === 1) return '';
+  const month = MONTH_SHORT_LABEL[Number(s.anchorDate.slice(5, 7)) - 1];
+  return ` (counted from ${month} ${s.anchorDate.slice(0, 4)})`;
+}
+
+function describeScheduleCore(s: Schedule): string {
   switch (s.scheduleType) {
     case 'ad_hoc':
       return 'Ask / ad-hoc — booked on request';
@@ -123,125 +135,139 @@ function rollForwardWeekend(d: Date): Date {
   return d;
 }
 
-/**
- * A deterministic next-occurrence date, or null when the schedule doesn't
- * store enough information to compute one without guessing — see the
- * reviewed plan for the full case-by-case rationale. Only ever computed
- * from the schedule's own fields and today's date, never from visit
- * history (schedules and visits stay decoupled). Purely a UI suggestion:
- * nothing here creates a visit or writes anything.
- *
- * Deliberately narrow: only `fixed_weekday`/`fixed_date` with
- * `intervalUnit === 'month' && intervalCount === 1` (literally monthly,
- * so every month is genuinely "in the cycle" with nothing to guess) ever
- * returns a date. `ad_hoc` and `due_month` never do (no day is ever
- * stored for either). `week`/`quarter`/`year` intervals, or `month` with
- * `intervalCount > 1`, never do either — the schema has no stored anchor
- * saying which specific week/quarter/year-cycle or which of the N months
- * the recurrence is phased against, so picking one would be inventing
- * information the schedule doesn't provide. Do not extend this to those
- * cases without a schema change that adds a real anchor field.
- */
-export function suggestNextDate(s: Schedule, todayISO: string): string | null {
-  if (s.scheduleType === 'ad_hoc' || s.scheduleType === 'due_month') return null;
-  if (s.intervalUnit !== 'month' || s.intervalCount !== 1) return null;
+/** Whole months since year 0 for a 'YYYY-MM-DD' — string-sliced, never `new Date()`, so no timezone can shift the month. */
+function monthIndexOfISO(iso: string): number {
+  return Number(iso.slice(0, 4)) * 12 + (Number(iso.slice(5, 7)) - 1);
+}
 
-  const today = new Date(`${todayISO}T00:00:00`);
-  const year = today.getFullYear();
-  const month = today.getMonth();
-
-  if (s.scheduleType === 'fixed_weekday') {
-    if (!s.weekOrdinal || !s.weekday) return null;
-    const thisMonth = nthWeekdayOfMonth(year, month, s.weekOrdinal, s.weekday);
-    if (toISODate(thisMonth) >= todayISO) return toISODate(thisMonth);
-    return toISODate(nthWeekdayOfMonth(year, month + 1, s.weekOrdinal, s.weekday));
-  }
-
-  if (s.scheduleType === 'fixed_date') {
-    if (s.dayOfMonth == null) return null;
-    for (let offset = 0; offset <= 12; offset++) {
-      const raw = fixedDateInMonth(year, month + offset, s.dayOfMonth);
-      if (!raw) continue;
-      const candidate = s.rollForwardOnWeekend ? rollForwardWeekend(raw) : raw;
-      const candidateISO = toISODate(candidate);
-      if (candidateISO >= todayISO) return candidateISO;
-    }
-    return null;
-  }
-
-  return null;
+/** The schedule's cadence in whole calendar months, or null when it doesn't convert cleanly (a 'week' interval never does). */
+function stepMonths(s: Schedule): number | null {
+  if (s.intervalUnit == null || s.intervalCount == null || s.intervalCount < 1) return null;
+  if (s.intervalUnit === 'week') return null;
+  return s.intervalUnit === 'month' ? s.intervalCount : s.intervalUnit === 'quarter' ? s.intervalCount * 3 : s.intervalCount * 12;
 }
 
 /**
- * The set of calendar months (1-12) this schedule is honestly "due" in,
- * every year — or `null` when that can't be safely computed from what's
- * stored (see the Month Matrix plan's §3.1 for the full case-by-case
- * rationale). Only ever called for a real structured (non-`ad_hoc`)
- * schedule; the caller decides `ad_hoc`/no-schedule separately.
+ * Is `year`/`month` (1-12) genuinely in this schedule's cycle? `true`/`false` when it can be said, `null` when it
+ * cannot without guessing. This is the ONE phasing rule in the codebase; everything else below is a wrapper.
  *
- * `fixed_weekday`/`fixed_date`: determinable only for literally-monthly
- * cadence (`intervalUnit === 'month' && intervalCount === 1`) — every
- * month is genuinely in the cycle, same restriction `suggestNextDate`
- * already enforces. Any other interval never stores an anchor month, so
- * no specific month(s) can be named without guessing.
+ * With an `anchorDate` the answer is exact for any interval: count the whole months between the anchor's month and
+ * this one and see whether the cadence divides it. The modulo is taken the long way round so a month BEFORE the
+ * anchor answers correctly too — the anchor records the phase, it is not a start date (`jobs.service_ends_on` is
+ * still the only end boundary).
  *
- * `due_month`: does store a real anchor month, so the full set is
- * computed by stepping forward from `dueMonth` by the schedule's own
- * interval, converted to whole months (`week` never converts cleanly to
- * a fixed calendar month — not determinable). Only returned when the
- * step evenly divides 12, so the same set of months recurs identically
- * every calendar year shown — a step that doesn't (e.g. every 5 months)
- * would put different months in-cycle in different years, and there's no
- * stored anchor *year* to resolve that, so it's left undetermined rather
- * than guessed.
+ * Without one, the behaviour is exactly what it was before anchors existed: a literally-monthly cadence is in cycle
+ * every month, `due_month` repeats annually when its step divides 12, and anything else is simply not determinable.
  */
-export function monthsDueInYear(s: Schedule): Set<number> | null {
-  if (s.scheduleType === 'fixed_weekday' || s.scheduleType === 'fixed_date') {
-    if (s.intervalUnit === 'month' && s.intervalCount === 1) {
-      return new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-    }
-    return null;
+export function isMonthInCycle(s: Schedule, year: number, month: number): boolean | null {
+  if (s.scheduleType === 'ad_hoc') return null;
+  const step = stepMonths(s);
+  if (step == null) return null;
+
+  if (s.anchorDate != null) {
+    const delta = year * 12 + (month - 1) - monthIndexOfISO(s.anchorDate);
+    return (((delta % step) + step) % step) === 0;
   }
 
   if (s.scheduleType === 'due_month') {
-    if (s.dueMonth == null || s.intervalUnit == null || s.intervalCount == null) return null;
-    if (s.intervalUnit === 'week') return null;
-
-    const stepMonths = s.intervalUnit === 'month' ? s.intervalCount : s.intervalUnit === 'quarter' ? s.intervalCount * 3 : s.intervalCount * 12;
-    if (stepMonths <= 0 || 12 % stepMonths !== 0) return null;
-
-    const months = new Set<number>();
-    let m = ((s.dueMonth - 1) % 12 + 12) % 12;
-    for (let i = 0; i < 12 / stepMonths; i++) {
-      months.add(m + 1);
-      m = (m + stepMonths) % 12;
-    }
-    return months;
+    if (s.dueMonth == null) return null;
+    if (12 % step !== 0) return null;
+    return ((((month - s.dueMonth) % 12) + 12) % 12) % step === 0;
   }
 
+  // fixed_weekday / fixed_date with no anchor: only a literally-monthly cadence is phase-free.
+  return step === 1 ? true : null;
+}
+
+/**
+ * A deterministic next-occurrence date, or null when the schedule doesn't store enough information to compute one
+ * without guessing. Only ever computed from the schedule's own fields and today's date, never from visit history
+ * (schedules and visits stay decoupled). Purely a UI suggestion: nothing here creates a visit or writes anything.
+ *
+ * With an `anchorDate` this works for ANY interval, because the anchor says which cycle the job is on. Without one
+ * the old limit still applies and is the honest answer: only a literally-monthly `fixed_weekday`/`fixed_date` has
+ * nothing to guess. `ad_hoc` never returns a date, and `due_month` only does when an anchor supplies the day.
+ */
+export function suggestNextDate(s: Schedule, todayISO: string): string | null {
+  if (s.scheduleType === 'ad_hoc') return null;
+  const step = stepMonths(s);
+  if (step == null) return null;
+
+  const todayIdx = monthIndexOfISO(todayISO);
+  let startIdx: number;
+  if (s.anchorDate == null) {
+    if (step !== 1) return null; // no phase stored: only a literally-monthly cadence is knowable
+    startIdx = todayIdx;
+  } else {
+    const anchorIdx = monthIndexOfISO(s.anchorDate);
+    startIdx = anchorIdx + Math.max(0, Math.ceil((todayIdx - anchorIdx) / step)) * step;
+  }
+
+  // 13 steps preserves the old fixed_date behaviour of scanning a year ahead for a day that exists (e.g. the 31st).
+  for (let i = 0; i < 13; i += 1) {
+    const idx = startIdx + i * step;
+    const candidate = suggestDateInMonth(s, Math.floor(idx / 12), (idx % 12) + 1);
+    if (candidate != null && candidate >= todayISO) return candidate;
+  }
   return null;
 }
 
 /**
- * The real date this schedule falls on within a specific `year`/`month`
- * (1-12) — for pre-filling the Month Matrix's booking form when a manager
- * clicks a due cell. `null` whenever no honest day can be computed:
- * `due_month` (no day ever stored), `ad_hoc` (no date at all), or any
- * interval other than literally-monthly (same restriction as
- * `suggestNextDate`/`monthsDueInYear` — never guess which month/week/
- * quarter-cycle phase a non-monthly schedule is on).
+ * The calendar months (1-12) this schedule is honestly "due" in during `year`, or `null` when that can't be said
+ * without guessing. Thin wrapper over `isMonthInCycle`, which holds the one phasing rule.
+ *
+ * `year` matters once a schedule has an anchor: a cadence that doesn't divide 12 (every five months, say) genuinely
+ * lands on different months in different years, so there is no single annual answer. It stays optional so existing
+ * anchor-less callers keep working unchanged; without it, an anchored schedule can only be answered when its step
+ * divides 12 and the set really does repeat every year.
+ */
+export function monthsDueInYear(s: Schedule, year?: number): Set<number> | null {
+  if (year == null) {
+    const step = stepMonths(s);
+    if (s.anchorDate != null && (step == null || 12 % step !== 0)) return null;
+    // Any reference year gives the same answer in the cases that reach here.
+    return monthsDueInYear(s, Number(s.anchorDate?.slice(0, 4) ?? 2000));
+  }
+
+  const months = new Set<number>();
+  for (let month = 1; month <= 12; month += 1) {
+    const inCycle = isMonthInCycle(s, year, month);
+    if (inCycle == null) return null;
+    if (inCycle) months.add(month);
+  }
+  return months;
+}
+
+/**
+ * The real date this schedule falls on within a specific `year`/`month` (1-12) — for pre-filling a booking form.
+ * `null` whenever no honest day can be computed, and the caller then falls back to the first of the month itself.
+ *
+ * The month must first be genuinely in the cycle (`isMonthInCycle`), which is what makes any interval safe here once
+ * an anchor exists. The DAY still comes only from what the schedule stores: `week_ordinal`+`weekday`, or
+ * `day_of_month`, or — for `due_month`, which stores no day at all — the anchor's own day-of-month. A day that does
+ * not exist in the target month (the 31st of February) returns `null` and is never clamped to a different day.
  */
 export function suggestDateInMonth(s: Schedule, year: number, month: number): string | null {
+  if (isMonthInCycle(s, year, month) !== true) return null;
   const monthIndex = month - 1;
 
   if (s.scheduleType === 'fixed_weekday') {
-    if (s.intervalUnit !== 'month' || s.intervalCount !== 1 || !s.weekOrdinal || !s.weekday) return null;
+    if (!s.weekOrdinal || !s.weekday) return null;
     return toISODate(nthWeekdayOfMonth(year, monthIndex, s.weekOrdinal, s.weekday));
   }
 
   if (s.scheduleType === 'fixed_date') {
-    if (s.intervalUnit !== 'month' || s.intervalCount !== 1 || s.dayOfMonth == null) return null;
+    if (s.dayOfMonth == null) return null;
     const raw = fixedDateInMonth(year, monthIndex, s.dayOfMonth);
+    if (!raw) return null;
+    return toISODate(s.rollForwardOnWeekend ? rollForwardWeekend(raw) : raw);
+  }
+
+  if (s.scheduleType === 'due_month') {
+    // No day is stored for due_month, so only an anchor can supply one. Without it the month is right but the day is
+    // genuinely unknown - which is the point of this schedule type.
+    if (s.anchorDate == null) return null;
+    const raw = fixedDateInMonth(year, monthIndex, Number(s.anchorDate.slice(8, 10)));
     if (!raw) return null;
     return toISODate(s.rollForwardOnWeekend ? rollForwardWeekend(raw) : raw);
   }

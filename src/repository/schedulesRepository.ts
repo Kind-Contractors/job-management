@@ -16,6 +16,8 @@ export type ScheduleInput =
       scheduleType: 'fixed_weekday';
       intervalUnit: ScheduleIntervalUnit;
       intervalCount: number;
+      /** Optional: one real date the cycle is counted from. Required for any cadence other than monthly to be determinable. */
+      anchorDate: string | null;
       weekday: ScheduleWeekday;
       weekOrdinal: ScheduleWeekOrdinal;
       notes: string | null;
@@ -24,6 +26,8 @@ export type ScheduleInput =
       scheduleType: 'fixed_date';
       intervalUnit: ScheduleIntervalUnit;
       intervalCount: number;
+      /** Optional: one real date the cycle is counted from. Required for any cadence other than monthly to be determinable. */
+      anchorDate: string | null;
       dayOfMonth: number;
       rollForwardOnWeekend: boolean;
       notes: string | null;
@@ -32,6 +36,8 @@ export type ScheduleInput =
       scheduleType: 'due_month';
       intervalUnit: ScheduleIntervalUnit;
       intervalCount: number;
+      /** Optional: one real date the cycle is counted from. Required for any cadence other than monthly to be determinable. */
+      anchorDate: string | null;
       dueMonth: number;
       notes: string | null;
     }
@@ -47,6 +53,7 @@ interface ScheduleRow {
   day_of_month: number | null;
   roll_forward_on_weekend: boolean;
   due_month: number | null;
+  anchor_date: string | null;
   notes: string | null;
 }
 
@@ -61,6 +68,9 @@ function toRow(jobId: string, input: ScheduleInput): ScheduleRow {
     day_of_month: null,
     roll_forward_on_weekend: true,
     due_month: null,
+    // Set in the base, not per branch: every write sends the FULL row, so switching a job to ad_hoc must clear a
+    // stale anchor (which the schedules_anchor_date_not_adhoc_check constraint would otherwise refuse).
+    anchor_date: null,
     notes: input.notes,
   };
 
@@ -72,6 +82,7 @@ function toRow(jobId: string, input: ScheduleInput): ScheduleRow {
         interval_count: input.intervalCount,
         weekday: input.weekday,
         week_ordinal: input.weekOrdinal,
+        anchor_date: input.anchorDate,
       };
     case 'fixed_date':
       return {
@@ -80,6 +91,7 @@ function toRow(jobId: string, input: ScheduleInput): ScheduleRow {
         interval_count: input.intervalCount,
         day_of_month: input.dayOfMonth,
         roll_forward_on_weekend: input.rollForwardOnWeekend,
+        anchor_date: input.anchorDate,
       };
     case 'due_month':
       return {
@@ -87,6 +99,7 @@ function toRow(jobId: string, input: ScheduleInput): ScheduleRow {
         interval_unit: input.intervalUnit,
         interval_count: input.intervalCount,
         due_month: input.dueMonth,
+        anchor_date: input.anchorDate,
       };
     case 'ad_hoc':
       return base;
