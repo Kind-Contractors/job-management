@@ -40,6 +40,7 @@ export const HISTORY_EVENT_LABEL: Record<string, string> = {
   report_photo_moved: 'Photo moved',
   report_video_added: 'Video added',
   report_video_removed: 'Video removed',
+  report_video_moved: 'Video moved',
   report_video_links_issued: 'Client video links created',
   report_video_links_revoked: 'Client video links revoked',
 };
@@ -51,7 +52,7 @@ export function historyEventDetail(eventType: string, detail: string | null): st
   if (!detail) return detail;
   if (eventType === 'report_video_added' || eventType === 'report_video_removed' || eventType === 'report_photo_added' || eventType === 'report_photo_removed') return VIDEO_PHASE_DETAIL[detail] ?? detail;
   // A move is written as "from:to" (for example "before:during").
-  if (eventType === 'report_photo_moved') {
+  if (eventType === 'report_photo_moved' || eventType === 'report_video_moved') {
     const [from, to] = detail.split(':');
     if (from && to && VIDEO_PHASE_DETAIL[from] && VIDEO_PHASE_DETAIL[to]) return `${VIDEO_PHASE_DETAIL[from]} → ${VIDEO_PHASE_DETAIL[to]}`;
   }

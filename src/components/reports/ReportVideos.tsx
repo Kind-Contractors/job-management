@@ -5,7 +5,8 @@
 //   * add a video (resumable upload, with progress; cancel; try again) - not on a Completed report;
 //   * play it (a short-lived signed link made only when Play is pressed; the browser streams it with Range requests);
 //   * tick / untick "Include for client" per video - not on a Completed report;
-//   * remove a video (soft delete: its client links stop working, the file is kept) - allowed on a Completed report too.
+//   * remove a video (soft delete: its client links stop working, the file is kept) - allowed on a Completed report too;
+//   * move a video to another section, for when a technician filed everything under one heading - not on a Completed report.
 // Orchestration (uploading, mutations, which video is playing / being removed) lives in ReportVideos; the pieces below it are
 // presentational so they can be rendered and checked on their own.
 import { useRef, useState } from 'react';
@@ -25,6 +26,7 @@ import ConfirmDeleteDialog from '../../technician/ConfirmDeleteDialog';
 import { VideoUploadController, type UploadState } from '../../lib/videoUploadController';
 import {
   listVideosForVisit,
+  moveReportVideo,
   removeReportVideo,
   setVideoClientInclusion,
   signVideoPlaybackUrl,
@@ -111,6 +113,11 @@ export interface VideoCardProps {
   removePending: boolean;
   removeError: string | null;
   addedAfterApproval: boolean;
+  /** The sections this video could move to: the other two, minus any that is already full. */
+  moveTargets: VideoPhase[];
+  /** True while this video's move is being saved: its "Move to" control is locked. */
+  movePending: boolean;
+  onMove: (toPhase: VideoPhase) => void;
   /** False where "Include for client" makes no sense (a visit that has no report yet). Defaults to true. */
   showInclude?: boolean;
   onPlay: () => void;
@@ -179,6 +186,29 @@ export function VideoCard(p: VideoCardProps) {
             Include for client
           </label>
         )}
+        {p.canChange && p.moveTargets.length > 0 && (
+          <label className="flex items-center gap-1 text-neutral-600">
+            <span className="sr-only">Move {VIDEO_PHASE_LABEL[v.phase].toLowerCase()} video to another section</span>
+            {/* A plain select: compact, and it opens as the native picker on a phone. */}
+            <select
+              value=""
+              disabled={p.movePending}
+              onChange={(e) => {
+                const to = e.target.value as VideoPhase | '';
+                if (to) p.onMove(to);
+              }}
+              aria-label={`Move ${VIDEO_PHASE_LABEL[v.phase].toLowerCase()} video to another section`}
+              className="cursor-pointer border border-neutral-300 bg-white px-1 py-0.5 text-[11px] text-neutral-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="">{p.movePending ? 'Moving…' : 'Move to…'}</option>
+              {p.moveTargets.map((other) => (
+                <option key={other} value={other}>
+                  {VIDEO_PHASE_LABEL[other]}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <button onClick={p.onAskRemove} className="w-fit cursor-pointer text-[11px] text-missed-fg hover:underline">
           Remove
         </button>
@@ -233,6 +263,8 @@ export default function ReportVideos({ visitId, reviewStatus, reviewedAt, comple
   const [playError, setPlayError] = useState<{ id: string; message: string } | null>(null);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null);
+  const [movePendingId, setMovePendingId] = useState<string | null>(null);
+  const moving = useRef(new Set<string>());
   const inputs = useRef<Record<VideoPhase, HTMLInputElement | null>>({ before: null, during: null, after: null });
 
   const videosKey = ['reportVideos', visitId];
@@ -273,6 +305,30 @@ export default function ReportVideos({ visitId, reviewStatus, reviewedAt, comple
       setRowError({ id, message: explainVideoError(e) });
     },
   });
+
+  /**
+   * Moves a video to another section. The screen shows it in its new place straight away; if the save fails it goes back
+   * where it was and the reason is shown under it. A second move of the SAME video is ignored while the first is saving.
+   */
+  const onMove = async (video: ReportVideo, toPhase: VideoPhase) => {
+    if (completed || toPhase === video.phase || moving.current.has(video.id)) return;
+    moving.current.add(video.id);
+    setRowError(null);
+    setMovePendingId(video.id);
+    const previous = queryClient.getQueryData<ReportVideo[]>(videosKey);
+    queryClient.setQueryData<ReportVideo[]>(videosKey, (old) => (old ?? []).map((x) => (x.id === video.id ? { ...x, phase: toPhase } : x)));
+    try {
+      await moveReportVideo(video, toPhase);
+      await refreshVideos();
+    } catch (e) {
+      if (previous) queryClient.setQueryData(videosKey, previous);
+      else await refreshVideos();
+      setRowError({ id: video.id, message: explainVideoError(e, 'change') });
+    } finally {
+      moving.current.delete(video.id);
+      setMovePendingId(null);
+    }
+  };
 
   // One controller per mounted report (ReportPanel remounts this per report): it owns the "one upload at a time" rule, the checks,
   // retry and cancel. It always reads the latest list and report state through `latest`.
@@ -373,6 +429,11 @@ export default function ReportVideos({ visitId, reviewStatus, reviewedAt, comple
                     confirmingRemove={confirmRemoveId === v.id}
                     removePending={removeMutation.isPending && removeMutation.variables === v.id}
                     removeError={rowError?.id === v.id ? rowError.message : null}
+                    moveTargets={VIDEO_PHASES.filter(
+                      (other) => other !== v.phase && videos.filter((x) => x.phase === other).length < REPORT_VIDEO_LIMITS.maxPerPhase,
+                    )}
+                    movePending={movePendingId === v.id}
+                    onMove={(toPhase) => void onMove(v, toPhase)}
                     addedAfterApproval={reviewStatus === 'approved' && reviewedAt != null && v.createdAt > reviewedAt}
                     onPlay={() => void play(v)}
                     onPlayFailed={() => {

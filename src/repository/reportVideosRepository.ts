@@ -217,6 +217,33 @@ export async function setVideoClientInclusion(videoId: string, included: boolean
  * Removes a video: a SOFT delete only. The database records who removed it (from the session), revokes every client link to it
  * and writes the audit event; the file itself is kept (a manager has no way to delete it). Allowed even on a Completed report.
  */
+/**
+ * Moves a video to another section (Before / During / After) - for when a technician filed everything under one heading.
+ * ONLY the phase column is written: the file is never moved or renamed (its path keeps the folder it was first uploaded
+ * under, which nothing reads a section from), and "Include for client", the thumbnail and every other detail stay as they are.
+ *
+ * The update is conditional on the video still being in the section it is moving from and not removed, so two people moving
+ * the same video cannot silently overwrite each other. The database has the final say: report_videos_guard() enforces
+ * manager-only access, the per-section cap, and the Completed / removed rules, and it writes the move to the report history.
+ *
+ * Requires migration 20261014111446_report_video_move_phase. Without it the database refuses every move with
+ * "A video's file details cannot be changed."
+ */
+export async function moveReportVideo(video: Pick<ReportVideo, 'id' | 'phase'>, toPhase: VideoPhase): Promise<void> {
+  if (toPhase === video.phase) return;
+
+  const { data, error } = await supabase
+    .from('report_videos')
+    .update({ phase: toPhase })
+    .eq('id', video.id)
+    .eq('phase', video.phase)
+    .is('deleted_at', null)
+    .select('id');
+
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) throw new Error('That video has already been moved or removed. Refresh the report to see where it is now.');
+}
+
 export async function removeReportVideo(videoId: string, actor: string): Promise<void> {
   const { data, error } = await supabase
     .from('report_videos')

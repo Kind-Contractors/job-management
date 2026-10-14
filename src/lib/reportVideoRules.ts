@@ -105,7 +105,11 @@ export const COMPLETED_VIDEOS_MESSAGE =
  * Turns whatever the upload / database / Storage said into one plain sentence for the manager. Messages the database raised on
  * purpose (limits, Completed, etc.) are already readable and are passed through; the technical ones are translated.
  */
-export function explainVideoError(error: unknown): string {
+/**
+ * Turns a storage / database failure into something a manager can act on. `action` only changes the wording of the
+ * "we could not reach the server" case: an interrupted upload and an interrupted move are not the same thing to read.
+ */
+export function explainVideoError(error: unknown, action: 'upload' | 'change' = 'upload'): string {
   const status = typeof error === 'object' && error !== null && 'status' in error ? Number((error as { status: unknown }).status) : NaN;
   const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   const text = raw.replace(/^(Failed to [a-z ]+:\s*)/i, '');
@@ -120,7 +124,9 @@ export function explainVideoError(error: unknown): string {
   }
   if (/marked Completed/i.test(text)) return COMPLETED_VIDEOS_MESSAGE;
   if (/network|failed to fetch|load failed|offline|timeout|aborted/i.test(text) && !/limit|Only \d/.test(text)) {
-    return 'The upload was interrupted. Check your connection and try again.';
+    return action === 'upload'
+      ? 'The upload was interrupted. Check your connection and try again.'
+      : 'Could not reach the server, so nothing was changed. Check your connection and try again.';
   }
   return text || 'Something went wrong. Please try again.';
 }

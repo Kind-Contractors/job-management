@@ -9,12 +9,14 @@ import {
   REPORT_VIDEO_BUCKET,
   listVideosForVisit,
   removeReportVideo,
+  moveReportVideo,
   setVideoClientInclusion,
   signVideoPlaybackUrl,
   signVideoThumbnailUrls,
   uploadReportVideo,
   type ReportVideo,
 } from '../src/repository/reportVideosRepository';
+import { explainVideoError } from '../src/lib/reportVideoRules';
 import { UploadCancelledError, UploadError, type ResumableUploadArgs } from '../src/lib/reportVideoUpload';
 
 interface Logged { method: string; path: string; search: string; body: any; headers: Headers }
@@ -260,4 +262,47 @@ test('UPLOAD: the abort signal reaches the uploader', async () => {
   server.insertRow = row();
   await uploadReportVideo(input({ signal: controller.signal, thumbnail: null }), { uploader: async (a) => { got = a.signal; }, getAccessToken: async () => 't' });
   assert.equal(got, controller.signal);
+});
+
+// ---- moving between sections (needs migration 20261014111446) -----------------------------------------------------
+test('MOVE: writes ONLY the new section, on that one video, and only while it is still there and not removed', async () => {
+  await moveReportVideo({ id: 'v1', phase: 'after' }, 'before');
+  const [patch] = calls(/^PATCH \/rest\/v1\/report_videos$/);
+  assert.deepEqual(patch.body, { phase: 'before' }, 'no include_in_client_report, no storage_path, no thumbnail_path');
+  assert.match(patch.search, /id=eq\.v1/);
+  assert.match(patch.search, /phase=eq\.after/, 'conditional on the section it is moving FROM');
+  assert.match(patch.search, /deleted_at=is\.null/, 'a removed video is never moved');
+});
+
+test('MOVE: never touches Storage - the file and its path stay exactly as they were', async () => {
+  await moveReportVideo({ id: 'v1', phase: 'before' }, 'during');
+  assert.equal(calls(/storage/).length, 0);
+});
+
+test('MOVE to the section it is already in does nothing at all', async () => {
+  await moveReportVideo({ id: 'v1', phase: 'before' }, 'before');
+  assert.equal(server.log.length, 0);
+});
+
+test('MOVE: if someone else moved or removed it first, the manager is told to refresh', async () => {
+  server.patchRows = [];
+  await assert.rejects(moveReportVideo({ id: 'v1', phase: 'before' }, 'after'), /already been moved or removed/);
+});
+
+test('MOVE: a lost connection does NOT say "the upload was interrupted" - nothing was being uploaded', () => {
+  const offline = new TypeError('Failed to fetch');
+  assert.match(explainVideoError(offline), /upload was interrupted/, 'an upload still reads as an upload');
+  assert.match(explainVideoError(offline, 'change'), /Could not reach the server, so nothing was changed/);
+  // the wording only changes for that one case; everything else is shared
+  assert.equal(explainVideoError(new Error('marked Completed'), 'change'), explainVideoError(new Error('marked Completed')));
+  assert.equal(explainVideoError(new Error('permission denied'), 'change'), explainVideoError(new Error('permission denied')));
+});
+
+test('MOVE: the database guards are passed straight through in plain words', async () => {
+  server.failNext = { match: /PATCH/, status: 400, body: { message: 'This report has been marked Completed; reopen it before changing its videos.' } };
+  await assert.rejects(moveReportVideo({ id: 'v1', phase: 'before' }, 'after'), /marked Completed; reopen it/);
+  server.failNext = { match: /PATCH/, status: 400, body: { message: 'The during section already holds 3 videos, which is the most it can take.' } };
+  await assert.rejects(moveReportVideo({ id: 'v1', phase: 'before' }, 'during'), /already holds 3 videos/);
+  server.failNext = { match: /PATCH/, status: 403, body: { message: 'permission denied for table report_videos' } };
+  await assert.rejects(moveReportVideo({ id: 'v1', phase: 'before' }, 'after'), /permission denied/);
 });

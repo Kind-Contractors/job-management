@@ -142,6 +142,7 @@ test('ADDED AFTER APPROVAL: a video that arrived after the report was approved i
 const cardProps = (over: Partial<VideoCardProps> = {}): VideoCardProps => ({
   video: video('a', 'before'), posterUrl: 'https://signed.example/poster.jpg', playUrl: null, playError: null, playLoading: false, canChange: true, includePending: false,
   confirmingRemove: false, removePending: false, removeError: null, addedAfterApproval: false,
+  moveTargets: ['during', 'after'], movePending: false, onMove: noop,
   onPlay: noop, onPlayFailed: noop, onToggleInclude: noop, onAskRemove: noop, onConfirmRemove: noop, onCancelRemove: noop, ...over,
 });
 
@@ -254,4 +255,34 @@ test('REPORT PANEL: no "Include videos" switch and no "Save changes" button, wha
     assert.doesNotMatch(html, /Include videos in the client report/);
     assert.doesNotMatch(html, /Save changes/);
   }
+});
+
+// ---- moving a video between sections --------------------------------------------------------------------------------
+test('MOVE: a video offers the sections it can go to, and never the one it is already in', () => {
+  const html = renderToStaticMarkup(<VideoCard {...cardProps()} />);
+  assert.match(html, /aria-label="Move before video to another section"/);
+  assert.match(html, />Move to…</);
+  assert.match(html, /<option value="during">During<\/option>/);
+  assert.match(html, /<option value="after">After<\/option>/);
+  assert.doesNotMatch(html, /<option value="before">/);
+});
+
+test('MOVE: a section that is already full is not offered; with none left the control is gone entirely', () => {
+  const oneLeft = renderToStaticMarkup(<VideoCard {...cardProps({ moveTargets: ['after'] })} />);
+  assert.match(oneLeft, /<option value="after">After<\/option>/);
+  assert.doesNotMatch(oneLeft, /<option value="during">/);
+  assert.doesNotMatch(renderToStaticMarkup(<VideoCard {...cardProps({ moveTargets: [] })} />), /Move to…/);
+});
+
+test('MOVE: while it is saving the control is locked and says so', () => {
+  const html = renderToStaticMarkup(<VideoCard {...cardProps({ movePending: true })} />);
+  assert.match(html, /<select[^>]*\sdisabled=""/);
+  assert.match(html, />Moving…</);
+});
+
+test('MOVE: a Completed report offers no move at all (canChange is false), but Remove is still there', () => {
+  const html = renderToStaticMarkup(<VideoCard {...cardProps({ canChange: false })} />);
+  assert.doesNotMatch(html, /Move to…/);
+  assert.doesNotMatch(html, /aria-label="Move before video to another section"/);
+  assert.match(html, />Remove<\/button>/);
 });
