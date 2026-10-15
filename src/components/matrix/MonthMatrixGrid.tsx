@@ -2,6 +2,7 @@ import type { JobRow } from '../../domain/types';
 import type { GridBlock } from '../../lib/grouping';
 import { deriveMonthCellStates, type MonthCellState } from '../../lib/monthMatrix';
 import { getMonthCellPresentation } from '../../lib/statusPresentation';
+import BandToggle from '../shared/BandToggle';
 
 const MONTH_SHORT_LABEL = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -10,6 +11,8 @@ interface MonthMatrixGridProps {
   year: number;
   todayISO: string;
   onSelectCell: (job: JobRow, month: number, cell: MonthCellState) => void;
+  /** Omitted when the host does not support collapsing — the caret is then shown inert rather than dead. */
+  onToggleBand?: (bandId: string) => void;
 }
 
 /**
@@ -18,7 +21,7 @@ interface MonthMatrixGridProps {
  * as a plain grid (matching MonthGrid.tsx's Calendar precedent), not an
  * AG Grid extension — see the reviewed plan's §6 for why.
  */
-export default function MonthMatrixGrid({ blocks, year, todayISO, onSelectCell }: MonthMatrixGridProps) {
+export default function MonthMatrixGrid({ blocks, year, todayISO, onSelectCell, onToggleBand }: MonthMatrixGridProps) {
   return (
     <div className="min-w-[880px] border border-neutral-300">
       <div className="grid grid-cols-[minmax(220px,1fr)_repeat(12,56px)] border-b border-neutral-300 bg-neutral-200">
@@ -37,9 +40,24 @@ export default function MonthMatrixGrid({ blocks, year, todayISO, onSelectCell }
         if (block.kind === 'band') {
           return (
             <div key={block.id} className="grid grid-cols-[minmax(220px,1fr)_repeat(12,56px)] border-b border-neutral-300 bg-neutral-200">
-              <div className="col-span-full flex items-center gap-2.5 px-3 py-1.5">
-                <span className="font-heading text-[11.5px] font-semibold tracking-[0.09em] uppercase">▾ {block.title}</span>
+              {/* The whole band toggles, so the hit target is the row rather than the caret alone. */}
+              <div
+                className={`col-span-full flex items-center gap-2.5 px-3 py-1.5 ${onToggleBand ? 'cursor-pointer hover:bg-neutral-300/70' : ''}`}
+                onClick={onToggleBand ? () => onToggleBand(block.id) : undefined}
+                data-testid="month-matrix-band"
+              >
+                <BandToggle
+                  collapsed={block.collapsed === true}
+                  title={block.title}
+                  onToggle={onToggleBand ? () => onToggleBand(block.id) : undefined}
+                />
+                <span className="font-heading text-[11.5px] font-semibold tracking-[0.09em] uppercase">{block.title}</span>
                 <span className="text-[11px] text-neutral-600">{block.subtitle}</span>
+                {block.collapsed && (
+                  <span className="text-[11px] text-neutral-500 tabular-nums">
+                    {block.rowCount} job{block.rowCount === 1 ? '' : 's'} hidden
+                  </span>
+                )}
                 <span className="ml-auto text-[11px] text-neutral-700 tabular-nums">{block.rightLabel}</span>
               </div>
             </div>

@@ -23,13 +23,13 @@ const job = (over: Partial<JobRow> = {}): JobRow =>
 
 const entry = (over: Partial<MonthlyPlanEntry> = {}): MonthlyPlanEntry => ({
   job: job(), kind: 'due_no_date', visitsInMonth: [], dueFromMonth: null, suggestedDate: '2026-08-19',
-  label: 'Due this month — no date set yet', ...over,
+  label: 'Due this month — no date set yet', needsSchedule: false, ...over,
 });
 
 const render = (e: MonthlyPlanEntry) =>
   renderToStaticMarkup(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <MonthlyPlanRow entry={e} technicians={technicians} onOpenJob={() => {}} />
+      <MonthlyPlanRow entry={e} technicians={technicians} onOpenJob={() => {}} onSetSchedule={() => {}} />
     </QueryClientProvider>,
   );
 
@@ -49,7 +49,7 @@ test('TO BOOK with no day named by the schedule leaves the date EMPTY and says s
   const html = render(entry({ suggestedDate: null }));
   assert.doesNotMatch(html, /value="2026-08-01"/);
   assert.match(html, /aria-label="Date for Flair House"[^>]*value=""|value=""[^>]*aria-label="Date for Flair House"/);
-  assert.match(html, /data-testid="no-set-date-hint"[^>]*>No set date for this month — choose one\./);
+  assert.match(html, /data-testid="no-set-date-hint"[^>]*>No set date — choose one\./);
   assert.match(html, /disabled=""/, 'Book stays disabled until a date is chosen');
 });
 
@@ -73,7 +73,7 @@ test('BOOKED: the month’s real visits are listed with who is on them, and no B
 test('BOOKED offers a way to change the existing visit, and never a second booking form', () => {
   const visit = { id: 'v1', scheduledDate: '2026-08-12', status: 'booked', technicianName: 'Anna', additionalTechnicians: [] } as unknown as JobVisitSummary;
   const html = render(entry({ kind: 'booked', visitsInMonth: [visit] }));
-  assert.match(html, /data-testid="change-booking"[^>]*>Change date or team</);
+  assert.match(html, /data-testid="change-booking"[^>]*>Change</);
   // The booking form is what INSERTS a visit; a booked row must not show it, or a second visit could be made by
   // accident. Moving the existing one is an in-place update reached through the job drawer instead.
   assert.doesNotMatch(html, /aria-label="Date for Flair House"/);

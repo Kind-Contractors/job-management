@@ -3,7 +3,17 @@ import type { Frequency, JobRow } from '../domain/types';
 export type GroupBy = 'client' | 'frequency';
 
 export type GridBlock =
-  | { kind: 'band'; id: string; title: string; subtitle: string; rightLabel: string }
+  | {
+      kind: 'band';
+      id: string;
+      title: string;
+      subtitle: string;
+      rightLabel: string;
+      /** How many job rows this band holds — still the real total when the band is collapsed and they are hidden. */
+      rowCount: number;
+      /** Set by `collapseBlocks`; `buildGridBlocks` always produces expanded bands. */
+      collapsed?: boolean;
+    }
   | { kind: 'row'; id: string; job: JobRow };
 
 const FREQUENCY_ORDER: Frequency[] = [
@@ -68,6 +78,7 @@ export function buildGridBlocks(rows: JobRow[], groupBy: GroupBy): GridBlock[] {
         title: set[0].clientName,
         subtitle: `Invoice · ${set[0].clientInvoiceAddress}`,
         rightLabel: `${buildingCount} building${buildingCount === 1 ? '' : 's'} · ${set.length} job${set.length === 1 ? '' : 's'} · ${summarizeYearlyValue(set)}`,
+        rowCount: set.length,
       });
       set.forEach((job) => blocks.push({ kind: 'row', id: job.id, job }));
     }
@@ -81,10 +92,38 @@ export function buildGridBlocks(rows: JobRow[], groupBy: GroupBy): GridBlock[] {
         title: freq,
         subtitle: `${VISITS_PER_YEAR[freq]} visit${VISITS_PER_YEAR[freq] === 1 ? '' : 's'} a year per job`,
         rightLabel: `${set.length} job${set.length === 1 ? '' : 's'} · ${summarizeYearlyValue(set)}`,
+        rowCount: set.length,
       });
       set.forEach((job) => blocks.push({ kind: 'row', id: job.id, job }));
     }
   }
 
   return blocks;
+}
+
+/**
+ * Hides the job rows under every collapsed band, and marks those bands so their caret can point the right way.
+ *
+ * Collapsing is a VIEW state, never a change to the data: `buildGridBlocks` keeps producing every row, this
+ * filters a copy, and each band keeps its real `rowCount` and its totals so a collapsed band still tells the
+ * truth about what it holds. A band id that is not in `collapsed` is returned exactly as it came in.
+ *
+ * Pure and shared because the two screens that show bands must behave identically - All Live Jobs renders them
+ * through AG Grid's full-width row feature (Community has no built-in grouping, see above), the Monthly Plan
+ * renders them itself, and neither should own its own copy of this rule.
+ */
+export function collapseBlocks(blocks: GridBlock[], collapsed: ReadonlySet<string>): GridBlock[] {
+  if (collapsed.size === 0) return blocks;
+
+  const out: GridBlock[] = [];
+  let hiding = false;
+  for (const block of blocks) {
+    if (block.kind === 'band') {
+      hiding = collapsed.has(block.id);
+      out.push(hiding ? { ...block, collapsed: true } : block);
+      continue;
+    }
+    if (!hiding) out.push(block);
+  }
+  return out;
 }

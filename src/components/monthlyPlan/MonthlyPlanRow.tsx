@@ -1,5 +1,5 @@
-// One job on the Monthly Plan: what it is, where it stands this month, and - when it still wants a date - the
-// date and technician(s) to book it with.
+// One job on the Monthly Plan: what it is, how often it repeats, where it stands this month, and - when it still
+// wants a date - the date and technician(s) to book it with.
 //
 // Booking is IMMEDIATE. Pressing Book writes a real visit through the same `createVisit` every other booking
 // path in this app uses; there is no draft, nothing is held locally, and there is no "save the plan" step.
@@ -10,8 +10,14 @@
 // this row is also the double-booking guard: it lists the month's real visits, and asks before adding a second
 // one to a date that already has one.
 //
-// STYLING follows the shared grid conventions: px-3 so the building name lines up with the band title above it,
-// a 1px hairline under every row, and the same control sizes the Job Inspector and All Live Jobs use.
+// LAYOUT. Six real columns, on the same track as the page's header row (MONTHLY_PLAN_COLUMNS below, which both
+// import so they can never drift apart): JOB | REPEATS | STATUS | DATE | TECHNICIAN | ACTION. Every kind of row
+// fills the same six, so the dates and the Book buttons line up down the page instead of floating at whatever
+// height their own content happens to reach. Rows that cannot be booked say why across the DATE/TECHNICIAN
+// columns and put their one fix in ACTION.
+//
+// STYLING is the house language, not a second one: square corners, 1px hairlines, Barlow via `font-heading`,
+// and the same dot + uppercase status chip StatusPill uses (CLAUDE.md section 4).
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { JobVisitSummary, Technician } from '../../domain/types';
@@ -20,10 +26,16 @@ import { activeSelection, splitPrimary } from '../../lib/visitTechnicianSelectio
 import { carriedOverLabel, visitsOnDate, type MonthlyPlanEntry } from '../../lib/monthlyPlan';
 import VisitTechnicianPicker from '../jobs/VisitTechnicianPicker';
 
+/** The one column track, shared with the page's header row so the two can never disagree. */
+export const MONTHLY_PLAN_COLUMNS =
+  'grid-cols-[minmax(220px,2.4fr)_minmax(116px,0.9fr)_116px_minmax(148px,1fr)_minmax(186px,1.1fr)_108px]';
+
 export interface MonthlyPlanRowProps {
   entry: MonthlyPlanEntry;
   technicians: Technician[];
   onOpenJob: (jobId: string, presetDate?: string) => void;
+  /** Opens the focused Set-a-schedule modal. Only the no-schedule row uses it; everything else opens the drawer. */
+  onSetSchedule: (jobId: string) => void;
 }
 
 /** "Anna", "Anna +2", or null — JobVisitSummary already carries the names, so no lookup is needed. */
@@ -33,15 +45,20 @@ function technicianSummary(v: JobVisitSummary): string | null {
   return extra > 0 ? `${v.technicianName} +${extra}` : v.technicianName;
 }
 
-const KIND_BADGE: Record<MonthlyPlanEntry['kind'], { label: string; className: string }> = {
-  booked: { label: 'Booked', className: 'border-teal bg-teal-100 text-teal-700' },
-  due_no_date: { label: 'To book', className: 'border-due bg-due/10 text-due-fg' },
-  carried_over: { label: 'Overdue', className: 'border-missed bg-missed/10 text-missed-fg' },
-  not_determinable: { label: 'Can’t tell', className: 'border-neutral-300 text-neutral-600' },
-  no_schedule: { label: 'No schedule', className: 'border-neutral-300 text-neutral-600' },
+/**
+ * The same shape StatusPill renders — a square dot plus an uppercase label — in the restrained palette
+ * CLAUDE.md section 4 allows: ochre needs booking, brick missed, teal done. The two states that are not work
+ * (no cycle, no schedule) are hollow and grey, exactly as `getMonthCellPresentation` treats them.
+ */
+const KIND_BADGE: Record<MonthlyPlanEntry['kind'], { label: string; fg: string; dot: string; border: string; bg: string }> = {
+  booked: { label: 'Booked', fg: 'text-teal-700', dot: 'bg-teal', border: 'border-teal', bg: 'bg-teal-100' },
+  due_no_date: { label: 'To book', fg: 'text-due-fg', dot: 'bg-due', border: 'border-due', bg: 'bg-due/10' },
+  carried_over: { label: 'Overdue', fg: 'text-missed-fg', dot: 'bg-missed', border: 'border-missed', bg: 'bg-missed/10' },
+  not_determinable: { label: 'Can’t tell', fg: 'text-neutral-600', dot: 'bg-transparent', border: 'border-neutral-400', bg: 'bg-transparent' },
+  no_schedule: { label: 'No schedule', fg: 'text-neutral-600', dot: 'bg-transparent', border: 'border-neutral-400', bg: 'bg-transparent' },
 };
 
-export default function MonthlyPlanRow({ entry, technicians, onOpenJob }: MonthlyPlanRowProps) {
+export default function MonthlyPlanRow({ entry, technicians, onOpenJob, onSetSchedule }: MonthlyPlanRowProps) {
   const queryClient = useQueryClient();
   const { job } = entry;
   // Empty when the schedule names no day for this month, rather than the 1st: substituting a date the schedule
@@ -84,95 +101,112 @@ export default function MonthlyPlanRow({ entry, technicians, onOpenJob }: Monthl
     bookMutation.mutate();
   };
 
+  /** Spans the DATE and TECHNICIAN columns for a row that cannot be booked, so ACTION still lines up. */
+  const explain = (text: string, actionLabel: string, onAction: () => void) => (
+    <>
+      <div className="col-span-2 self-center text-[11.5px] text-neutral-600">{text}</div>
+      <div className="self-center text-right">
+        <button onClick={onAction} className="cursor-pointer text-[11.5px] text-teal-700 hover:underline">
+          {actionLabel}
+        </button>
+      </div>
+    </>
+  );
+
   return (
     <div
-      className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-neutral-300 px-3 py-2 last:border-b-0 hover:bg-neutral-100/60"
+      className={`grid ${MONTHLY_PLAN_COLUMNS} items-start gap-4 border-b border-neutral-300 px-3 py-2 last:border-b-0 hover:bg-neutral-100/60`}
       data-testid="monthly-plan-row"
     >
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <button
-            onClick={() => onOpenJob(job.id)}
-            className="cursor-pointer text-left text-[12.5px] font-semibold text-ink hover:underline"
-          >
-            {job.buildingName}
-          </button>
-          <span
-            className={`border px-1.5 py-px font-heading text-[9.5px] font-semibold tracking-[0.08em] uppercase ${badge.className}`}
-          >
-            {badge.label}
-          </span>
-          {entry.needsSchedule && entry.kind !== 'no_schedule' && (
-            <span
-              className="border border-due bg-due/10 px-1.5 py-px font-heading text-[9.5px] font-semibold tracking-[0.08em] text-due-fg uppercase"
-              data-testid="needs-schedule-chip"
-            >
-              No schedule
-            </span>
-          )}
-          {overdue && (
-            <span
-              className="border border-missed bg-missed/10 px-1.5 py-px text-[10.5px] text-missed-fg"
-              data-testid="overdue-chip"
-            >
-              {overdue}
-            </span>
-          )}
-        </div>
-
-        <div className="mt-0.5 text-[11.5px] text-neutral-600">
+      {/* JOB */}
+      <div className="min-w-0 self-center">
+        <button
+          onClick={() => onOpenJob(job.id)}
+          className="block max-w-full cursor-pointer truncate text-left text-[12.5px] font-semibold text-ink hover:underline"
+        >
+          {job.buildingName}
+        </button>
+        <div className="truncate text-[11.5px] text-neutral-600">
           {job.clientName} · {job.jobSummary}
-          <span className="text-neutral-400"> · </span>
-          <span className="tabular-nums">{job.schedulePattern}</span>
         </div>
-
-        {entry.kind === 'booked' && (
-          <div className="mt-1 text-[11.5px] text-neutral-700" data-testid="booked-visits">
-            {entry.visitsInMonth.map((v) => (
-              <div key={v.id} className="tabular-nums">
-                {v.scheduledDate && new Date(v.scheduledDate).toLocaleDateString('en-GB')} ·{' '}
-                <span className="text-neutral-600">{technicianSummary(v) ?? 'No technician yet'}</span>
-              </div>
-            ))}
-            {/* Moving a booked visit or changing who is on it happens on the visit itself, in the job drawer: both are
-                in-place updates (rescheduleVisit / assignVisitTechnician), so neither can ever make a second visit.
-                Booking a NEW one is the only thing that inserts, and that is the form above - which a booked row
-                deliberately does not show. */}
-            <button
-              onClick={() => onOpenJob(job.id)}
-              className="mt-0.5 cursor-pointer text-[11px] text-teal-700 hover:underline"
-              data-testid="change-booking"
-            >
-              Change date or team
-            </button>
-          </div>
-        )}
-
-        {entry.kind === 'no_schedule' && (
-          <div className="mt-1 text-[11.5px] text-neutral-600" data-testid="no-schedule-explainer">
-            Priced as {job.frequencyRaw.toLowerCase()} work, but no schedule is set, so it never becomes due on its own.{' '}
-            <button onClick={() => onOpenJob(job.id)} className="cursor-pointer text-teal-700 hover:underline">
-              Set a schedule
-            </button>
-          </div>
-        )}
-
-        {entry.kind === 'not_determinable' && (
-          <div className="mt-1 text-[11.5px] text-neutral-600">
-            This job repeats less often than monthly and has no “counted from” date, so which months it falls in can’t be
-            worked out.{' '}
-            <button onClick={() => onOpenJob(job.id)} className="cursor-pointer text-teal-700 hover:underline">
-              Set it on the job
-            </button>
+        {overdue && (
+          <div className="mt-0.5 text-[11px] text-missed-fg" data-testid="overdue-chip">
+            {overdue}
           </div>
         )}
       </div>
 
+      {/* REPEATS — the pricing label on top, the real schedule rule beneath it. `schedulePattern` falls back to
+          the frequency label for a job with no schedule, so the second line is dropped when it would just repeat
+          the first rather than printing "Monthly / Monthly". */}
+      <div className="min-w-0 self-center">
+        <div className="truncate text-[12px] text-ink">{job.frequencyRaw}</div>
+        {job.schedulePattern !== job.frequencyRaw && (
+          <div className="truncate text-[11px] text-neutral-500 tabular-nums">{job.schedulePattern}</div>
+        )}
+      </div>
+
+      {/* STATUS */}
+      <div className="self-center">
+        <span
+          className={`inline-flex items-center gap-1.5 border px-1.5 py-0.5 font-heading text-[10px] font-semibold tracking-[0.07em] uppercase ${badge.border} ${badge.bg} ${badge.fg}`}
+        >
+          <i className={`block h-1.5 w-1.5 border ${badge.dot} ${badge.border}`} />
+          {badge.label}
+        </span>
+        {entry.needsSchedule && entry.kind !== 'no_schedule' && (
+          <div className="mt-0.5 text-[10.5px] text-due-fg" data-testid="needs-schedule-chip">
+            No schedule
+          </div>
+        )}
+      </div>
+
+      {entry.kind === 'booked' && (
+        <>
+          {/* DATE */}
+          <div className="self-center text-[12px] text-ink tabular-nums" data-testid="booked-visits">
+            {entry.visitsInMonth.map((v) => (
+              <div key={v.id}>{v.scheduledDate && new Date(v.scheduledDate).toLocaleDateString('en-GB')}</div>
+            ))}
+          </div>
+          {/* TECHNICIAN */}
+          <div className="self-center truncate text-[12px] text-neutral-700">
+            {entry.visitsInMonth.map((v) => (
+              <div key={v.id} className="truncate">
+                {technicianSummary(v) ?? <span className="text-neutral-500">No technician yet</span>}
+              </div>
+            ))}
+          </div>
+          {/* ACTION — moving a booked visit or changing who is on it happens on the visit itself, in the job
+              drawer: both are in-place updates, so neither can ever make a second visit. Booking a NEW one is the
+              only thing that inserts, and that is the form a booked row deliberately does not show. */}
+          <div className="self-center text-right">
+            <button
+              onClick={() => onOpenJob(job.id)}
+              className="cursor-pointer text-[11.5px] text-teal-700 hover:underline"
+              data-testid="change-booking"
+            >
+              Change
+            </button>
+          </div>
+        </>
+      )}
+
+      {entry.kind === 'no_schedule' && (
+        <div className="contents" data-testid="no-schedule-explainer">
+          {explain('Won’t come due until a schedule is set.', 'Set a schedule', () => onSetSchedule(job.id))}
+        </div>
+      )}
+
+      {/* This job HAS a schedule - it is only missing its anchor - so it keeps going to the drawer, where the
+          whole job is in view. The modal is for the no-schedule case the plan flags. */}
+      {entry.kind === 'not_determinable' &&
+        explain('Repeats less often than monthly with no “counted from” date.', 'Set it on the job', () => onOpenJob(job.id))}
+
       {canBook && (
-        <div className="flex flex-none flex-col items-end gap-1">
-          {/* items-end, not items-center: VisitTechnicianPicker carries its own label above its button, so the
-              three controls line up on their bottom edge rather than drifting apart. */}
-          <div className="flex items-end gap-1.5">
+        <>
+          {/* DATE */}
+          <div className="self-center">
             <input
               type="date"
               value={date}
@@ -181,14 +215,26 @@ export default function MonthlyPlanRow({ entry, technicians, onOpenJob }: Monthl
                 setConfirmingClash(false);
               }}
               aria-label={`Date for ${job.buildingName}`}
-              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink tabular-nums outline-none focus:border-teal"
+              className="w-full border border-neutral-300 px-2 py-1 text-[12px] text-ink tabular-nums outline-none focus:border-teal"
             />
+            {!date && (
+              <div className="mt-0.5 text-[10.5px] text-due-fg" data-testid="no-set-date-hint">
+                No set date — choose one.
+              </div>
+            )}
+          </div>
+          {/* TECHNICIAN — the column header already names this, so the picker drops its own caption. */}
+          <div className="self-center">
             <VisitTechnicianPicker
               technicians={technicians}
               selectedIds={technicianIds}
               onChange={setTechnicianIds}
-              textClass="text-[12.5px]"
+              textClass="text-[12px]"
+              hideLabel
             />
+          </div>
+          {/* ACTION */}
+          <div className="self-center text-right">
             <button
               onClick={onBook}
               disabled={!date || bookMutation.isPending}
@@ -197,22 +243,21 @@ export default function MonthlyPlanRow({ entry, technicians, onOpenJob }: Monthl
               {bookMutation.isPending ? 'Booking…' : confirmingClash ? 'Book anyway' : 'Book'}
             </button>
           </div>
-          {!date && (
-            <div className="max-w-[320px] text-right text-[11px] text-neutral-600" data-testid="no-set-date-hint">
-              No set date for this month — choose one.
+          {(confirmingClash || error) && (
+            <div className="col-span-6 pt-0.5">
+              {confirmingClash && clash.length > 0 && (
+                <div role="alert" className="text-[11px] text-due-fg" data-testid="clash-warning">
+                  There is already a visit for this job on {new Date(date).toLocaleDateString('en-GB')}. Book another one?
+                </div>
+              )}
+              {error && (
+                <div role="alert" className="text-[11px] text-missed-fg">
+                  {error}
+                </div>
+              )}
             </div>
           )}
-          {confirmingClash && clash.length > 0 && (
-            <div role="alert" className="max-w-[320px] text-right text-[11px] text-due-fg" data-testid="clash-warning">
-              There is already a visit for this job on {new Date(date).toLocaleDateString('en-GB')}. Book another one?
-            </div>
-          )}
-          {error && (
-            <div role="alert" className="max-w-[320px] text-right text-[11px] text-missed-fg">
-              {error}
-            </div>
-          )}
-        </div>
+        </>
       )}
     </div>
   );

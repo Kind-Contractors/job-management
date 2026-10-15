@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Schedule, ScheduleIntervalUnit, ScheduleType, ScheduleWeekOrdinal, ScheduleWeekday } from '../../domain/types';
-import { deleteSchedule, upsertSchedule, type ScheduleInput } from '../../repository/schedulesRepository';
-import { describeSchedule } from '../../lib/scheduleFormat';
-import { isRecurringFrequency, isWeekBasedFrequency } from '../../lib/firstDueSchedule';
+import { deleteSchedule, scheduleFromInput, upsertSchedule, type ScheduleInput } from '../../repository/schedulesRepository';
+import { describeSchedule, suggestNextDate } from '../../lib/scheduleFormat';
+import { isRecurringFrequency, isWeekBasedFrequency, patternFieldsForAnchor } from '../../lib/firstDueSchedule';
 import type { FrequencyType } from '../../domain/types';
 
 const SCHEDULE_TYPE_LABEL: Record<ScheduleType, string> = {
@@ -42,6 +42,12 @@ interface FormState {
   /** 'YYYY-MM-DD' or '' — the cycle's phase. Empty is legitimate: only a monthly cadence is determinable without it. */
   anchorDate: string;
   notes: string;
+}
+
+/** Today as a LOCAL 'YYYY-MM-DD' — never `.toISOString()`, which converts to UTC and shifts the day east of it. */
+function todayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 const BLANK_FORM: FormState = {
@@ -129,11 +135,30 @@ interface ScheduleEditorProps {
    * (CLAUDE.md §6) and must never be warned about.
    */
   frequencyType?: FrequencyType | null;
+  /**
+   * Opens straight into the form, with no "Add schedule" step first. For a host that has already said what the
+   * editor is for - the Monthly Plan's Set-a-schedule modal - where the view mode would be a wasted click.
+   */
+  autoEdit?: boolean;
+  /** Drops this component's own panel border and "Schedule" heading when the host already provides them. */
+  embedded?: boolean;
+  /** Called after a schedule is saved. The modal closes on it; the drawer has no use for it. */
+  onSaved?: () => void;
+  /** Called when the form is dismissed. With `autoEdit` there is no view mode to fall back to, so the host decides. */
+  onCancel?: () => void;
 }
 
-export default function ScheduleEditor({ jobId, schedule, frequencyType = null }: ScheduleEditorProps) {
+export default function ScheduleEditor({
+  jobId,
+  schedule,
+  frequencyType = null,
+  autoEdit = false,
+  embedded = false,
+  onSaved,
+  onCancel,
+}: ScheduleEditorProps) {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<'view' | 'edit' | 'confirm-remove'>('view');
+  const [mode, setMode] = useState<'view' | 'edit' | 'confirm-remove'>(autoEdit ? 'edit' : 'view');
   const [form, setForm] = useState<FormState>(schedule ? formFromSchedule(schedule) : BLANK_FORM);
   const [error, setError] = useState<string | null>(null);
 
@@ -142,9 +167,12 @@ export default function ScheduleEditor({ jobId, schedule, frequencyType = null }
   const saveMutation = useMutation({
     mutationFn: (input: ScheduleInput) => upsertSchedule(jobId, input),
     onSuccess: () => {
+      // Invalidating ['jobRows'] is what refreshes the Monthly Plan: the page derives every entry from that one
+      // cached query, so the job leaves "Needs a schedule" and picks up its real due state on the next render.
       invalidate();
       setMode('view');
       setError(null);
+      onSaved?.();
     },
     onError: (err) => setError(err instanceof Error ? err.message : 'Failed to save schedule.'),
   });
@@ -165,11 +193,36 @@ export default function ScheduleEditor({ jobId, schedule, frequencyType = null }
     setMode('edit');
   };
 
+  /**
+   * A date the job was due states the day it falls on, so the pattern fields follow it. Without this the anchor
+   * set only the cycle's phase and `dayOfMonth` kept its default of 1 - which is how picking 19 October saved
+   * "the 1st of every month". Typing a day afterwards still wins; this only moves with the date.
+   */
+  const setAnchorDate = (anchorDate: string) => {
+    const fields = patternFieldsForAnchor(anchorDate);
+    setForm((prev) =>
+      fields == null
+        ? { ...prev, anchorDate }
+        : {
+            ...prev,
+            anchorDate,
+            dayOfMonth: String(fields.dayOfMonth),
+            weekday: fields.weekday,
+            weekOrdinal: fields.weekOrdinal,
+            dueMonth: String(fields.dueMonth),
+          },
+    );
+  };
+
   const input = toInput(form);
+  // Previewed through the very functions the SAVED row will be read with, so what is shown cannot disagree with
+  // what is stored. `jobId` is irrelevant to both and is passed only to satisfy the shape.
+  const preview = input ? scheduleFromInput(jobId, input) : null;
+  const previewNext = preview ? suggestNextDate(preview, todayISO()) : null;
 
   return (
-    <div className="m-3.5 border border-neutral-300 p-3">
-      <div className="flex items-center gap-2">
+    <div className={embedded ? '' : 'm-3.5 border border-neutral-300 p-3'}>
+      <div className={`flex items-center gap-2 ${embedded ? 'hidden' : ''}`}>
         <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">Schedule</div>
         {mode === 'view' && (
           <div className="ml-auto flex gap-2.5">
@@ -224,7 +277,7 @@ export default function ScheduleEditor({ jobId, schedule, frequencyType = null }
               {removeMutation.isPending ? 'Removing…' : 'Confirm remove'}
             </button>
             <button
-              onClick={() => setMode('view')}
+              onClick={() => (autoEdit ? onCancel?.() : setMode('view'))}
               className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-600"
             >
               Cancel
@@ -368,17 +421,18 @@ export default function ScheduleEditor({ jobId, schedule, frequencyType = null }
               month, so there is nothing to phase - and never allowed on ad_hoc, which has no cycle at all. */}
           {form.scheduleType !== '' && form.scheduleType !== 'ad_hoc' && (
             <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-              Counted from (optional)
+              A date this job was due (optional)
               <input
                 type="date"
                 value={form.anchorDate}
-                onChange={(e) => setForm({ ...form, anchorDate: e.target.value })}
+                onChange={(e) => setAnchorDate(e.target.value)}
                 className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
               />
               <span className="text-[10.5px] text-neutral-500">
+                Sets the day above to match it.
                 {Number(form.intervalCount) === 1 && form.intervalUnit === 'month'
-                  ? 'Not needed for a monthly job — every month is in the cycle.'
-                  : 'A date this job was genuinely due. Without it, the app can’t tell which months a less-than-monthly cycle falls in (for example “3rd Wednesday every quarter” starting July).'}
+                  ? ' A monthly job needs nothing more — every month is in the cycle.'
+                  : ' It also fixes which months a less-than-monthly cycle falls in (for example “3rd Wednesday every quarter” counted from July).'}
               </span>
             </label>
           )}
@@ -395,6 +449,19 @@ export default function ScheduleEditor({ jobId, schedule, frequencyType = null }
             </label>
           )}
 
+          {/* What will actually be saved, in words and as a real date — so a day that does not match the date
+              above is visible before Save, not a fortnight later on the plan. */}
+          {preview && (
+            <div className="border-l-2 border-teal bg-teal-100 px-2 py-1 text-[11.5px] text-ink" data-testid="schedule-preview">
+              {describeSchedule(preview)}
+              {previewNext && (
+                <div className="text-neutral-600 tabular-nums">
+                  Next: {new Date(previewNext).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+                </div>
+              )}
+            </div>
+          )}
+
           {error && <div className="text-[11.5px] text-missed-fg">{error}</div>}
 
           <div className="flex gap-1.5">
@@ -406,7 +473,7 @@ export default function ScheduleEditor({ jobId, schedule, frequencyType = null }
               {saveMutation.isPending ? 'Saving…' : 'Save schedule'}
             </button>
             <button
-              onClick={() => setMode('view')}
+              onClick={() => (autoEdit ? onCancel?.() : setMode('view'))}
               className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-600"
             >
               Cancel

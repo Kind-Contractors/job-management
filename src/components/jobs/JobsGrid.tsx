@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import type { ColDef, GetRowIdParams, GridApi, RowClassParams, TabToNextCellParams } from 'ag-grid-community';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { Division, FrequencyType, JobRow, Technician } from '../../domain/types';
 import type { GridBlock, GroupBy } from '../../lib/grouping';
-import { buildGridBlocks } from '../../lib/grouping';
+import { buildGridBlocks, collapseBlocks } from '../../lib/grouping';
 import { dueColorClass, getStatusPresentation } from '../../lib/statusPresentation';
 import { resolveDisplayContact } from '../../lib/contactDisplay';
 import { managerGridTheme } from '../../lib/gridTheme';
@@ -13,7 +13,7 @@ import { assignJobTechnician, patchJob, type JobPatchInput } from '../../reposit
 import { listTechnicians } from '../../repository/techniciansRepository';
 import { parseJobSummary, parsePricePerVisit } from './JobEditor';
 import SelectCellEditor from './SelectCellEditor';
-import GridBandRow from './GridBandRow';
+import GridBandRow, { type GridBandContext } from './GridBandRow';
 import StatusPill from './StatusPill';
 import ContactPopover from './ContactPopover';
 
@@ -415,6 +415,7 @@ interface JobsGridProps {
 }
 
 const NO_HIDDEN_COLUMNS: ReadonlySet<JobsGridColumnId> = new Set();
+const NO_COLLAPSED_BANDS: ReadonlySet<string> = new Set();
 
 export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hiddenColumns = NO_HIDDEN_COLUMNS }: JobsGridProps) {
   const queryClient = useQueryClient();
@@ -439,7 +440,29 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
     };
   }, []);
 
-  const blocks = useMemo(() => buildGridBlocks(rows, groupBy), [rows, groupBy]);
+  // Collapsed band ids. A VIEW state only: `buildGridBlocks` still produces every row and `collapseBlocks`
+  // filters a copy, so nothing about the data or the totals changes when a band is shut.
+  const [collapsedBands, setCollapsedBands] = useState<ReadonlySet<string>>(NO_COLLAPSED_BANDS);
+  const toggleBand = useCallback((bandId: string) => {
+    setCollapsedBands((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(bandId)) next.add(bandId);
+      return next;
+    });
+  }, []);
+  // Re-grouping (Client <-> Frequency) makes the old band ids meaningless, so the collapse state resets with it
+  // rather than silently hiding rows under bands the manager never shut.
+  const groupKeyRef = useRef(groupBy);
+  if (groupKeyRef.current !== groupBy) {
+    groupKeyRef.current = groupBy;
+    if (collapsedBands.size > 0) setCollapsedBands(NO_COLLAPSED_BANDS);
+  }
+
+  const blocks = useMemo(
+    () => collapseBlocks(buildGridBlocks(rows, groupBy), collapsedBands),
+    [rows, groupBy, collapsedBands],
+  );
+  const gridContext = useMemo<GridBandContext>(() => ({ onToggleBand: toggleBand }), [toggleBand]);
   const columnDefs = useMemo(
     () => buildColumnDefs(hiddenColumns, technicians, queryClient, setContactPopoverJob),
     [hiddenColumns, technicians, queryClient],
@@ -532,6 +555,7 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
           onGridReady={(params) => {
             gridApiRef.current = params.api;
           }}
+          context={gridContext}
           isFullWidthRow={(params) => params.rowNode.data?.kind === 'band'}
           fullWidthCellRenderer={GridBandRow}
           getRowHeight={(params) => (params.data?.kind === 'band' ? 34 : 38)}

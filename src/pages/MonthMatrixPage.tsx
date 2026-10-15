@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { listJobRows } from '../repository/jobsRepository';
 import type { JobRow } from '../domain/types';
-import { buildGridBlocks, type GroupBy } from '../lib/grouping';
+import { buildGridBlocks, collapseBlocks, type GroupBy } from '../lib/grouping';
 import { suggestDateInMonth } from '../lib/scheduleFormat';
 import type { MonthCellState } from '../lib/monthMatrix';
 import MonthMatrixGrid from '../components/matrix/MonthMatrixGrid';
@@ -15,6 +15,8 @@ function toISODate(d: Date): string {
   const day = String(d.getDate()).padStart(2, '0');
   return `${d.getFullYear()}-${month}-${day}`;
 }
+
+const NO_COLLAPSED_BANDS: ReadonlySet<string> = new Set();
 
 export default function MonthMatrixPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -41,9 +43,23 @@ export default function MonthMatrixPage() {
     () => allRows.filter((j) => division === 'Both' || j.division === division),
     [allRows, division],
   );
-  const blocks = useMemo(() => buildGridBlocks(rows, group), [rows, group]);
+  // Collapsed band ids — a view state only; every row is still derived and every total still counts them all.
+  const [collapsedBands, setCollapsedBands] = useState<ReadonlySet<string>>(NO_COLLAPSED_BANDS);
+  const blocks = useMemo(
+    () => collapseBlocks(buildGridBlocks(rows, group), collapsedBands),
+    [rows, group, collapsedBands],
+  );
+  const toggleBand = (bandId: string) =>
+    setCollapsedBands((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(bandId)) next.add(bandId);
+      return next;
+    });
 
   const toggleGroup = () => {
+    // The old band ids mean nothing under the other grouping, so the collapse state goes with them rather than
+    // silently hiding rows under bands the manager never shut.
+    setCollapsedBands(NO_COLLAPSED_BANDS);
     const params = new URLSearchParams(searchParams);
     if (group === 'frequency') params.set('group', 'client');
     else params.delete('group');
@@ -142,7 +158,7 @@ export default function MonthMatrixPage() {
         ) : (
           <div className="flex-1 overflow-auto px-5 pb-5">
             <MonthMatrixLegend />
-            <MonthMatrixGrid blocks={blocks} year={year} todayISO={todayISO} onSelectCell={handleSelectCell} />
+            <MonthMatrixGrid blocks={blocks} year={year} todayISO={todayISO} onSelectCell={handleSelectCell} onToggleBand={toggleBand} />
           </div>
         )}
       </div>

@@ -8,7 +8,7 @@
 // partial patch. Never infers a value from frequency_raw/frequency_type/
 // staging data; every field here is exactly what a manager typed.
 
-import type { ScheduleIntervalUnit, ScheduleType, ScheduleWeekOrdinal, ScheduleWeekday } from '../domain/types';
+import type { Schedule, ScheduleIntervalUnit, ScheduleType, ScheduleWeekOrdinal, ScheduleWeekday } from '../domain/types';
 import { supabase } from '../lib/supabaseClient';
 
 export type ScheduleInput =
@@ -104,6 +104,27 @@ function toRow(jobId: string, input: ScheduleInput): ScheduleRow {
     case 'ad_hoc':
       return base;
   }
+}
+
+/**
+ * The `Schedule` a `ScheduleInput` would become once saved — for showing a form's live preview through the same
+ * `describeSchedule`/`suggestNextDate` the saved row will use, so a preview can never disagree with the result.
+ * Purely a shape conversion; it writes nothing.
+ */
+export function scheduleFromInput(jobId: string, input: ScheduleInput): Schedule {
+  return {
+    jobId,
+    scheduleType: input.scheduleType,
+    intervalUnit: 'intervalUnit' in input ? input.intervalUnit : null,
+    intervalCount: 'intervalCount' in input ? input.intervalCount : null,
+    weekday: 'weekday' in input ? input.weekday : null,
+    weekOrdinal: 'weekOrdinal' in input ? input.weekOrdinal : null,
+    dayOfMonth: 'dayOfMonth' in input ? input.dayOfMonth : null,
+    rollForwardOnWeekend: 'rollForwardOnWeekend' in input ? input.rollForwardOnWeekend : true,
+    dueMonth: 'dueMonth' in input ? input.dueMonth : null,
+    anchorDate: 'anchorDate' in input ? input.anchorDate : null,
+    notes: input.notes,
+  };
 }
 
 /** Creates or replaces a job's one schedule — see the file header for why this is always a full-row upsert, never a partial patch. */

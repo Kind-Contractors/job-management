@@ -10,6 +10,12 @@ interface VisitTechnicianPickerProps {
   onChange: (selectedIds: string[]) => void;
   /** Text size class shared by the host form's other inputs. */
   textClass?: string;
+  /**
+   * Drops the "Technician(s)" caption above the control. Only for a host that already names the field - the
+   * Monthly Plan's TECHNICIAN column header does - where repeating it would both duplicate the label and push
+   * this control out of line with its neighbours. The button keeps its own accessible name either way.
+   */
+  hideLabel?: boolean;
 }
 
 /**
@@ -20,7 +26,7 @@ interface VisitTechnicianPickerProps {
  * visit_technicians. No cap; a checkbox is either ticked or not, so no
  * duplicates; inactive technicians are never offered.
  */
-export default function VisitTechnicianPicker({ technicians, selectedIds, onChange, textClass = 'text-[12.5px]' }: VisitTechnicianPickerProps) {
+export default function VisitTechnicianPicker({ technicians, selectedIds, onChange, textClass = 'text-[12.5px]', hideLabel = false }: VisitTechnicianPickerProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -50,7 +56,7 @@ export default function VisitTechnicianPicker({ technicians, selectedIds, onChan
 
   return (
     <div ref={containerRef} className="relative flex flex-col gap-1 text-[11px] text-neutral-600">
-      Technician(s)
+      {!hideLabel && 'Technician(s)'}
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

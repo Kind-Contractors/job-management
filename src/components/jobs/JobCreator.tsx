@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Division, FrequencyType } from '../../domain/types';
 import { createJob, type JobCreateInput } from '../../repository/jobsRepository';
-import { upsertSchedule } from '../../repository/schedulesRepository';
+import { scheduleFromInput, upsertSchedule } from '../../repository/schedulesRepository';
 import {
   buildFirstDueSchedule,
   firstDuePatternOptions,
@@ -339,18 +339,7 @@ export default function JobCreator({ buildingId, defaultFrequencyType, onCreated
 
             {scheduleInput && (
               <div className="border-l-2 border-teal bg-teal-100 px-2 py-1 text-[11.5px] text-ink" data-testid="recurrence-preview">
-                {describeSchedule({
-                  jobId: '', scheduleType: scheduleInput.scheduleType,
-                  intervalUnit: 'intervalUnit' in scheduleInput ? scheduleInput.intervalUnit : null,
-                  intervalCount: 'intervalCount' in scheduleInput ? scheduleInput.intervalCount : null,
-                  weekday: 'weekday' in scheduleInput ? scheduleInput.weekday : null,
-                  weekOrdinal: 'weekOrdinal' in scheduleInput ? scheduleInput.weekOrdinal : null,
-                  dayOfMonth: 'dayOfMonth' in scheduleInput ? scheduleInput.dayOfMonth : null,
-                  rollForwardOnWeekend: 'rollForwardOnWeekend' in scheduleInput ? scheduleInput.rollForwardOnWeekend : true,
-                  dueMonth: 'dueMonth' in scheduleInput ? scheduleInput.dueMonth : null,
-                  anchorDate: 'anchorDate' in scheduleInput ? scheduleInput.anchorDate : null,
-                  notes: null,
-                })}
+                {describeSchedule(scheduleFromInput('', scheduleInput))}
               </div>
             )}
           </div>

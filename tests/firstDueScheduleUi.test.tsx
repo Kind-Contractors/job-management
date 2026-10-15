@@ -114,12 +114,12 @@ const entry = (over: Partial<MonthlyPlanEntry> = {}): MonthlyPlanEntry => ({
 });
 
 const row = (e: MonthlyPlanEntry) =>
-  wrap(<MonthlyPlanRow entry={e} technicians={[]} onOpenJob={() => {}} />);
+  wrap(<MonthlyPlanRow entry={e} technicians={[]} onOpenJob={() => {}} onSetSchedule={() => {}} />);
 
 test('A no-schedule job appears on the plan explaining itself, with no booking form offered', () => {
   const html = row(entry());
   assert.match(html, /data-testid="no-schedule-explainer"/);
-  assert.match(html, /no schedule is set, so it never becomes due on its own/);
+  assert.match(html, /Won’t come due until a schedule is set\./);
   assert.match(html, />Set a schedule</);
   assert.match(html, />No schedule</, 'the badge');
   // Nothing may be booked into a cycle that does not exist — that is the invented due-ness this avoids.

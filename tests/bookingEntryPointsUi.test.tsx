@@ -41,7 +41,7 @@ const schedule = (over: Partial<Schedule> = {}): Schedule => ({
   weekOrdinal: null, dayOfMonth: null, rollForwardOnWeekend: true, dueMonth: 11, anchorDate: '2026-11-18', notes: null, ...over,
 });
 
-const job = (over: Partial<JobRow> = {}): JobRow =>
+const job = (): JobRow =>
   ({
     id: 'j1', buildingId: 'b1', buildingName: 'Flair House', clientId: 'c1', clientName: 'ABC Property',
     jobSummary: 'Communal cleaning', division: 'General', lifecycleStatus: 'active', serviceEndsOn: null,
@@ -57,7 +57,7 @@ const entry = (over: Partial<MonthlyPlanEntry> = {}): MonthlyPlanEntry => ({
   label: 'Due this month — no date set yet', needsSchedule: false, ...over,
 });
 
-const row = (e: MonthlyPlanEntry) => wrap(<MonthlyPlanRow entry={e} technicians={[]} onOpenJob={noop} />);
+const row = (e: MonthlyPlanEntry) => wrap(<MonthlyPlanRow entry={e} technicians={[]} onOpenJob={noop} onSetSchedule={noop} />);
 
 // ---- entry point 1: the Monthly Plan row ------------------------------------------------------------------------
 test('PLAN ROW: a due_month job outside its anchor month gets an EMPTY date and must be chosen', () => {
@@ -65,7 +65,7 @@ test('PLAN ROW: a due_month job outside its anchor month gets an EMPTY date and 
   assert.doesNotMatch(html, /value="2026-\d\d-01"/, 'never the 1st of the month');
   assert.doesNotMatch(html, /value="\d{4}-\d\d-18"/, 'and never the anchor’s day');
   assert.match(html, /data-testid="no-set-date-hint"/);
-  assert.match(html, /No set date for this month — choose one\./);
+  assert.match(html, /No set date — choose one\./);
   assert.match(html, /disabled=""/, 'Book is disabled while there is no date');
 });
 

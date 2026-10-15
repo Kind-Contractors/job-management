@@ -175,3 +175,28 @@ export function buildFirstDueSchedule(input: FirstDueScheduleInput): ScheduleInp
       return { ...common, scheduleType: 'due_month', dueMonth: parsed.month };
   }
 }
+
+/**
+ * The pattern fields a real due date implies — the day it lands on, under each of the dated patterns.
+ *
+ * `schedules.anchor_date` is defined as "a date this job was genuinely due on", so the pattern MUST land on it:
+ * a job due on 19 October is due on the 19th (fixed_date), on the 3rd Monday (fixed_weekday), in October
+ * (due_month). Deriving these is therefore a restatement of the anchor, not an inference about it.
+ *
+ * It exists because the two forms disagreed. JobCreator's "First due date" built the whole schedule from one
+ * date; ScheduleEditor's anchor field set only the phase and left `day_of_month` on its default of 1 — so
+ * picking 19 October there saved "the 1st of every month", and the plan correctly showed 1 November, rolled to
+ * Monday the 2nd. Both forms now put the same date through this one function.
+ *
+ * Null for a date that is not a real calendar date, so a half-typed value changes nothing.
+ */
+export function patternFieldsForAnchor(anchorISO: string): {
+  dayOfMonth: number;
+  weekday: ScheduleWeekday;
+  weekOrdinal: ScheduleWeekOrdinal;
+  dueMonth: number;
+} | null {
+  const parsed = parseFirstDueDate(anchorISO);
+  if (parsed == null) return null;
+  return { dayOfMonth: parsed.day, weekday: parsed.weekday, weekOrdinal: parsed.weekOrdinal, dueMonth: parsed.month };
+}
