@@ -5,8 +5,21 @@ import ChangePasswordDialog from '../../auth/ChangePasswordDialog';
 import LogoutButton from './LogoutButton';
 import kindContractorsLogo from '../../assets/kind_Contractors_logo.png';
 
-/** The only two routes whose page actually reads the `q` search param — see AllLiveJobsPage.tsx/BuildingsPage.tsx. Exact match, not startsWith, so /buildings/:id (Building File) is correctly excluded. */
-const SEARCHABLE_ROUTES = ['/jobs', '/buildings'];
+/**
+ * The routes whose page actually reads the shared `q` search param. A route belongs here ONLY if its page filters
+ * on `q` - enabling the box on a page that ignores it would be a search that silently does nothing.
+ *
+ * Exact match, not startsWith, so /buildings/:id (Building File) is correctly excluded.
+ *
+ * This list had gone stale: it held only /jobs and /buildings, while ThisWeekPage and HistoricalJobsPage already
+ * filtered on `q` (their boxes were disabled for no reason) and the Monthly Plan was never added. Month Matrix is
+ * deliberately NOT here - it does not read `q`.
+ */
+export const SEARCHABLE_ROUTES = ['/jobs', '/buildings', '/this-week', '/historical-jobs', '/monthly-plan'] as const;
+
+export function isSearchableRoute(pathname: string): boolean {
+  return (SEARCHABLE_ROUTES as readonly string[]).includes(pathname);
+}
 
 function initialsFor(email: string): string {
   const local = email.split('@')[0] ?? '';
@@ -29,7 +42,7 @@ export default function TopBar() {
   const [changingPassword, setChangingPassword] = useState(false);
   const q = searchParams.get('q') ?? '';
   const email = session?.user.email ?? '';
-  const searchable = SEARCHABLE_ROUTES.includes(pathname);
+  const searchable = isSearchableRoute(pathname);
 
   const onSearch = (value: string) => {
     const next = new URLSearchParams(searchParams);
@@ -56,7 +69,7 @@ export default function TopBar() {
             onChange={(e) => onSearch(e.target.value)}
             placeholder="Search jobs & buildings"
             disabled={!searchable}
-            title={searchable ? undefined : 'Search is only available on the Jobs and Buildings views'}
+            title={searchable ? undefined : 'Search isn’t available on this view'}
             className="min-w-0 flex-1 border-0 bg-transparent text-ink outline-none placeholder:text-neutral-500 disabled:cursor-not-allowed disabled:opacity-50"
           />
           <span className="border border-neutral-300 px-1 font-heading text-[10px] font-semibold text-neutral-600">

@@ -29,6 +29,7 @@ import MonthlyPlanRow, { MONTHLY_PLAN_COLUMNS } from '../components/monthlyPlan/
 import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
 import JobCreator from '../components/jobs/JobCreator';
 import BandToggle from '../components/shared/BandToggle';
+import { matchesJobSearch } from '../lib/jobSearch';
 import SetScheduleDialog from '../components/monthlyPlan/SetScheduleDialog';
 
 function toISODate(d: Date): string {
@@ -50,7 +51,11 @@ function monthLabel(monthPrefix: string): string {
  */
 type FilterKey = MonthlyPlanKind | 'all' | 'needs_schedule';
 const FILTERS: { key: FilterKey; label: string; match: (e: MonthlyPlanEntry) => boolean }[] = [
-  { key: 'all', label: 'Everything', match: () => true },
+  // The DEFAULT view: what is actually in play this month - due, booked, overdue, and jobs whose schedule exists but
+  // cannot be placed. Jobs with NO schedule are deliberately not here. A job with no schedule is not due in any
+  // month, so listing it in every month buried the worklist the moment real data arrived (418 imported jobs have no
+  // schedule yet). They stay one click away behind "Needs a schedule", with their count always on show.
+  { key: 'all', label: 'This month', match: (e) => e.kind !== 'no_schedule' },
   { key: 'due_no_date', label: 'To book', match: (e) => e.kind === 'due_no_date' },
   { key: 'carried_over', label: 'Overdue', match: (e) => e.kind === 'carried_over' },
   { key: 'booked', label: 'Booked', match: (e) => e.kind === 'booked' },
@@ -77,19 +82,28 @@ export default function MonthlyPlanPage() {
   const monthPrefix = searchParams.get('month') ?? defaultMonth;
 
   const division = searchParams.get('division') ?? 'Both';
+  // The global search box (TopBar) writes `?q=`; it filters jobs here exactly as it does on All Live Jobs.
+  const q = (searchParams.get('q') ?? '').trim();
   const group: GroupBy = searchParams.get('group') === 'frequency' ? 'frequency' : 'client';
 
   const { data: allRows = [], isLoading, isError, error } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
   const { data: technicians = [] } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
 
-  const rows = useMemo(() => allRows.filter((j) => division === 'Both' || j.division === division), [allRows, division]);
+  const rows = useMemo(
+    () => allRows.filter((j) => (division === 'Both' || j.division === division) && matchesJobSearch(j, q)),
+    [allRows, division, q],
+  );
   const entries = useMemo(() => buildMonthlyPlan(rows, monthPrefix, todayISO), [rows, monthPrefix, todayISO]);
   const counts = useMemo(() => monthlyPlanCounts(entries), [entries]);
   const needsSchedule = useMemo(() => needsScheduleCount(entries), [entries]);
   // Planned value is the same derivation All Live Jobs uses: price x frequency, with variable-priced jobs
   // counted as excluded rather than guessed at (CLAUDE.md section 14.2).
+  //
+  // Over the same set the default view shows (everything except jobs with no schedule). A job with no schedule is not
+  // part of this month's plan, so counting its yearly value here made an empty month read as a large planned one:
+  // with 418 unscheduled jobs the tile would sit beside "0 to book" showing the whole book's annual value.
   const planned = useMemo(() => {
-    const jobs = entries.map((e) => e.job);
+    const jobs = entries.filter((e) => e.kind !== 'no_schedule').map((e) => e.job);
     return {
       value: jobs.reduce((a, j) => a + (j.yearlyValue ?? 0), 0),
       variable: jobs.filter((j) => j.yearlyValue === null).length,
@@ -214,7 +228,7 @@ export default function MonthlyPlanPage() {
 
         <div className="flex flex-none flex-wrap items-center gap-1.5 px-5 pt-3 pb-3">
           {FILTERS.map((f) => {
-            const n = f.key === 'all' ? entries.length : f.key === 'needs_schedule' ? needsSchedule : counts[f.key];
+            const n = f.key === 'all' ? entries.filter(f.match).length : f.key === 'needs_schedule' ? needsSchedule : counts[f.key];
             return (
               <button
                 key={f.key}
@@ -238,14 +252,29 @@ export default function MonthlyPlanPage() {
           <div className="p-5">
             <div className="border border-neutral-300 bg-white px-5 py-10 text-center" data-testid="monthly-plan-empty">
               <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
-                {entries.length === 0
-                  ? `Nothing is due in ${monthLabel(monthPrefix)}`
-                  : `Nothing matches this filter for ${monthLabel(monthPrefix)}`}
+                {q
+                  ? `Nothing matches “${q}” in ${monthLabel(monthPrefix)}`
+                  : filter === 'all'
+                    ? `Nothing is due in ${monthLabel(monthPrefix)}`
+                    : `Nothing matches this filter for ${monthLabel(monthPrefix)}`}
               </div>
-              {entries.length > 0 && (
-                <button onClick={() => setFilter('all')} className="mt-1.5 cursor-pointer text-[13px] text-teal-700 hover:underline">
-                  Show everything
+              {/* Say what IS there rather than leaving a blank screen: an empty month with unscheduled jobs
+                  waiting is a different situation from a genuinely empty one, and the way out is one click. */}
+              {filter === 'all' && !q && needsSchedule > 0 && (
+                <div className="mt-1.5 text-[13px] text-neutral-600" data-testid="monthly-plan-empty-unscheduled">
+                  {needsSchedule} job{needsSchedule === 1 ? ' has' : 's have'} no schedule yet, so {needsSchedule === 1 ? 'it' : 'they'} can’t come due in any month.
+                </div>
+              )}
+              {filter === 'all' && needsSchedule > 0 && !q ? (
+                <button onClick={() => setFilter('needs_schedule')} className="mt-2 cursor-pointer text-[13px] text-teal-700 hover:underline">
+                  Review {needsSchedule} unscheduled job{needsSchedule === 1 ? '' : 's'}
                 </button>
+              ) : (
+                filter !== 'all' && (
+                  <button onClick={() => setFilter('all')} className="mt-1.5 cursor-pointer text-[13px] text-teal-700 hover:underline">
+                    Back to this month
+                  </button>
+                )
               )}
             </div>
           </div>
