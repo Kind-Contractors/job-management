@@ -5,6 +5,10 @@
 // Everything here is DERIVED from the same cached `['jobRows']` query every other view uses, so a booking made
 // here shows up on Schedule, the Month Matrix and the technician app immediately, and nothing needs generating,
 // storing or regenerating. There is no plan to save: booking writes a real visit the moment it is pressed.
+//
+// LAYOUT follows the other operational screens exactly (All Live Jobs, Buildings, Month Matrix): a flex row whose
+// first child is the page column and whose second is the single right-hand drawer slot; a 26px heading with its
+// period switcher and live counts beneath it; filter chips on their own row; then one bordered white list.
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
@@ -69,6 +73,7 @@ export default function MonthlyPlanPage() {
   const rows = useMemo(() => allRows.filter((j) => division === 'Both' || j.division === division), [allRows, division]);
   const entries = useMemo(() => buildMonthlyPlan(rows, monthPrefix, todayISO), [rows, monthPrefix, todayISO]);
   const counts = useMemo(() => monthlyPlanCounts(entries), [entries]);
+  const needsSchedule = useMemo(() => needsScheduleCount(entries), [entries]);
 
   const shown = useMemo(() => {
     const match = FILTERS.find((f) => f.key === filter)?.match ?? (() => true);
@@ -86,6 +91,7 @@ export default function MonthlyPlanPage() {
 
   const stepMonth = (delta: number) => setParam('month', shiftMonthPrefix(monthPrefix, delta));
   const openJob = (jobId: string, presetDate?: string) => {
+    setCreatingOneOff(false);
     setSelectedJobId(jobId);
     setPresetVisitDate(presetDate);
   };
@@ -93,128 +99,194 @@ export default function MonthlyPlanPage() {
   const selectedJob: JobRow | undefined = allRows.find((j) => j.id === selectedJobId);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className="flex flex-none flex-wrap items-center justify-between gap-3 border-b border-divider px-5 py-3">
-        <div>
-          <h1 className="font-heading text-lg font-semibold">Monthly plan</h1>
-          <div className="mt-0.5 text-xs text-neutral-600 tabular-nums">
-            {counts.due_no_date + counts.carried_over} to book · {counts.booked} booked
-            {counts.not_determinable > 0 && ` · ${counts.not_determinable} can’t tell`}
-            {needsScheduleCount(entries) > 0 && ` · ${needsScheduleCount(entries)} need a schedule`}
+    <div className="flex min-h-0 flex-1">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex flex-none items-end gap-3.5 px-5 pt-4 pb-3">
+          <div>
+            <h1 className="font-heading text-[26px] leading-none font-semibold">Monthly plan</h1>
+            {/* The month stepper sits under the title, the way Month Matrix's year stepper does: a period
+                switcher belongs to what the heading names, not among the page's actions. */}
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-neutral-600 tabular-nums">
+              <span className="flex items-center gap-1">
+                <button onClick={() => stepMonth(-1)} aria-label="Previous month" className="cursor-pointer px-1 text-neutral-500 hover:text-ink">
+                  ‹
+                </button>
+                <span className="font-semibold text-ink">{monthLabel(monthPrefix)}</span>
+                <button onClick={() => stepMonth(1)} aria-label="Next month" className="cursor-pointer px-1 text-neutral-500 hover:text-ink">
+                  ›
+                </button>
+              </span>
+              <span className="text-neutral-400">·</span>
+              <span>
+                {counts.due_no_date + counts.carried_over} to book · {counts.booked} booked
+                {counts.not_determinable > 0 && ` · ${counts.not_determinable} can’t tell`}
+                {needsSchedule > 0 && ` · ${needsSchedule} need a schedule`}
+              </span>
+              {monthPrefix !== defaultMonth && (
+                <button onClick={() => setParam('month', null)} className="cursor-pointer text-teal-700 hover:underline">
+                  Next month
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <button onClick={() => stepMonth(-1)} className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-100">
-            ‹
-          </button>
-          <span className="min-w-[130px] text-center font-heading text-[12.5px] font-semibold tabular-nums">{monthLabel(monthPrefix)}</span>
-          <button onClick={() => stepMonth(1)} className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-xs text-neutral-700 hover:bg-neutral-100">
-            ›
-          </button>
-          <button onClick={() => setParam('month', null)} className="ml-1 cursor-pointer text-[11.5px] text-teal-700 hover:underline">
-            Next month
-          </button>
-        </div>
-      </div>
-
-      <div className="flex flex-none flex-wrap items-center gap-1.5 border-b border-divider px-5 py-2">
-        {FILTERS.map((f) => {
-          const n = f.key === 'all' ? entries.length : f.key === 'needs_schedule' ? needsScheduleCount(entries) : counts[f.key];
-          return (
+          <div className="ml-auto flex items-start gap-1.5">
             <button
-              key={f.key}
-              onClick={() => setFilter(f.key)}
-              className={`cursor-pointer border px-2 py-0.5 text-[11px] ${filter === f.key ? 'border-teal bg-teal text-white' : 'border-neutral-300 text-neutral-700 hover:bg-neutral-100'}`}
+              onClick={() => setParam('group', group === 'client' ? 'frequency' : null)}
+              className="cursor-pointer border border-neutral-300 px-2.5 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
             >
-              {f.label} ({n})
+              Group: {group === 'client' ? 'Client' : 'Frequency'} ⇄
             </button>
-          );
-        })}
-        <button
-          onClick={() => setParam('group', group === 'client' ? 'frequency' : null)}
-          className="ml-auto cursor-pointer border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-700 hover:bg-neutral-100"
-        >
-          Group: {group === 'client' ? 'Client' : 'Frequency'}
-        </button>
-        <button onClick={() => setCreatingOneOff(true)} className="cursor-pointer border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-700 hover:bg-neutral-100">
-          + Add a one-off job
-        </button>
+            <button
+              onClick={() => {
+                setSelectedJobId(null);
+                setPresetVisitDate(undefined);
+                setCreatingOneOff(true);
+              }}
+              className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+            >
+              + One-off job
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-none flex-wrap items-center gap-1.5 px-5 pb-3">
+          {FILTERS.map((f) => {
+            const n = f.key === 'all' ? entries.length : f.key === 'needs_schedule' ? needsSchedule : counts[f.key];
+            return (
+              <button
+                key={f.key}
+                onClick={() => setFilter(f.key)}
+                className={[
+                  'cursor-pointer border px-2.5 py-1 text-xs',
+                  filter === f.key ? 'border-teal bg-teal-100 text-teal-700' : 'border-neutral-300 text-neutral-700 hover:bg-neutral-100',
+                ].join(' ')}
+              >
+                {f.label} ({n})
+              </button>
+            );
+          })}
+        </div>
+
+        {isLoading ? (
+          <LoadingSkeleton month={monthLabel(monthPrefix)} />
+        ) : isError ? (
+          <ErrorState message={error instanceof Error ? error.message : 'Something went wrong.'} />
+        ) : shown.length === 0 ? (
+          <div className="p-5">
+            <div className="border border-neutral-300 bg-white px-5 py-10 text-center" data-testid="monthly-plan-empty">
+              <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
+                {entries.length === 0
+                  ? `Nothing is due in ${monthLabel(monthPrefix)}`
+                  : `Nothing matches this filter for ${monthLabel(monthPrefix)}`}
+              </div>
+              {entries.length > 0 && (
+                <button onClick={() => setFilter('all')} className="mt-1.5 cursor-pointer text-[13px] text-teal-700 hover:underline">
+                  Show everything
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-auto px-5 pb-5">
+            {creatingOneOff && (
+              <div className="mb-3 text-[11.5px] text-neutral-600">
+                A one-off job has no schedule, so it never becomes due by itself — it appears here once you book it.
+              </div>
+            )}
+            {/* One bordered white surface, like every other list on the site: the band rows and job rows supply
+                their own separators so the whole thing reads as a single table rather than loose strips. */}
+            <div className="border border-neutral-300 bg-white" data-testid="monthly-plan">
+              {/* The same column header the Month Matrix grid has — without one a grouped list reads as loose
+                  strips rather than a table. */}
+              <div className="flex items-center border-b border-neutral-300 bg-neutral-200 px-3 py-2 font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-600 uppercase">
+                <span>Job</span>
+                <span className="ml-auto">When</span>
+              </div>
+              {blocks.map((block) =>
+                block.kind === 'band' ? (
+                  <div
+                    key={block.id}
+                    className="flex items-center gap-2.5 border-b border-neutral-300 bg-neutral-200 px-3 py-1.5"
+                  >
+                    <span className="font-heading text-[12.5px] font-semibold tracking-[0.11em] uppercase">▾ {block.title}</span>
+                    {block.subtitle && <span className="text-[11.5px] text-neutral-600">{block.subtitle}</span>}
+                    <span className="ml-auto text-[11.5px] text-neutral-700 tabular-nums">{block.rightLabel}</span>
+                  </div>
+                ) : (
+                  byJobId.has(block.job.id) && (
+                    <MonthlyPlanRow
+                      key={block.job.id}
+                      entry={byJobId.get(block.job.id)!}
+                      technicians={technicians}
+                      onOpenJob={openJob}
+                    />
+                  )
+                ),
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* A one-off job is just a job with no schedule: the existing JobCreator writes no `schedules` row, so
-          nothing recurring is created. Once made, it is booked from its own row like anything else. */}
-      {creatingOneOff && (
-        <div className="flex-none border-b border-divider bg-neutral-100 px-5 py-3">
-          <div className="mb-2 text-[11.5px] text-neutral-600">
-            A one-off job has no schedule, so it never becomes due by itself — it appears here once you book it.
-          </div>
-          <JobCreator
-            defaultFrequencyType="one_off"
-            onCreated={(jobId) => {
-              setCreatingOneOff(false);
-              // Opens the booking form with NO date: a one-off job has no schedule, so there is no day to
-              // suggest and the 1st would be as invented as any other. The manager picks it.
-              openJob(jobId, '');
-            }}
-            onCancel={() => setCreatingOneOff(false)}
-          />
-        </div>
-      )}
-
-      {isLoading ? (
-        <div className="p-5 font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">Loading…</div>
-      ) : isError ? (
-        <div className="p-5">
-          <div className="border border-missed bg-missed/10 p-3">
-            <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-missed-fg uppercase">Couldn’t load the plan</div>
-            <div className="mt-1.5 text-[12.5px] text-ink">{error instanceof Error ? error.message : 'Something went wrong.'}</div>
-          </div>
-        </div>
-      ) : shown.length === 0 ? (
-        <div className="p-5 text-[12.5px] text-neutral-600" data-testid="monthly-plan-empty">
-          {entries.length === 0
-            ? `Nothing is due in ${monthLabel(monthPrefix)}.`
-            : `Nothing matches this filter for ${monthLabel(monthPrefix)}.`}
-        </div>
-      ) : (
-        <div className="min-h-0 flex-1" data-testid="monthly-plan">
-          {blocks.map((block) =>
-            block.kind === 'band' ? (
-              <div key={block.id} className="flex flex-wrap items-baseline gap-2 border-b border-divider bg-neutral-100 px-3 py-1.5">
-                <span className="font-heading text-[10.5px] font-semibold tracking-[0.1em] text-neutral-700 uppercase">{block.title}</span>
-                {block.subtitle && <span className="text-[11px] text-neutral-500">{block.subtitle}</span>}
-                <span className="ml-auto text-[11px] text-neutral-500 tabular-nums">{block.rightLabel}</span>
-              </div>
-            ) : (
-              byJobId.has(block.job.id) && (
-                <MonthlyPlanRow
-                  key={block.job.id}
-                  entry={byJobId.get(block.job.id)!}
-                  technicians={technicians}
-                  onOpenJob={openJob}
-                />
-              )
-            ),
-          )}
-        </div>
-      )}
-
-      {selectedJob && (
-        <JobInspectorDrawer
-          // Keyed by job AND preset date: the drawer reads its date initializer once at mount, so opening a
-          // different month for the same job must remount it (same reasoning as MonthMatrixPage).
-          key={`${selectedJob.id}:${presetVisitDate ?? 'none'}`}
-          job={selectedJob}
-          siblings={allRows.filter((j) => j.buildingId === selectedJob.buildingId)}
-          onSelectSibling={(jobId) => openJob(jobId)}
-          forceShowBooking={presetVisitDate != null}
-          presetVisitDate={presetVisitDate}
-          onClose={() => {
-            setSelectedJobId(null);
-            setPresetVisitDate(undefined);
+      {/* The one-off creator and the job inspector share the single right-hand drawer slot every other page
+          uses, so only one is ever open and neither squeezes the list out of shape. */}
+      {creatingOneOff ? (
+        <JobCreator
+          defaultFrequencyType="one_off"
+          onCreated={(jobId) => {
+            // Opens the booking form with NO date: a one-off job has no schedule, so there is no day to
+            // suggest and the 1st would be as invented as any other. The manager picks it.
+            openJob(jobId, '');
           }}
+          onCancel={() => setCreatingOneOff(false)}
         />
+      ) : (
+        selectedJob && (
+          <JobInspectorDrawer
+            // Keyed by job AND preset date: the drawer reads its date initializer once at mount, so opening a
+            // different month for the same job must remount it (same reasoning as MonthMatrixPage).
+            key={`${selectedJob.id}:${presetVisitDate ?? 'none'}`}
+            job={selectedJob}
+            siblings={allRows.filter((j) => j.buildingId === selectedJob.buildingId)}
+            onSelectSibling={(jobId) => openJob(jobId)}
+            forceShowBooking={presetVisitDate != null}
+            presetVisitDate={presetVisitDate}
+            onClose={() => {
+              setSelectedJobId(null);
+              setPresetVisitDate(undefined);
+            }}
+          />
+        )
       )}
+    </div>
+  );
+}
+
+function ErrorState({ message }: { message: string }) {
+  return (
+    <div className="p-5">
+      <div className="border border-missed bg-missed/10 p-4">
+        <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-missed-fg uppercase">
+          Couldn’t load the monthly plan
+        </div>
+        <div className="mt-1.5 text-[13px] text-ink">{message}</div>
+      </div>
+    </div>
+  );
+}
+
+function LoadingSkeleton({ month }: { month: string }) {
+  const opacities = [1, 0.92, 0.84, 0.76, 0.68, 0.6, 0.52, 0.44, 0.36, 0.3];
+  return (
+    <div className="p-5">
+      <div className="grid gap-1.5">
+        {opacities.map((o, i) => (
+          <div key={i} className="h-[30px] animate-shimmer bg-neutral-300" style={{ opacity: o }} />
+        ))}
+      </div>
+      <div className="mt-4.5 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">
+        Loading {month}…
+      </div>
     </div>
   );
 }
