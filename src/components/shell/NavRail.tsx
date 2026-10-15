@@ -221,15 +221,22 @@ export default function NavRail() {
         count={readyForClientCount}
         collapsed={collapsed}
       />
-      <NavItem
-        active={onVideosWithoutReport}
-        onClick={() => navigate('/videos-without-report')}
-        dotClass="bg-teal"
-        icon={HiOutlineVideoCamera}
-        label="Videos without a report"
-        count={videoVisits.length}
-        collapsed={collapsed}
-      />
+      {/* Shown only while something is waiting here. Most of the time no visit has a video without a report, and a
+          permanent "0" row is clutter in a list headed "Needs you". It is a pure function of the live count, so it
+          comes back by itself the moment a video arrives before its report, or a cancelled job keeps a visit that
+          has one. The route, page and query are unchanged, so a bookmark or typed URL still works, and no video or
+          visit is touched: only this row's visibility depends on the count. */}
+      {videoVisits.length > 0 && (
+        <NavItem
+          active={onVideosWithoutReport}
+          onClick={() => navigate('/videos-without-report')}
+          dotClass="bg-teal"
+          icon={HiOutlineVideoCamera}
+          label="Videos without a report"
+          count={videoVisits.length}
+          collapsed={collapsed}
+        />
+      )}
       <div className="mx-4 my-4 h-px bg-divider" />
 
       {!collapsed && (
