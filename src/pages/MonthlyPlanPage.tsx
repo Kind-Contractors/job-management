@@ -15,6 +15,7 @@ import { buildGridBlocks, type GroupBy } from '../lib/grouping';
 import {
   buildMonthlyPlan,
   monthlyPlanCounts,
+  needsScheduleCount,
   parseMonthPrefix,
   shiftMonthPrefix,
   type MonthlyPlanEntry,
@@ -33,17 +34,23 @@ function monthLabel(monthPrefix: string): string {
   return new Date(year, month - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
 }
 
-const FILTERS: { key: MonthlyPlanKind | 'all'; label: string }[] = [
-  { key: 'all', label: 'Everything' },
-  { key: 'due_no_date', label: 'To book' },
-  { key: 'carried_over', label: 'Overdue' },
-  { key: 'booked', label: 'Booked' },
-  { key: 'not_determinable', label: 'Can’t tell' },
+/**
+ * `match` rather than a bare kind because "Needs a schedule" is a property of the JOB, not of this month: a
+ * recurring job with no schedule is worth finding even in a month where it happens to be booked.
+ */
+type FilterKey = MonthlyPlanKind | 'all' | 'needs_schedule';
+const FILTERS: { key: FilterKey; label: string; match: (e: MonthlyPlanEntry) => boolean }[] = [
+  { key: 'all', label: 'Everything', match: () => true },
+  { key: 'due_no_date', label: 'To book', match: (e) => e.kind === 'due_no_date' },
+  { key: 'carried_over', label: 'Overdue', match: (e) => e.kind === 'carried_over' },
+  { key: 'booked', label: 'Booked', match: (e) => e.kind === 'booked' },
+  { key: 'not_determinable', label: 'Can’t tell', match: (e) => e.kind === 'not_determinable' },
+  { key: 'needs_schedule', label: 'Needs a schedule', match: (e) => e.needsSchedule },
 ];
 
 export default function MonthlyPlanPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [filter, setFilter] = useState<MonthlyPlanKind | 'all'>('all');
+  const [filter, setFilter] = useState<FilterKey>('all');
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [presetVisitDate, setPresetVisitDate] = useState<string | undefined>(undefined);
   const [creatingOneOff, setCreatingOneOff] = useState(false);
@@ -63,7 +70,10 @@ export default function MonthlyPlanPage() {
   const entries = useMemo(() => buildMonthlyPlan(rows, monthPrefix, todayISO), [rows, monthPrefix, todayISO]);
   const counts = useMemo(() => monthlyPlanCounts(entries), [entries]);
 
-  const shown = useMemo(() => (filter === 'all' ? entries : entries.filter((e) => e.kind === filter)), [entries, filter]);
+  const shown = useMemo(() => {
+    const match = FILTERS.find((f) => f.key === filter)?.match ?? (() => true);
+    return entries.filter(match);
+  }, [entries, filter]);
   const byJobId = useMemo(() => new Map<string, MonthlyPlanEntry>(shown.map((e) => [e.job.id, e])), [shown]);
   const blocks = useMemo(() => buildGridBlocks(shown.map((e) => e.job), group), [shown, group]);
 
@@ -90,6 +100,7 @@ export default function MonthlyPlanPage() {
           <div className="mt-0.5 text-xs text-neutral-600 tabular-nums">
             {counts.due_no_date + counts.carried_over} to book · {counts.booked} booked
             {counts.not_determinable > 0 && ` · ${counts.not_determinable} can’t tell`}
+            {needsScheduleCount(entries) > 0 && ` · ${needsScheduleCount(entries)} need a schedule`}
           </div>
         </div>
         <div className="flex items-center gap-1.5">
@@ -108,7 +119,7 @@ export default function MonthlyPlanPage() {
 
       <div className="flex flex-none flex-wrap items-center gap-1.5 border-b border-divider px-5 py-2">
         {FILTERS.map((f) => {
-          const n = f.key === 'all' ? entries.length : counts[f.key];
+          const n = f.key === 'all' ? entries.length : f.key === 'needs_schedule' ? needsScheduleCount(entries) : counts[f.key];
           return (
             <button
               key={f.key}
@@ -141,7 +152,9 @@ export default function MonthlyPlanPage() {
             defaultFrequencyType="one_off"
             onCreated={(jobId) => {
               setCreatingOneOff(false);
-              openJob(jobId, `${monthPrefix}-01`);
+              // Opens the booking form with NO date: a one-off job has no schedule, so there is no day to
+              // suggest and the 1st would be as invented as any other. The manager picks it.
+              openJob(jobId, '');
             }}
             onCancel={() => setCreatingOneOff(false)}
           />
@@ -178,7 +191,6 @@ export default function MonthlyPlanPage() {
                   key={block.job.id}
                   entry={byJobId.get(block.job.id)!}
                   technicians={technicians}
-                  monthPrefix={monthPrefix}
                   onOpenJob={openJob}
                 />
               )

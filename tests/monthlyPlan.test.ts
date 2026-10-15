@@ -3,7 +3,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildMonthlyPlan, carriedOverLabel, needsBookingCount, shiftMonthPrefix, visitsOnDate } from '../src/lib/monthlyPlan';
+import {
+  buildMonthlyPlan, carriedOverLabel, needsBookingCount, needsScheduleCount, shiftMonthPrefix, visitsOnDate,
+} from '../src/lib/monthlyPlan';
 import type { JobRow, JobVisitSummary, Schedule } from '../src/domain/types';
 
 const TODAY = '2026-08-20';
@@ -151,4 +153,58 @@ test('VISITS ON A DATE finds real clashes and ignores cancelled ones — the dou
   const j = job({ visits: [visit({ scheduledDate: '2026-08-10' }), visit({ id: 'v2', scheduledDate: '2026-08-10', status: 'cancelled' })] });
   assert.equal(visitsOnDate(j, '2026-08-10').length, 1, 'a cancelled visit is not a clash');
   assert.equal(visitsOnDate(j, '2026-08-11').length, 0);
+});
+
+// ---- recurring jobs that have no schedule at all --------------------------------------------------------------
+// The gap Luke hit: picking Frequency = Monthly on the New Job form sets a PRICING label and writes no schedule,
+// so nothing could ever make the job due and it was simply absent from every month. It is now listed - as
+// unplannable, never as due.
+test('NO SCHEDULE: a job priced as recurring is listed so it can be found, and says it can never become due', () => {
+  const e = only(buildMonthlyPlan([job({ schedule: null, frequencyType: 'monthly' })], '2026-08', TODAY));
+  assert.equal(e.kind, 'no_schedule');
+  assert.equal(e.needsSchedule, true);
+  assert.equal(e.suggestedDate, null, 'no date may be suggested for a job with no cycle');
+  assert.deepEqual(e.visitsInMonth, []);
+  assert.equal(e.dueFromMonth, null, 'and no missed history may be invented for it');
+  assert.match(e.label, /never become due/);
+});
+
+test('NO SCHEDULE is not "to book": it is excluded from the booking count, which must only ever mean real demand', () => {
+  const entries = buildMonthlyPlan([job({ schedule: null, frequencyType: 'quarterly' }), job({ id: 'b' })], '2026-08', TODAY);
+  assert.equal(needsBookingCount(entries), 1, 'only the job with a real cycle');
+  assert.equal(needsScheduleCount(entries), 1);
+});
+
+test('AD-HOC and ONE-OFF jobs are never flagged for a missing schedule — they correctly have none', () => {
+  for (const frequencyType of ['ask_adhoc', 'one_off', null] as const) {
+    const entries = buildMonthlyPlan([job({ schedule: null, frequencyType })], '2026-08', TODAY);
+    assert.deepEqual(entries, [], `${frequencyType} must stay absent, exactly as before`);
+  }
+});
+
+test('WEEKLY with no schedule is flagged too — it is genuinely unscheduled, whatever the plan can place', () => {
+  const e = only(buildMonthlyPlan([job({ schedule: null, frequencyType: 'weekly' })], '2026-08', TODAY));
+  assert.equal(e.kind, 'no_schedule');
+  assert.equal(e.needsSchedule, true);
+});
+
+test('A BOOKED month does not hide a missing schedule: the flag rides on every entry, not just its own kind', () => {
+  const e = only(buildMonthlyPlan([job({ schedule: null, frequencyType: 'monthly', visits: [visit()] })], '2026-08', TODAY));
+  assert.equal(e.kind, 'booked', 'the real visit still wins');
+  assert.equal(e.needsSchedule, true, '...but September would have nothing, so it is still flagged');
+  assert.equal(needsScheduleCount([e]), 1);
+});
+
+test('A SCHEDULED recurring job is never flagged, and nothing about the existing kinds changed', () => {
+  const entries = buildMonthlyPlan(
+    [
+      job({ id: 'due', frequencyType: 'monthly' }),
+      job({ id: 'booked', frequencyType: 'monthly', visits: [visit()] }),
+      job({ id: 'cant', frequencyType: 'quarterly', schedule: schedule({ intervalUnit: 'quarter', intervalCount: 1 }) }),
+    ],
+    '2026-08',
+    TODAY,
+  );
+  assert.deepEqual(entries.map((e) => e.kind), ['due_no_date', 'booked', 'not_determinable']);
+  assert.equal(needsScheduleCount(entries), 0, 'a real schedule row is what clears the flag — not the frequency label');
 });

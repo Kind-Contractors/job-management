@@ -18,9 +18,10 @@
 
 import type { JobRow, JobVisitSummary } from '../domain/types';
 import { deriveMonthCellStates, type MonthCellState } from './monthMatrix';
+import { isRecurringFrequency } from './firstDueSchedule';
 import { suggestDateInMonth } from './scheduleFormat';
 
-export type MonthlyPlanKind = 'booked' | 'due_no_date' | 'carried_over' | 'not_determinable';
+export type MonthlyPlanKind = 'booked' | 'due_no_date' | 'carried_over' | 'not_determinable' | 'no_schedule';
 
 export interface MonthlyPlanEntry {
   job: JobRow;
@@ -33,6 +34,12 @@ export interface MonthlyPlanEntry {
   suggestedDate: string | null;
   /** Row text describing real data, never an invented reason. */
   label: string;
+  /**
+   * The job is priced as recurring but has no `schedules` row, so nothing can ever make it due. Carried on EVERY
+   * entry, not only the 'no_schedule' kind, so a job that happens to be booked this month is still flagged as
+   * unplannable next month. `ask_adhoc`/`one_off` are correctly schedule-less and are never flagged.
+   */
+  needsSchedule: boolean;
 }
 
 /** How far back carry-over looks. A year catches an annual job missed once without inventing ancient history. */
@@ -79,6 +86,7 @@ export function buildMonthlyPlan(jobs: JobRow[], monthPrefix: string, todayISO: 
 
     const cell = cellsByPrefix.get(monthPrefix)!;
     const suggestedDate = job.schedule ? suggestDateInMonth(job.schedule, year, month) : null;
+    const needsSchedule = job.schedule == null && isRecurringFrequency(job.frequencyType ?? null);
 
     // The earliest earlier month that was due and never booked. 'due_no_date' already means exactly that: a
     // month holding any real visit yields a visit kind instead, so nothing further needs checking.
@@ -112,24 +120,36 @@ export function buildMonthlyPlan(jobs: JobRow[], monthPrefix: string, todayISO: 
         dueFromMonth,
         suggestedDate,
         label: cell.label,
+        needsSchedule,
       });
       continue;
     }
 
     if (cell.kind === 'due_no_date') {
-      entries.push({ job, kind: 'due_no_date', visitsInMonth: [], dueFromMonth, suggestedDate, label: cell.label });
+      entries.push({ job, kind: 'due_no_date', visitsInMonth: [], dueFromMonth, suggestedDate, label: cell.label, needsSchedule });
       continue;
     }
 
     if (cell.kind === 'schedule_not_determinable') {
-      entries.push({ job, kind: 'not_determinable', visitsInMonth: [], dueFromMonth, suggestedDate, label: cell.label });
+      entries.push({ job, kind: 'not_determinable', visitsInMonth: [], dueFromMonth, suggestedDate, label: cell.label, needsSchedule });
       continue;
     }
 
     // 'not_due', 'no_schedule' and 'ad_hoc' are not due this month and have no visit in it. They belong on the
-    // plan only if earlier work was left unbooked.
+    // plan only if earlier work was left unbooked...
     if (dueFromMonth != null) {
-      entries.push({ job, kind: 'carried_over', visitsInMonth: [], dueFromMonth, suggestedDate, label: cell.label });
+      entries.push({ job, kind: 'carried_over', visitsInMonth: [], dueFromMonth, suggestedDate, label: cell.label, needsSchedule });
+      continue;
+    }
+
+    // ...or if they are recurring work that nothing can ever make due. This is NOT a claim that the job is due
+    // this month - it has no cycle to be due in. It is listed so an unscheduled recurring job is findable in the
+    // place Luke plans from, instead of being silently absent from every month forever.
+    if (needsSchedule) {
+      entries.push({
+        job, kind: 'no_schedule', visitsInMonth: [], dueFromMonth: null, suggestedDate: null,
+        label: 'No schedule set — this job can never become due', needsSchedule,
+      });
     }
   }
 
@@ -137,14 +157,23 @@ export function buildMonthlyPlan(jobs: JobRow[], monthPrefix: string, todayISO: 
 }
 
 export function monthlyPlanCounts(entries: MonthlyPlanEntry[]): Record<MonthlyPlanKind, number> {
-  const counts: Record<MonthlyPlanKind, number> = { booked: 0, due_no_date: 0, carried_over: 0, not_determinable: 0 };
+  const counts: Record<MonthlyPlanKind, number> = { booked: 0, due_no_date: 0, carried_over: 0, not_determinable: 0, no_schedule: 0 };
   for (const e of entries) counts[e.kind] += 1;
   return counts;
 }
 
-/** Everything still wanting a date — what the nav badge counts. */
+/**
+ * Everything still wanting a date — what the nav badge counts. Deliberately excludes 'no_schedule': those jobs
+ * are not due (nothing can make them due), so counting them as work to book would be the invented due-ness this
+ * module exists to avoid. They have their own filter instead.
+ */
 export function needsBookingCount(entries: MonthlyPlanEntry[]): number {
   return entries.filter((e) => e.kind === 'due_no_date' || e.kind === 'carried_over').length;
+}
+
+/** Recurring jobs with no schedule — flagged wherever they appear, not only when 'no_schedule' is their kind. */
+export function needsScheduleCount(entries: MonthlyPlanEntry[]): number {
+  return entries.filter((e) => e.needsSchedule).length;
 }
 
 /** "Overdue from June — never booked", or null. Used on the row and in its tooltip. */

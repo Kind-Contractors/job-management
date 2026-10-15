@@ -3,6 +3,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Schedule, ScheduleIntervalUnit, ScheduleType, ScheduleWeekOrdinal, ScheduleWeekday } from '../../domain/types';
 import { deleteSchedule, upsertSchedule, type ScheduleInput } from '../../repository/schedulesRepository';
 import { describeSchedule } from '../../lib/scheduleFormat';
+import { isRecurringFrequency, isWeekBasedFrequency } from '../../lib/firstDueSchedule';
+import type { FrequencyType } from '../../domain/types';
 
 const SCHEDULE_TYPE_LABEL: Record<ScheduleType, string> = {
   fixed_weekday: 'Fixed weekday',
@@ -121,9 +123,15 @@ function toInput(form: FormState): ScheduleInput | null {
 interface ScheduleEditorProps {
   jobId: string;
   schedule: Schedule | null;
+  /**
+   * The job's pricing frequency. Only used to decide whether a MISSING schedule is a real gap: a job priced as
+   * recurring that has none never becomes due by itself. `ask_adhoc`/`one_off`/unset are correctly schedule-less
+   * (CLAUDE.md §6) and must never be warned about.
+   */
+  frequencyType?: FrequencyType | null;
 }
 
-export default function ScheduleEditor({ jobId, schedule }: ScheduleEditorProps) {
+export default function ScheduleEditor({ jobId, schedule, frequencyType = null }: ScheduleEditorProps) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<'view' | 'edit' | 'confirm-remove'>('view');
   const [form, setForm] = useState<FormState>(schedule ? formFromSchedule(schedule) : BLANK_FORM);
@@ -190,6 +198,16 @@ export default function ScheduleEditor({ jobId, schedule }: ScheduleEditorProps)
           ) : (
             'No schedule set for this job.'
           )}
+        </div>
+      )}
+
+      {/* A recurring job with no schedule is the one case where "no schedule set" is a problem rather than a
+          fact, so it is stated as a warning with the consequence spelled out — not left as a quiet line of text. */}
+      {mode === 'view' && schedule == null && isRecurringFrequency(frequencyType) && (
+        <div className="mt-2 border border-due bg-due/10 p-2 text-[11.5px] text-due-fg" data-testid="missing-schedule-warning">
+          {isWeekBasedFrequency(frequencyType)
+            ? 'This job is priced as recurring, but weekly cadences can’t be placed on the Monthly Plan yet — book its visits from the Schedule.'
+            : 'This job is priced as recurring but has no schedule, so it will never become due on its own and won’t appear on the Monthly Plan. Add one above.'}
         </div>
       )}
 

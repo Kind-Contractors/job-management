@@ -20,8 +20,6 @@ import VisitTechnicianPicker from '../jobs/VisitTechnicianPicker';
 export interface MonthlyPlanRowProps {
   entry: MonthlyPlanEntry;
   technicians: Technician[];
-  /** 'YYYY-MM' being planned — the fallback date when the schedule can't suggest a real day. */
-  monthPrefix: string;
   onOpenJob: (jobId: string, presetDate?: string) => void;
 }
 
@@ -37,12 +35,16 @@ const KIND_BADGE: Record<MonthlyPlanEntry['kind'], { label: string; className: s
   due_no_date: { label: 'To book', className: 'border-due text-due-fg' },
   carried_over: { label: 'Overdue', className: 'border-missed text-missed-fg' },
   not_determinable: { label: 'Can’t tell', className: 'border-neutral-300 text-neutral-600' },
+  no_schedule: { label: 'No schedule', className: 'border-neutral-300 text-neutral-600' },
 };
 
-export default function MonthlyPlanRow({ entry, technicians, monthPrefix, onOpenJob }: MonthlyPlanRowProps) {
+export default function MonthlyPlanRow({ entry, technicians, onOpenJob }: MonthlyPlanRowProps) {
   const queryClient = useQueryClient();
   const { job } = entry;
-  const [date, setDate] = useState(entry.suggestedDate ?? `${monthPrefix}-01`);
+  // Empty when the schedule names no day for this month, rather than the 1st: substituting a date the schedule
+  // never claimed makes an undecided date look decided, and one click on Book would make it real. Book is already
+  // disabled while this is empty, so the manager has to choose.
+  const [date, setDate] = useState(entry.suggestedDate ?? '');
   const [technicianIds, setTechnicianIds] = useState<string[]>(job.defaultTechnicianId ? [job.defaultTechnicianId] : []);
   const [confirmingClash, setConfirmingClash] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,6 +93,11 @@ export default function MonthlyPlanRow({ entry, technicians, monthPrefix, onOpen
         <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-neutral-500">
           <span className={`border px-1 py-px font-heading text-[9.5px] font-semibold tracking-[0.08em] uppercase ${badge.className}`}>{badge.label}</span>
           <span>{job.schedulePattern}</span>
+          {entry.needsSchedule && entry.kind !== 'no_schedule' && (
+            <span className="border border-due bg-due/10 px-1 py-px text-[10px] text-due-fg" data-testid="needs-schedule-chip">
+              No schedule
+            </span>
+          )}
           {overdue && (
             <span className="border border-missed bg-missed/10 px-1 py-px text-[10px] text-missed-fg" data-testid="overdue-chip">
               {overdue}
@@ -115,6 +122,15 @@ export default function MonthlyPlanRow({ entry, technicians, monthPrefix, onOpen
               data-testid="change-booking"
             >
               Change date or team
+            </button>
+          </div>
+        )}
+
+        {entry.kind === 'no_schedule' && (
+          <div className="mt-1 text-[11.5px] text-neutral-600" data-testid="no-schedule-explainer">
+            Priced as {job.frequencyRaw.toLowerCase()} work, but no schedule is set, so it never becomes due on its own.{' '}
+            <button onClick={() => onOpenJob(job.id)} className="cursor-pointer text-teal-700 underline">
+              Set a schedule
             </button>
           </div>
         )}
@@ -152,6 +168,11 @@ export default function MonthlyPlanRow({ entry, technicians, monthPrefix, onOpen
               {bookMutation.isPending ? 'Booking…' : confirmingClash ? 'Book anyway' : 'Book'}
             </button>
           </div>
+          {!date && (
+            <div className="max-w-[320px] text-right text-[11px] text-neutral-600" data-testid="no-set-date-hint">
+              No set date for this month — choose one.
+            </div>
+          )}
           {confirmingClash && clash.length > 0 && (
             <div role="alert" className="max-w-[320px] text-right text-[11px] text-due-fg" data-testid="clash-warning">
               There is already a visit for this job on {new Date(date).toLocaleDateString('en-GB')}. Book another one?

@@ -16,11 +16,6 @@ function toISODate(d: Date): string {
   return `${d.getFullYear()}-${month}-${day}`;
 }
 
-/** Built directly from the year/month numbers, never via `new Date(...).toISOString()` — no timezone shift possible. */
-function firstOfMonthISO(year: number, month: number): string {
-  return `${year}-${String(month).padStart(2, '0')}-01`;
-}
-
 export default function MonthMatrixPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [yearOffset, setYearOffset] = useState(0);
@@ -59,17 +54,16 @@ export default function MonthMatrixPage() {
     setSelectedJobId(job.id);
     if (cell.kind === 'due_no_date' && cell.visitCount === 0) {
       setForceShowBooking(true);
-      // suggestDateInMonth only ever returns a real day for a literally-
-      // monthly fixed_date/fixed_weekday schedule — every other case (in
-      // particular due_month, which never stores a specific day) returns
-      // null. That null used to fall through to JobInspectorDrawer's own
-      // default of *today's real date*, so clicking e.g. a July due cell
-      // while today happens to fall in April silently pre-filled April's
-      // date. Falling back to the 1st of the CLICKED month instead keeps
-      // the pre-fill inside the month actually clicked, without fabricating
-      // a specific day this schedule never claimed to know.
+      // suggestDateInMonth returns a real day only when the schedule genuinely names one for this month
+      // (fixed_date / fixed_weekday, or a due_month cell in the anchor's own month). Everywhere else the date is
+      // honestly not set, and the empty string says so.
+      //
+      // The empty string is load-bearing, not a tidier `undefined`: JobInspectorDrawer defaults an ABSENT preset
+      // to *today's real date*, so clicking a July due cell in April used to pre-fill April. This used to fall
+      // back to the 1st of the clicked month to dodge that. The 1st was never a day this schedule claimed either,
+      // so now the field is simply left empty and Book stays disabled until the manager picks a date.
       const suggested = job.schedule ? suggestDateInMonth(job.schedule, year, month) : null;
-      setPresetVisitDate(suggested ?? firstOfMonthISO(year, month));
+      setPresetVisitDate(suggested ?? '');
     } else {
       setForceShowBooking(false);
       setPresetVisitDate(undefined);

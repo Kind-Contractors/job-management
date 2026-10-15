@@ -2,6 +2,15 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Division, FrequencyType } from '../../domain/types';
 import { createJob, type JobCreateInput } from '../../repository/jobsRepository';
+import { upsertSchedule } from '../../repository/schedulesRepository';
+import {
+  buildFirstDueSchedule,
+  firstDuePatternOptions,
+  isMonthBasedFrequency,
+  isWeekBasedFrequency,
+  type FirstDuePattern,
+} from '../../lib/firstDueSchedule';
+import { describeSchedule } from '../../lib/scheduleFormat';
 import { listBuildingRows } from '../../repository/buildingsRepository';
 import { listTechnicians } from '../../repository/techniciansRepository';
 import { FREQUENCY_TYPE_LABEL, computeDerivedPricing } from '../../repository/mapJobRow';
@@ -19,6 +28,10 @@ interface FormState {
   pricePerVisit: string;
   frequencyType: FrequencyType | '';
   defaultTechnicianId: string;
+  /** 'YYYY-MM-DD' or '' — blank means "create the job with no schedule", exactly as this form always did. */
+  firstDueDate: string;
+  firstDuePattern: FirstDuePattern;
+  rollForwardOnWeekend: boolean;
 }
 
 function blankForm(presetBuildingId?: string, defaultFrequencyType?: FrequencyType): FormState {
@@ -31,6 +44,9 @@ function blankForm(presetBuildingId?: string, defaultFrequencyType?: FrequencyTy
     pricePerVisit: '',
     frequencyType: defaultFrequencyType ?? '',
     defaultTechnicianId: '',
+    firstDueDate: '',
+    firstDuePattern: 'fixed_date',
+    rollForwardOnWeekend: true,
   };
 }
 
@@ -83,6 +99,8 @@ export default function JobCreator({ buildingId, defaultFrequencyType, onCreated
   const [form, setForm] = useState<FormState>(() => blankForm(buildingId, defaultFrequencyType));
   const [buildingQuery, setBuildingQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
+  /** Set only when the job was created but its schedule write failed — the job exists and must not be lost. */
+  const [scheduleFailure, setScheduleFailure] = useState<{ jobId: string; message: string } | null>(null);
 
   const { data: buildingRows = [] } = useQuery({ queryKey: ['buildingRows'], queryFn: listBuildingRows });
   const { data: technicians = [] } = useQuery({ queryKey: ['technicians'], queryFn: listTechnicians });
@@ -100,16 +118,46 @@ export default function JobCreator({ buildingId, defaultFrequencyType, onCreated
       .slice(0, 20);
   }, [buildingRows, buildingQuery, buildingId]);
 
+  // The schedule the First due date means under the chosen pattern, or null for "no schedule" — a blank date, a
+  // non-recurring frequency, or a week-based one. Null is always the form's original behaviour.
+  const scheduleInput = buildFirstDueSchedule({
+    frequencyType: form.frequencyType || null,
+    firstDueISO: form.firstDueDate,
+    pattern: form.firstDuePattern,
+    rollForwardOnWeekend: form.rollForwardOnWeekend,
+  });
+
   const createMutation = useMutation({
-    mutationFn: (input: JobCreateInput) => createJob(input),
-    onSuccess: (jobId) => {
+    // Two writes, deliberately sequential and deliberately not atomic: `jobs` and `schedules` are separate rows
+    // and the job is the one that must exist. If the schedule write fails the job is still real, so the failure
+    // is reported with a way into the job rather than swallowed or rolled back behind the manager's back.
+    mutationFn: async (input: JobCreateInput) => {
+      const jobId = await createJob(input);
+      if (scheduleInput == null) return { jobId, scheduleError: null };
+      try {
+        await upsertSchedule(jobId, scheduleInput);
+        return { jobId, scheduleError: null };
+      } catch (err) {
+        return { jobId, scheduleError: err instanceof Error ? err.message : 'Failed to save the schedule.' };
+      }
+    },
+    onSuccess: ({ jobId, scheduleError }) => {
       queryClient.invalidateQueries({ queryKey: ['jobRows'] });
+      if (scheduleError != null) {
+        setScheduleFailure({ jobId, message: scheduleError });
+        return;
+      }
       onCreated(jobId);
     },
     onError: (err) => setError(err instanceof Error ? err.message : 'Failed to create job.'),
   });
 
   const input = toInput(form);
+  const patternOptions = firstDuePatternOptions(form.firstDueDate);
+  const monthBased = isMonthBasedFrequency(form.frequencyType || null);
+  const weekBased = isWeekBasedFrequency(form.frequencyType || null);
+  // Said before pressing Create, not after: a recurring job with no schedule never becomes due by itself.
+  const recurringWithoutSchedule = (monthBased && scheduleInput == null) || weekBased;
 
   const parsedPricePerVisit =
     form.pricingType === 'fixed' && form.pricePerVisit !== '' && Number.isFinite(Number(form.pricePerVisit))
@@ -224,7 +272,7 @@ export default function JobCreator({ buildingId, defaultFrequencyType, onCreated
         </label>
 
         <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-          Frequency (optional)
+          Frequency (for pricing)
           <select
             value={form.frequencyType}
             onChange={(e) => setForm({ ...form, frequencyType: e.target.value as FrequencyType | '' })}
@@ -237,7 +285,93 @@ export default function JobCreator({ buildingId, defaultFrequencyType, onCreated
               </option>
             ))}
           </select>
+          <span className="text-neutral-500">
+            Used for the monthly and yearly totals. When the work actually falls is set below.
+          </span>
         </label>
+
+        {/* The recurrence shortcut. A date alone cannot say WHICH of the Master Reference §3.3 patterns is meant -
+            18 Nov 2026 is the 18th, the 3rd Wednesday and "some time in November" at once, and those diverge as
+            soon as the cycle advances - so the pattern is always chosen, never inferred. See firstDueSchedule.ts. */}
+        {monthBased && (
+          <div className="flex flex-col gap-1.5 border border-neutral-300 p-2" data-testid="recurrence-section">
+            <div className="font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-600 uppercase">
+              When is it due?
+            </div>
+            <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
+              First due date (optional)
+              <input
+                type="date"
+                value={form.firstDueDate}
+                onChange={(e) => setForm({ ...form, firstDueDate: e.target.value })}
+                aria-label="First due date"
+                className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+              />
+            </label>
+
+            {patternOptions && (
+              <fieldset className="flex flex-col gap-0.5" data-testid="recurrence-pattern">
+                <legend className="mb-0.5 text-[11px] text-neutral-600">How does it repeat?</legend>
+                {patternOptions.map((o) => (
+                  <label key={o.pattern} className="flex cursor-pointer items-center gap-1.5 text-[12px] text-ink">
+                    <input
+                      type="radio"
+                      name="firstDuePattern"
+                      value={o.pattern}
+                      checked={form.firstDuePattern === o.pattern}
+                      onChange={() => setForm({ ...form, firstDuePattern: o.pattern })}
+                    />
+                    {o.label}
+                  </label>
+                ))}
+                {form.firstDuePattern === 'fixed_date' && (
+                  <label className="mt-0.5 flex cursor-pointer items-center gap-1.5 text-[11.5px] text-neutral-600">
+                    <input
+                      type="checkbox"
+                      checked={form.rollForwardOnWeekend}
+                      onChange={(e) => setForm({ ...form, rollForwardOnWeekend: e.target.checked })}
+                    />
+                    Move to the next working day if it lands on a weekend
+                  </label>
+                )}
+              </fieldset>
+            )}
+
+            {scheduleInput && (
+              <div className="border-l-2 border-teal bg-teal-100 px-2 py-1 text-[11.5px] text-ink" data-testid="recurrence-preview">
+                {describeSchedule({
+                  jobId: '', scheduleType: scheduleInput.scheduleType,
+                  intervalUnit: 'intervalUnit' in scheduleInput ? scheduleInput.intervalUnit : null,
+                  intervalCount: 'intervalCount' in scheduleInput ? scheduleInput.intervalCount : null,
+                  weekday: 'weekday' in scheduleInput ? scheduleInput.weekday : null,
+                  weekOrdinal: 'weekOrdinal' in scheduleInput ? scheduleInput.weekOrdinal : null,
+                  dayOfMonth: 'dayOfMonth' in scheduleInput ? scheduleInput.dayOfMonth : null,
+                  rollForwardOnWeekend: 'rollForwardOnWeekend' in scheduleInput ? scheduleInput.rollForwardOnWeekend : true,
+                  dueMonth: 'dueMonth' in scheduleInput ? scheduleInput.dueMonth : null,
+                  anchorDate: 'anchorDate' in scheduleInput ? scheduleInput.anchorDate : null,
+                  notes: null,
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Weekly/fortnightly have no whole-month step, so the Monthly Plan cannot place them (anchored or not).
+            Saying so is better than writing a schedule that would read "can't tell" - see
+            docs/monthly-plan-weekly-occurrences.md. */}
+        {weekBased && (
+          <div className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg" data-testid="week-based-note">
+            {FREQUENCY_TYPE_LABEL[form.frequencyType as FrequencyType]} work can’t be placed on the Monthly Plan yet — it
+            repeats within a month rather than once per month. Create the job, then book its visits from the Schedule.
+          </div>
+        )}
+
+        {recurringWithoutSchedule && !weekBased && (
+          <div className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg" data-testid="no-schedule-warning">
+            No recurrence will be set, so this job will never become due on its own and won’t appear on the Monthly
+            Plan. Add a first due date above, or set a schedule on the job afterwards.
+          </div>
+        )}
 
         <div className="flex gap-2">
           <label className="flex flex-1 flex-col gap-1 text-[11px] text-neutral-600">
@@ -295,18 +429,36 @@ export default function JobCreator({ buildingId, defaultFrequencyType, onCreated
 
         {error && <div className="text-[11.5px] text-missed-fg">{error}</div>}
 
-        <div className="flex gap-1.5">
-          <button
-            onClick={() => input && createMutation.mutate(input)}
-            disabled={!input || createMutation.isPending}
-            className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {createMutation.isPending ? 'Creating…' : 'Create job'}
-          </button>
-          <button onClick={onCancel} className="cursor-pointer border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600">
-            Cancel
-          </button>
-        </div>
+        {/* The job was created and the schedule was not. Navigation is held back (rather than calling onCreated
+            silently) so the half-done state is stated plainly and the manager lands where they can finish it —
+            the same reasoning as BuildingCreator's optional-contact failure. */}
+        {scheduleFailure ? (
+          <div className="flex flex-col gap-1.5 border border-missed bg-missed/10 p-2" data-testid="schedule-failure">
+            <div className="text-[11.5px] text-missed-fg">
+              The job was created, but its schedule could not be saved: {scheduleFailure.message} The job has no
+              recurrence yet, so it won’t appear on the Monthly Plan until one is set.
+            </div>
+            <button
+              onClick={() => onCreated(scheduleFailure.jobId)}
+              className="cursor-pointer self-start bg-teal px-3 py-1.5 text-xs font-semibold text-white"
+            >
+              Open the job to set its schedule
+            </button>
+          </div>
+        ) : (
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => input && createMutation.mutate(input)}
+              disabled={!input || createMutation.isPending}
+              className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {createMutation.isPending ? 'Creating…' : 'Create job'}
+            </button>
+            <button onClick={onCancel} className="cursor-pointer border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600">
+              Cancel
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

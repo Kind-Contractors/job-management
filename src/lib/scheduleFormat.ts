@@ -128,11 +128,36 @@ function fixedDateInMonth(year: number, month: number, dayOfMonth: number): Date
   return dayOfMonth > daysInMonth ? null : new Date(year, month, dayOfMonth);
 }
 
-function rollForwardWeekend(d: Date): Date {
+/**
+ * Moves a weekend date to a working day WITHOUT leaving its own month.
+ *
+ * A working day here means Monday to Friday. There is no public-holiday calendar anywhere in this codebase and
+ * none is introduced here.
+ *
+ * Forward first - "rolls to the next working day" is the rule as CLAUDE.md section 6 and the App Master Reference
+ * section 3.3 state it. But that rule was written with a MID-MONTH example ("the 15th every quarter"), where
+ * forward can never leave the month. At month end it can: 31 January 2027 is a Sunday, and rolling forward put the
+ * visit on 1 February. That broke the schedule's stronger assertion - that the job is due in JANUARY - and the
+ * damage was not cosmetic: the booked visit landed in a month the job was not due in, January's cell stayed
+ * "due, no date" for ever, and the demand could never be satisfied by the only date the app offered for it.
+ *
+ * So the due MONTH wins, and the weekend adjustment is subordinate to it: when forward would cross the boundary,
+ * move backward to the last working day inside the month instead (31 January 2027 -> Friday 29 January).
+ *
+ * Backward can never leave the month in turn. Forward only crosses a boundary when the date is within one or two
+ * days of month end, and stepping back one or two days from there stays well inside any month.
+ */
+function adjustWeekendWithinMonth(d: Date): Date {
   const dow = d.getDay();
-  if (dow === 6) return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 2);
-  if (dow === 0) return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
-  return d;
+  if (dow !== 0 && dow !== 6) return d;
+
+  const year = d.getFullYear();
+  const monthIndex = d.getMonth();
+  const forward = new Date(year, monthIndex, d.getDate() + (dow === 6 ? 2 : 1));
+  if (forward.getMonth() === monthIndex) return forward;
+
+  // Saturday -> back to Friday; Sunday -> back to Friday.
+  return new Date(year, monthIndex, d.getDate() - (dow === 6 ? 1 : 2));
 }
 
 /** Whole months since year 0 for a 'YYYY-MM-DD' — string-sliced, never `new Date()`, so no timezone can shift the month. */
@@ -260,16 +285,24 @@ export function suggestDateInMonth(s: Schedule, year: number, month: number): st
     if (s.dayOfMonth == null) return null;
     const raw = fixedDateInMonth(year, monthIndex, s.dayOfMonth);
     if (!raw) return null;
-    return toISODate(s.rollForwardOnWeekend ? rollForwardWeekend(raw) : raw);
+    return toISODate(s.rollForwardOnWeekend ? adjustWeekendWithinMonth(raw) : raw);
   }
 
   if (s.scheduleType === 'due_month') {
-    // No day is stored for due_month, so only an anchor can supply one. Without it the month is right but the day is
-    // genuinely unknown - which is the point of this schedule type.
+    // due_month means "due in this month, exact date not set" (App Master Reference section 3.3). No day is stored,
+    // so there is no day to give back - EXCEPT in the anchor's own month, where the manager typed a real date and
+    // that date is simply true.
+    //
+    // Spreading the anchor's day-of-month across the other due months was wrong twice over: it invented a day
+    // nothing had recorded, and it made an anchored due_month produce byte-identical dates to a fixed_date on the
+    // same day - collapsing two of the four scheduling cases into one, which section 3.3 forbids in as many words.
+    //
+    // Returned verbatim, with no weekend adjustment: the manager typed this exact date, and
+    // roll_forward_on_weekend is not even offered for due_month in ScheduleEditor (it is only ever the column
+    // default here, never a decision). The caller shows an empty date field for the other months and makes the
+    // manager choose - which is what "date not set" has meant all along.
     if (s.anchorDate == null) return null;
-    const raw = fixedDateInMonth(year, monthIndex, Number(s.anchorDate.slice(8, 10)));
-    if (!raw) return null;
-    return toISODate(s.rollForwardOnWeekend ? rollForwardWeekend(raw) : raw);
+    return s.anchorDate.slice(0, 7) === `${year}-${String(month).padStart(2, '0')}` ? s.anchorDate : null;
   }
 
   return null;

@@ -56,6 +56,8 @@ export default function JobInspectorDrawer({
   const [lifecycleTransition, setLifecycleTransition] = useState<JobLifecycleTransition | null>(null);
   // "Mark as Cancelled" opens the shared cancellation dialog (this visit / this and future / the entire job), not the lifecycle dialog.
   const [cancelOpen, setCancelOpen] = useState(false);
+  // An EMPTY preset is deliberate and distinct from an absent one: it means "this month's date is genuinely not
+  // set, choose one". Only an absent preset falls back to today. (`'' ?? x` is `''`, so the empty string survives.)
   const [visitDate, setVisitDate] = useState(presetVisitDate ?? todayISO());
   // Selected technician ids in selection order; the job's default technician (if any) is the initial selection and, being first, the visit's primary.
   const [visitTechnicianIds, setVisitTechnicianIds] = useState<string[]>(job.defaultTechnicianId ? [job.defaultTechnicianId] : []);
@@ -186,6 +188,11 @@ export default function JobInspectorDrawer({
                 </button>
               </div>
             )}
+            {!visitDate && (
+              <div className="text-[11.5px] text-due-fg" data-testid="no-set-date-hint">
+                This job has no set date for this month — choose one.
+              </div>
+            )}
             <label className="flex flex-col gap-1 text-[11.5px] text-neutral-600">
               Date
               <input
@@ -238,7 +245,7 @@ export default function JobInspectorDrawer({
 
       {editingJob && <JobEditor job={job} onDone={() => setEditingJob(false)} />}
 
-      <ScheduleEditor jobId={job.id} schedule={job.schedule} />
+      <ScheduleEditor jobId={job.id} schedule={job.schedule} frequencyType={job.frequencyType} />
 
       {job.visits.length === 0 ? (
         <div className="px-4 pb-1">

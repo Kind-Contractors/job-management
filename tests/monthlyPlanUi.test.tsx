@@ -29,7 +29,7 @@ const entry = (over: Partial<MonthlyPlanEntry> = {}): MonthlyPlanEntry => ({
 const render = (e: MonthlyPlanEntry) =>
   renderToStaticMarkup(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <MonthlyPlanRow entry={e} technicians={technicians} monthPrefix="2026-08" onOpenJob={() => {}} />
+      <MonthlyPlanRow entry={e} technicians={technicians} onOpenJob={() => {}} />
     </QueryClientProvider>,
   );
 
@@ -43,8 +43,14 @@ test('TO BOOK: the row offers the schedule’s real suggested date, a technician
   assert.match(html, />To book</);
 });
 
-test('TO BOOK with no suggestable day falls back to the first of the planned month', () => {
-  assert.match(render(entry({ suggestedDate: null })), /value="2026-08-01"/);
+test('TO BOOK with no day named by the schedule leaves the date EMPTY and says so', () => {
+  // Never the 1st, and never the anchor's day: substituting a date the schedule did not name makes an undecided
+  // date look decided, and Book is one click away.
+  const html = render(entry({ suggestedDate: null }));
+  assert.doesNotMatch(html, /value="2026-08-01"/);
+  assert.match(html, /aria-label="Date for Flair House"[^>]*value=""|value=""[^>]*aria-label="Date for Flair House"/);
+  assert.match(html, /data-testid="no-set-date-hint"[^>]*>No set date for this month — choose one\./);
+  assert.match(html, /disabled=""/, 'Book stays disabled until a date is chosen');
 });
 
 test('OVERDUE: a carried-over job says which month it was missed from, and can still be booked', () => {

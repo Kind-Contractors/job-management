@@ -117,13 +117,43 @@ test('A WEEK interval stays not-determinable in a month-shaped view, anchored or
 });
 
 // ---- due_month + anchor: the anchor is the only thing that can supply a day ------------------------------------------
-test('DUE_MONTH WITH AN ANCHOR suggests the anchor’s own day, and refuses rather than clamp when it does not exist', () => {
+test('DUE_MONTH WITH AN ANCHOR gives back the anchor date ONLY in the anchor’s own month', () => {
+  // "due_month" means the exact date is not set (App Master Reference §3.3). The anchor is a real date the manager
+  // typed, so it is true for the month they typed it for - and says nothing whatever about any other month.
   const yearly = s({ scheduleType: 'due_month', weekday: null, weekOrdinal: null, dueMonth: 8, intervalUnit: 'year', intervalCount: 1, anchorDate: '2026-08-12', rollForwardOnWeekend: false });
-  assert.equal(suggestDateInMonth(yearly, 2027, 8), '2027-08-12');
-  assert.equal(suggestDateInMonth(yearly, 2027, 9), null, 'not in cycle');
-  const endOfMonth = s({ scheduleType: 'due_month', weekday: null, weekOrdinal: null, dueMonth: 1, intervalUnit: 'month', intervalCount: 1, anchorDate: '2026-01-31', rollForwardOnWeekend: false });
-  assert.equal(suggestDateInMonth(endOfMonth, 2026, 2), null, 'February has no 31st - never clamped');
-  assert.equal(suggestDateInMonth(endOfMonth, 2026, 3), '2026-03-31');
+  assert.equal(suggestDateInMonth(yearly, 2026, 8), '2026-08-12', 'the anchor’s own month: a real, typed date');
+  assert.equal(suggestDateInMonth(yearly, 2027, 8), null, 'in cycle, but no day was ever recorded for 2027');
+  assert.equal(suggestDateInMonth(yearly, 2027, 9), null, 'not in cycle at all');
+
+  const quarterly = s({ scheduleType: 'due_month', weekday: null, weekOrdinal: null, dueMonth: 11, intervalUnit: 'quarter', intervalCount: 1, anchorDate: '2026-11-18' });
+  assert.equal(suggestDateInMonth(quarterly, 2026, 11), '2026-11-18');
+  for (const [y, m] of [[2027, 2], [2027, 5], [2027, 8], [2027, 11]] as [number, number][]) {
+    assert.equal(suggestDateInMonth(quarterly, y, m), null, `${y}-${m} is due, but its DAY is not set`);
+  }
+  // ...and the months are still right, which is the whole point of due_month.
+  assert.deepEqual([...monthsDueInYear(quarterly, 2027)!], [2, 5, 8, 11]);
+});
+
+test('DUE_MONTH no longer impersonates FIXED_DATE — §3.3 keeps four cases, not three', () => {
+  const common = { intervalUnit: 'quarter', intervalCount: 1, anchorDate: '2026-11-18' } as const;
+  const dueMonth = s({ ...common, scheduleType: 'due_month', weekday: null, weekOrdinal: null, dueMonth: 11 });
+  const fixedDate = s({ ...common, scheduleType: 'fixed_date', weekday: null, weekOrdinal: null, dayOfMonth: 18 });
+  assert.deepEqual([...monthsDueInYear(dueMonth, 2027)!], [...monthsDueInYear(fixedDate, 2027)!], 'same months');
+  assert.equal(suggestDateInMonth(fixedDate, 2027, 2), '2027-02-18', 'fixed_date names the day');
+  assert.equal(suggestDateInMonth(dueMonth, 2027, 2), null, 'due_month does not — that is the difference');
+});
+
+test('DUE_MONTH never applies a weekend roll to the anchor: the manager typed that exact date', () => {
+  // 2026-11-21 is a Saturday. roll_forward_on_weekend is not even offered for due_month in ScheduleEditor, so it
+  // only ever holds the column default here — it must not move a date a manager typed by hand.
+  const sat = s({ scheduleType: 'due_month', weekday: null, weekOrdinal: null, dueMonth: 11, intervalUnit: 'month', intervalCount: 1, anchorDate: '2026-11-21', rollForwardOnWeekend: true });
+  assert.equal(suggestDateInMonth(sat, 2026, 11), '2026-11-21');
+});
+
+test('DUE_MONTH with NO anchor is unchanged: right months, never a day', () => {
+  const none = s({ scheduleType: 'due_month', weekday: null, weekOrdinal: null, dueMonth: 4, intervalUnit: 'quarter', intervalCount: 1, anchorDate: null });
+  assert.deepEqual([...monthsDueInYear(none, 2027)!], [1, 4, 7, 10]);
+  for (const m of [1, 4, 7, 10]) assert.equal(suggestDateInMonth(none, 2027, m), null);
 });
 
 test('DESCRIBE says which cycle an anchored long interval is on, and stays unchanged for monthly/unanchored', () => {
