@@ -57,6 +57,19 @@ export async function getXeroAccessToken(): Promise<string> {
   return token.access_token;
 }
 
+/**
+ * A Xero Accounting API request that came back non-2xx. Carries the HTTP status so a caller can tell "not found" (404)
+ * apart from every other failure without parsing the message. The message text is unchanged from before.
+ */
+export class XeroHttpError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'XeroHttpError';
+    this.status = status;
+  }
+}
+
 /** A read-only GET against the Xero Accounting API, using an already-obtained access token. */
 export async function xeroGet<T>(accessToken: string, path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -70,7 +83,7 @@ export async function xeroGet<T>(accessToken: string, path: string): Promise<T> 
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Xero API request to ${path} failed (HTTP ${response.status}): ${body}`);
+    throw new XeroHttpError(response.status, `Xero API request to ${path} failed (HTTP ${response.status}): ${body}`);
   }
 
   return (await response.json()) as T;
@@ -102,7 +115,7 @@ export async function xeroPost<T>(
 
   if (!response.ok) {
     const responseBody = await response.text();
-    throw new Error(`Xero API request to ${path} failed (HTTP ${response.status}): ${responseBody}`);
+    throw new XeroHttpError(response.status, `Xero API request to ${path} failed (HTTP ${response.status}): ${responseBody}`);
   }
 
   // Some successful Xero responses (e.g. POST /Invoices/{id}/Email) return an
@@ -115,32 +128,66 @@ export async function xeroPost<T>(
   return (responseText ? JSON.parse(responseText) : {}) as T;
 }
 
-/** Escapes a value for use inside a Xero `where` query-string clause (e.g. `where=Name=="value"`). */
-function escapeXeroWhereValue(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+// This module deliberately has NO way to create, update or search Xero contacts by name. A contact is only ever used by
+// the ID a manager explicitly linked to it, and is then re-read by that ID (read-only) before any invoice is written.
+
+const XERO_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** True only for a well-formed Xero GUID. Checked before an ID is placed in a URL path, so a stored value can never alter the request. */
+export function isXeroId(value: unknown): value is string {
+  return typeof value === 'string' && XERO_ID_PATTERN.test(value);
 }
 
 /**
- * Searches for an existing contact by exact company name — used before ever
- * creating a new one, to avoid a duplicate contact for a client Xero
- * already knows about from other work. Returns null (never guesses) when
- * there's no exact match; the caller decides whether to create one.
+ * The id of the Xero organisation this connection is actually bound to, read from Xero itself (GET /Organisation).
+ * The credentials alone do not say which organisation they belong to, so the id is asked for rather than assumed.
  */
-export async function findContactByName(accessToken: string, name: string): Promise<XeroContact | null> {
-  const where = `Name=="${escapeXeroWhereValue(name)}"`;
-  const result = await xeroGet<{ Contacts: XeroContact[] }>(accessToken, `/Contacts?where=${encodeURIComponent(where)}`);
-  const contacts = result.Contacts ?? [];
-  return contacts[0] ?? null;
+export async function getConnectedOrganisationId(accessToken: string): Promise<string> {
+  const result = await xeroGet<{ Organisations?: { OrganisationID?: string }[] }>(accessToken, '/Organisation');
+  const id = result.Organisations?.[0]?.OrganisationID;
+  if (typeof id !== 'string' || id.trim() === '') throw new Error('Xero did not return an organisation id.');
+  return id.trim();
 }
 
-/** Creates a new Xero contact. `email` is optional but should be supplied whenever known — Xero's own "email an invoice" step sends to the Contact's EmailAddress. */
-export async function createContact(accessToken: string, name: string, email: string | null): Promise<XeroContact> {
-  const result = await xeroPost<{ Contacts: XeroContact[] }>(accessToken, '/Contacts', {
-    Contacts: [{ Name: name, ...(email ? { EmailAddress: email } : {}) }],
-  });
-  const contact = result.Contacts?.[0];
-  if (!contact) throw new Error('Xero did not return the created contact.');
-  return contact;
+export type XeroLookup<T> = { outcome: 'found'; value: T } | { outcome: 'not_found' };
+
+async function lookupById<T>(accessToken: string, path: string, pick: (body: any) => T | undefined): Promise<XeroLookup<T>> {
+  try {
+    const found = pick(await xeroGet<unknown>(accessToken, path));
+    return found === undefined ? { outcome: 'not_found' } : { outcome: 'found', value: found };
+  } catch (err) {
+    if (err instanceof XeroHttpError && err.status === 404) return { outcome: 'not_found' };
+    throw err;
+  }
+}
+
+/** Reads one contact BY ID in the connected organisation. An id that is malformed, or that does not exist in THIS organisation, is 'not_found' - no request is made for a malformed one. */
+export async function getContactById(accessToken: string, contactId: string): Promise<XeroLookup<XeroContact>> {
+  if (!isXeroId(contactId)) return { outcome: 'not_found' };
+  return lookupById(accessToken, `/Contacts/${contactId}`, (body) => body?.Contacts?.[0]);
+}
+
+/**
+ * A read-only text search of the connected organisation's contacts (archived included, so a manager can see them and be
+ * told why they cannot be linked). Used ONLY by the manager-only link dialog, to show candidates a person then picks from.
+ * Its result is never used to decide anything: nothing is linked, matched or created from it. The term travels as one
+ * encoded query parameter, never inside a `where` expression.
+ */
+export async function searchContacts(accessToken: string, term: string, pageSize = 25): Promise<XeroContact[]> {
+  const params = new URLSearchParams({ searchTerm: term, includeArchived: 'true', page: '1', pageSize: String(pageSize) });
+  const result = await xeroGet<{ Contacts?: XeroContact[] }>(accessToken, `/Contacts?${params.toString()}`);
+  return result.Contacts ?? [];
+}
+
+export interface XeroInvoiceSummary {
+  InvoiceID: string;
+  Contact?: { ContactID?: string };
+}
+
+/** Reads one invoice BY ID in the connected organisation; 'not_found' for a malformed id or one that does not exist in THIS organisation. */
+export async function getInvoiceById(accessToken: string, invoiceId: string): Promise<XeroLookup<XeroInvoiceSummary>> {
+  if (!isXeroId(invoiceId)) return { outcome: 'not_found' };
+  return lookupById(accessToken, `/Invoices/${invoiceId}`, (body) => body?.Invoices?.[0]);
 }
 
 export interface XeroInvoiceLineItemInput {
@@ -287,6 +334,11 @@ export interface XeroContact {
   Name: string;
   EmailAddress?: string;
   ContactStatus: string;
+  AccountNumber?: string;
+  /** Present when this contact was merged into another: the surviving contact's id. */
+  MergedToContactID?: string;
+  Addresses?: { AddressType?: string; City?: string; PostalCode?: string }[];
+  ContactPersons?: { IncludeInEmails?: boolean }[];
 }
 
 export type ResolvedAccount =

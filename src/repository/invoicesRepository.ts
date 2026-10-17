@@ -11,11 +11,12 @@
 // thrown Error, same as every other constraint violation in this app.
 
 import type { InvoiceDetail, InvoiceLineItem, LocalInvoiceStatus } from '../domain/types';
+import { FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 
 const INVOICE_SELECT = `
   id, job_id, status, description, works_order_number, due_date,
-  xero_invoice_id, xero_invoice_number, last_error, sent_at,
+  xero_invoice_id, xero_invoice_number, xero_contact_id, last_error, sent_at,
   invoice_line_items ( id, visit_id, description, quantity, unit_amount, sort_order )
 `;
 
@@ -37,6 +38,7 @@ interface SupabaseInvoiceRow {
   due_date: string;
   xero_invoice_id: string | null;
   xero_invoice_number: string | null;
+  xero_contact_id: string | null;
   last_error: string | null;
   sent_at: string | null;
   invoice_line_items: SupabaseInvoiceLineItemRow[] | null;
@@ -62,6 +64,7 @@ function mapInvoice(row: SupabaseInvoiceRow): InvoiceDetail {
     dueDate: row.due_date,
     xeroInvoiceId: row.xero_invoice_id,
     xeroInvoiceNumber: row.xero_invoice_number,
+    xeroContactId: row.xero_contact_id,
     lastError: row.last_error,
     sentAt: row.sent_at,
     lineItems,
@@ -185,21 +188,42 @@ export interface SendInvoiceResult {
 
 /**
  * The only place this app ever talks to Xero — via the xero-create-invoice
- * Edge Function, never directly from the browser. Creates the Xero
- * contact if needed, creates the invoice AUTHORISED, and emails it, all in
- * one manager action (per Luke's explicit requirement — never a separate
- * "now go find it in Xero and send it" step).
+ * Edge Function, never directly from the browser. Creates the invoice
+ * AUTHORISED and emails it, all in one manager action (per Luke's explicit
+ * requirement — never a separate "now go find it in Xero and send it" step).
+ * It never creates or searches for a Xero contact: the recipient must already
+ * be linked to an existing one, and is re-verified in the connected Xero
+ * organisation first. Sending is also refused unless the server has sending
+ * enabled and the connected organisation is the expected one.
  *
- * `contactId` (a local `contacts.id`) is the recipient the manager selected
- * — required for a fresh send; omit when retrying an invoice that already
- * has a Xero invoice (its Xero Contact is already fixed, so the Edge
- * Function ignores contactId for that case regardless).
+ * `contactId` (a local `contacts.id`) is the recipient the manager chose for
+ * this invoice. Omit it to use the building's saved default recipient (the
+ * server refuses when there is none). Once Xero holds the invoice its
+ * recipient is locked: omit it, or the server refuses any other contact.
  */
+/**
+ * supabase-js reports any non-2xx answer from an Edge Function as the generic "Edge Function returned a non-2xx
+ * status code", which hides the actual reason (sending disabled, wrong Xero organisation, recipient not linked...).
+ * xero-create-invoice always puts a plain-language reason in the JSON body's `error`; show that, and only that, when it
+ * is there. Anything else falls back to the generic message.
+ */
+export async function describeInvokeError(error: Error): Promise<string> {
+  if (error instanceof FunctionsHttpError) {
+    try {
+      const body = await error.context.json();
+      if (body && typeof body.error === 'string' && body.error.trim() !== '') return body.error;
+    } catch {
+      // not JSON: fall through to the generic message
+    }
+  }
+  return error.message;
+}
+
 export async function sendInvoice(invoiceId: string, contactId?: string): Promise<SendInvoiceResult> {
   const { data, error } = await supabase.functions.invoke<SendInvoiceResult>('xero-create-invoice', {
     body: { invoiceId, contactId },
   });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(await describeInvokeError(error));
   if (!data) throw new Error('No response from xero-create-invoice.');
   return data;
 }

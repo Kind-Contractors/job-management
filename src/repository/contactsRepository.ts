@@ -6,7 +6,7 @@ import type { Contact } from '../domain/types';
 import { supabase } from '../lib/supabaseClient';
 import { logCurrentUserActivity } from './activityEventsRepository';
 
-const CONTACT_SELECT = 'id, client_id, name, role, email, phone_number, is_primary, is_accounts_contact, notes';
+const CONTACT_SELECT = 'id, client_id, name, role, email, phone_number, is_primary, is_accounts_contact, notes, xero_contact_id, xero_org_id, xero_contact_name, xero_linked_at';
 
 export async function listContactsForClient(clientId: string): Promise<Contact[]> {
   const { data, error } = await supabase
@@ -28,6 +28,10 @@ export async function listContactsForClient(clientId: string): Promise<Contact[]
     isPrimary: row.is_primary,
     isAccountsContact: row.is_accounts_contact,
     notes: row.notes,
+    xeroContactId: row.xero_contact_id ?? null,
+    xeroOrgId: row.xero_org_id ?? null,
+    xeroContactName: row.xero_contact_name ?? null,
+    xeroLinkedAt: row.xero_linked_at ?? null,
   }));
 }
 
@@ -112,6 +116,10 @@ export async function createContactForClient(clientId: string, input: ContactFie
     isPrimary: data.is_primary,
     isAccountsContact: data.is_accounts_contact,
     notes: data.notes,
+    xeroContactId: data.xero_contact_id ?? null,
+    xeroOrgId: data.xero_org_id ?? null,
+    xeroContactName: data.xero_contact_name ?? null,
+    xeroLinkedAt: data.xero_linked_at ?? null,
   };
 }
 

@@ -308,6 +308,21 @@ export interface JobContactSummary {
   phoneNumber: string | null;
   isPrimary: boolean;
   isAccountsContact: boolean;
+  /** The Xero contact this person is explicitly linked to (null = not linked). Only ever set by a manager through the link dialog. */
+  xeroContactId: string | null;
+  /** The Xero organisation that link was made in; a link is only used against the connected organisation. */
+  xeroOrgId: string | null;
+  /** The Xero contact name the manager confirmed when linking (a snapshot for display). */
+  xeroContactName: string | null;
+  xeroLinkedAt: string | null;
+}
+
+/** A building's saved default invoice recipient (a local contact of the building's client). All null = no default. */
+export interface BuildingDefaultRecipient {
+  contactId: string;
+  /** The Xero ContactID the contact was linked to WHEN it was chosen: the default is stale if the contact's link has changed since. */
+  xeroContactId: string;
+  xeroOrgId: string;
 }
 
 /** A job denormalized with its building/client for grid display. */
@@ -327,6 +342,8 @@ export interface JobRow extends Job {
    * contact at all — never fabricated.
    */
   clientContacts: JobContactSummary[];
+  /** This job's building's saved default invoice recipient, or null when none has been chosen. */
+  buildingDefaultRecipient: BuildingDefaultRecipient | null;
 }
 
 /**
@@ -361,6 +378,8 @@ export interface BuildingRow {
   /** From `buildings.extra_requirements` — '' when null (0% populated today). */
   siteInstructions: string;
   access: BuildingAccessInfo | null;
+  /** The saved default invoice recipient, or null. Set/cleared only through the manager-only xero-link-contact function. */
+  defaultRecipient: BuildingDefaultRecipient | null;
 }
 
 /**
@@ -379,6 +398,10 @@ export interface Contact {
   isPrimary: boolean;
   isAccountsContact: boolean;
   notes: string | null;
+  xeroContactId: string | null;
+  xeroOrgId: string | null;
+  xeroContactName: string | null;
+  xeroLinkedAt: string | null;
 }
 
 /** A real `activity_events` row for a building's History tab — never fabricated (CLAUDE.md section 15). */
@@ -485,6 +508,8 @@ export interface InvoiceDetail {
   worksOrderNumber: string | null;
   xeroInvoiceId: string | null;
   xeroInvoiceNumber: string | null;
+  /** The Xero contact the invoice was created for. Once xeroInvoiceId is set this is locked: it cannot be changed. */
+  xeroContactId: string | null;
   lastError: string | null;
   sentAt: string | null;
   lineItems: InvoiceLineItem[];

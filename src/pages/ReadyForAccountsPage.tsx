@@ -339,6 +339,7 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
                 onClose={() => setOpenInvoiceId(null)}
                 clientId={selected.job.clientId}
                 clientContacts={selected.job.clientContacts}
+                buildingDefault={selected.job.buildingDefaultRecipient}
               />
             ) : selected.visit.invoiceId ? (
               <div className="mt-3 border border-neutral-300 bg-white p-3">

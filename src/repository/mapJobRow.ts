@@ -98,6 +98,10 @@ interface SupabaseContact {
   phone_number: string | null;
   is_primary: boolean;
   is_accounts_contact: boolean;
+  xero_contact_id: string | null;
+  xero_org_id: string | null;
+  xero_contact_name: string | null;
+  xero_linked_at: string | null;
 }
 
 interface SupabaseClient {
@@ -113,6 +117,9 @@ interface SupabaseBuilding {
   invoice_details: string | null;
   name: string | null;
   postcode: string | null;
+  default_invoice_contact_id: string | null;
+  default_invoice_xero_contact_id: string | null;
+  default_invoice_xero_org_id: string | null;
   clients: SupabaseClient | SupabaseClient[] | null;
   building_access: SupabaseBuildingAccess | SupabaseBuildingAccess[] | null;
 }
@@ -451,6 +458,14 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
       phoneNumber: c.phone_number,
       isPrimary: c.is_primary,
       isAccountsContact: c.is_accounts_contact,
+      xeroContactId: c.xero_contact_id ?? null,
+      xeroOrgId: c.xero_org_id ?? null,
+      xeroContactName: c.xero_contact_name ?? null,
+      xeroLinkedAt: c.xero_linked_at ?? null,
     })),
+    buildingDefaultRecipient:
+      building?.default_invoice_contact_id && building.default_invoice_xero_contact_id && building.default_invoice_xero_org_id
+        ? { contactId: building.default_invoice_contact_id, xeroContactId: building.default_invoice_xero_contact_id, xeroOrgId: building.default_invoice_xero_org_id }
+        : null,
   };
 }

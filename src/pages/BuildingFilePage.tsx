@@ -9,6 +9,8 @@ import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
 import JobCreator from '../components/jobs/JobCreator';
 import BuildingEditor from '../components/jobs/BuildingEditor';
 import BuildingAccessEditor from '../components/jobs/BuildingAccessEditor';
+import BuildingDefaultRecipientPanel from '../components/jobs/BuildingDefaultRecipientPanel';
+import { linkStatusLabel, localLinkStatus } from '../lib/xeroLinkStatus';
 import { HISTORY_EVENT_LABEL, historyEventDetail } from '../lib/historyEventLabels';
 
 type Tab = 'site' | 'history';
@@ -288,11 +290,16 @@ export default function BuildingFilePage() {
                         </span>
                       )}
                     </span>
-                    <span className="text-right text-neutral-600">{c.email ?? c.phoneNumber ?? '—'}</span>
+                    <span className="text-right text-neutral-600">
+                      {c.email ?? c.phoneNumber ?? '—'}
+                      <span className={`block text-[11px] ${localLinkStatus(c) === 'linked' ? 'text-teal-700' : 'text-due-fg'}`}>{linkStatusLabel(c)}</span>
+                    </span>
                   </div>
                 ))
               )}
             </div>
+
+            {!contactsLoading && !contactsError && <BuildingDefaultRecipientPanel building={building} contacts={contacts} />}
 
             <div className="border border-dashed border-neutral-400 bg-neutral-100 p-3">
               <div className="flex items-center gap-2">

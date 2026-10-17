@@ -168,6 +168,7 @@ export function denormalizeJobRows(): JobRow[] {
       // no mock contact data exists, so this is honestly empty rather than
       // fabricated, per CLAUDE.md section 16.
       clientContacts: [],
+      buildingDefaultRecipient: null,
     };
   });
 }

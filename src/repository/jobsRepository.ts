@@ -96,9 +96,12 @@ const JOB_SELECT = `
     invoice_details,
     name,
     postcode,
+    default_invoice_contact_id,
+    default_invoice_xero_contact_id,
+    default_invoice_xero_org_id,
     clients (
       id, company_name,
-      contacts ( id, name, email, phone_number, is_primary, is_accounts_contact )
+      contacts ( id, name, email, phone_number, is_primary, is_accounts_contact, xero_contact_id, xero_org_id, xero_contact_name, xero_linked_at )
     ),
     building_access ( access_notes )
   ),

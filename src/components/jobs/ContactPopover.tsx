@@ -4,6 +4,9 @@ import type { JobContactSummary } from '../../domain/types';
 import { listJobRows } from '../../repository/jobsRepository';
 import { createContactForClient, updateContact, type ContactFieldsInput } from '../../repository/contactsRepository';
 import { resolveDisplayContact } from '../../lib/contactDisplay';
+import { linkStatusLabel, localLinkStatus, VERIFY_STATE_TEXT } from '../../lib/xeroLinkStatus';
+import { unlinkContact, verifyContactLink, type XeroLinkVerification } from '../../repository/xeroLinksRepository';
+import LinkXeroContactDialog from './LinkXeroContactDialog';
 
 interface ContactPopoverProps {
   clientId: string;
@@ -48,6 +51,8 @@ export default function ContactPopover({ clientId, clientName, onClose }: Contac
   const [adding, setAdding] = useState(contacts.length === 0);
   const [form, setForm] = useState<ContactFormState>(BLANK_FORM);
   const [error, setError] = useState<string | null>(null);
+  const [linking, setLinking] = useState(false);
+  const [verification, setVerification] = useState<XeroLinkVerification | null>(null);
 
   const selected = contacts.find((c) => c.id === selectedId) ?? null;
 
@@ -83,7 +88,27 @@ export default function ContactPopover({ clientId, clientName, onClose }: Contac
     onError: (err) => setError(err instanceof Error ? err.message : 'Failed to create contact.'),
   });
 
+  const verifyMutation = useMutation({
+    mutationFn: (id: string) => verifyContactLink(id),
+    onSuccess: (v) => {
+      setVerification(v);
+      setError(null);
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : 'The link could not be verified.'),
+  });
+
+  const unlinkMutation = useMutation({
+    mutationFn: (id: string) => unlinkContact(id),
+    onSuccess: () => {
+      invalidate();
+      setVerification(null);
+      setError(null);
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : 'The link could not be removed.'),
+  });
+
   const selectContact = (contact: JobContactSummary) => {
+    setVerification(null);
     setSelectedId(contact.id);
     setAdding(false);
     setError(null);
@@ -133,6 +158,7 @@ export default function ContactPopover({ clientId, clientName, onClose }: Contac
                   )}
                 </div>
                 <div className="text-neutral-600">{[c.email, c.phoneNumber].filter(Boolean).join(' · ') || 'No email or phone on file'}</div>
+                <div className={localLinkStatus(c) === 'linked' ? 'text-[11px] text-teal-700' : 'text-[11px] text-due-fg'}>{linkStatusLabel(c)}</div>
               </div>
             ))}
           </div>
@@ -145,6 +171,59 @@ export default function ContactPopover({ clientId, clientName, onClose }: Contac
           >
             + Add new contact
           </button>
+        )}
+
+        {selected && !adding && (
+          <div className="mt-2.5 flex flex-col gap-1.5 border-t border-divider pt-2.5">
+            <div className="font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-600 uppercase">Xero link</div>
+            <div className="text-[12px] text-ink">{linkStatusLabel(selected)}</div>
+            {verification && (
+              <div className={`text-[11.5px] ${VERIFY_STATE_TEXT[verification.state].ok ? 'text-teal-700' : 'text-missed-fg'}`}>
+                {VERIFY_STATE_TEXT[verification.state].text}
+                {verification.nameChanged ? ' The name in Xero has changed since it was linked.' : ''}
+              </div>
+            )}
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                onClick={() => setLinking(true)}
+                className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11.5px] text-neutral-700 hover:bg-neutral-100"
+              >
+                {localLinkStatus(selected) === 'not_linked' ? 'Link to Xero contact…' : 'Change link…'}
+              </button>
+              {localLinkStatus(selected) !== 'not_linked' && (
+                <>
+                  <button
+                    onClick={() => verifyMutation.mutate(selected.id)}
+                    disabled={verifyMutation.isPending}
+                    className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11.5px] text-neutral-700 hover:bg-neutral-100 disabled:opacity-60"
+                  >
+                    {verifyMutation.isPending ? 'Checking…' : 'Verify link'}
+                  </button>
+                  <button
+                    onClick={() => unlinkMutation.mutate(selected.id)}
+                    disabled={unlinkMutation.isPending}
+                    className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11.5px] text-neutral-700 hover:bg-neutral-100 disabled:opacity-60"
+                  >
+                    {unlinkMutation.isPending ? 'Removing…' : 'Unlink'}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {linking && selected && (
+          <LinkXeroContactDialog
+            localContactId={selected.id}
+            localContactName={selected.name}
+            suggestedTerm={clientName}
+            currentXeroContactId={selected.xeroContactId}
+            onClose={() => setLinking(false)}
+            onLinked={() => {
+              setVerification(null);
+              invalidate();
+            }}
+          />
         )}
 
         {(selected || adding) && (
