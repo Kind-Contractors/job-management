@@ -35,7 +35,13 @@ export type SafeguardCode =
   | 'DEFAULT_STALE'
   | 'DEFAULT_WRONG_ORGANISATION'
   | 'RECIPIENT_LOCKED'
-  | 'INVOICE_ORG_MISMATCH';
+  | 'INVOICE_ORG_MISMATCH'
+  | 'CONTACT_DETAILS_MISSING'
+  | 'CONTACT_AMBIGUOUS'
+  | 'CONTACT_MATCH_NOT_ACTIVE'
+  | 'CONTACT_NAME_TAKEN'
+  | 'CONTACT_SEARCH_INCOMPLETE'
+  | 'CONTACT_LINK_CONFLICT';
 
 export class XeroSafeguardError extends Error {
   readonly code: SafeguardCode;

@@ -30,7 +30,7 @@ const SECRET = 'test-client-secret-NEVER-LEAK';
 const ACCESS_TOKEN = 'xero-access-token-NEVER-LEAK';
 
 // ---- fake world ---------------------------------------------------------------------------------------------------------
-interface XeroContactRec { ContactID: string; Name: string; EmailAddress?: string; ContactStatus: string }
+interface XeroContactRec { ContactID: string; Name: string; EmailAddress?: string; ContactStatus: string; MergedToContactID?: string }
 interface Req { method: string; host: string; path: string; search: string; body: any; headers: Headers }
 const world = {
   // database
@@ -62,6 +62,13 @@ const world = {
   contactViolations: [] as string[],
   /** When set, every contact read by id answers with this HTTP status instead of the contact. */
   contactGetStatus: null as number | null,
+  /** POST /Contacts: HTTP status to answer with, contacts created per Idempotency-Key, and how many were really created. */
+  createContactStatus: 200,
+  createContactLoseResponse: false,
+  contactsByIdempotencyKey: {} as Record<string, XeroContactRec>,
+  contactCreates: 0,
+  /** Extra search results Xero returns (to simulate a full page). */
+  searchPadding: [] as XeroContactRec[],
   /** Number of times the invoice row was read, and an optional action to run right after read number n (to change the data between reads). */
   invoiceReads: 0,
   afterInvoiceRead: null as null | ((n: number) => void),
@@ -113,6 +120,11 @@ function reset() {
   world.unexpected = [];
   world.invoiceCounter = 0;
   world.contactGetStatus = null;
+  world.createContactStatus = 200;
+  world.createContactLoseResponse = false;
+  world.contactsByIdempotencyKey = {};
+  world.contactCreates = 0;
+  world.searchPadding = [];
   world.invoiceReads = 0;
   world.afterInvoiceRead = null;
   world.invoiceReadFails = false;
@@ -122,8 +134,38 @@ const json = (status: number, body: unknown) => new Response(JSON.stringify(body
 
 function xeroApi(r: Req): Response {
   const p = r.path.replace('/api.xro/2.0', '');
-  // The ONLY thing allowed to touch a contact is a read by id. Searching, listing, creating, updating: all violations.
-  if (/^\/Contacts/.test(p) && !(r.method === 'GET' && /^\/Contacts\/[^/]+$/.test(p))) world.contactViolations.push(`${r.method} ${p}${r.search}`);
+  // Allowed on contacts: a read by id, a search by searchTerm, and a create WITH an Idempotency-Key. Never an update, a
+  // where= (name) lookup, a list, or a create without a key.
+  if (/^\/Contacts/.test(p)) {
+    const read = r.method === 'GET' && /^\/Contacts\/[^/]+$/.test(p);
+    const search = r.method === 'GET' && p === '/Contacts' && new URLSearchParams(r.search).has('searchTerm') && !/where/i.test(r.search);
+    const create = r.method === 'POST' && p === '/Contacts' && !!r.headers.get('idempotency-key');
+    if (!read && !search && !create) world.contactViolations.push(`${r.method} ${p}${r.search}`);
+  }
+  if (r.method === 'GET' && p === '/Contacts') {
+    const q = new URLSearchParams(r.search);
+    const term = (q.get('searchTerm') ?? '').toLowerCase();
+    const size = Number(q.get('pageSize') ?? '100');
+    const found = Object.values(world.xeroContacts).filter((c) => c.Name.toLowerCase().includes(term) || (c.EmailAddress ?? '').toLowerCase().includes(term));
+    return json(200, { Contacts: [...found, ...world.searchPadding].slice(0, size) });
+  }
+  if (r.method === 'POST' && p === '/Contacts') {
+    const key = r.headers.get('idempotency-key') ?? '';
+    const replay = world.contactsByIdempotencyKey[key];
+    if (replay) return json(200, { Contacts: [replay] });
+    if (world.createContactStatus !== 200) return json(world.createContactStatus, { Type: 'Error', Message: 'contact create failed' });
+    const wanted = r.body.Contacts[0];
+    if (Object.values(world.xeroContacts).some((c) => c.Name.toLowerCase() === String(wanted.Name).toLowerCase())) {
+      return json(400, { Type: 'ValidationException', Message: 'The contact name is already assigned to another contact.' });
+    }
+    world.contactCreates += 1;
+    const id = `c1000000-0000-4000-8000-${String(world.contactCreates).padStart(12, '0')}`;
+    const created = { ContactID: id, Name: wanted.Name, EmailAddress: wanted.EmailAddress, ContactStatus: 'ACTIVE' };
+    world.xeroContacts[id] = created;
+    world.contactsByIdempotencyKey[key] = created;
+    if (world.createContactLoseResponse) return json(504, { Message: 'gateway timeout' });
+    return json(200, { Contacts: [created] });
+  }
   if (r.method === 'GET' && p === '/Organisation') {
     if (world.orgStatus !== 200) return json(world.orgStatus, { Type: 'Error', Message: 'org lookup failed' });
     return json(200, world.orgBody ?? { Organisations: [{ OrganisationID: ORG, Name: 'Fictional Test Org' }] });
@@ -188,7 +230,17 @@ globalThis.fetch = (async (input: any, init?: any) => {
     world.dbLog.push(r);
     const wantsObject = (headers.get('accept') ?? '').includes('vnd.pgrst.object');
     const one = (row: unknown) => json(200, wantsObject ? row : [row]);
-    if (r.path === '/rest/v1/contacts' && method !== 'GET') world.contactViolations.push(`local ${method} contacts`);
+    // The only local contact write allowed: saving a Xero link onto a contact that is still unlinked.
+    if (r.path === '/rest/v1/contacts' && method !== 'GET') {
+      const linkOnly = method === 'PATCH' && url.searchParams.get('xero_contact_id') === 'is.null'
+        && Object.keys(body ?? {}).every((k) => ['xero_contact_id', 'xero_org_id', 'xero_contact_name', 'xero_linked_at', 'xero_linked_by'].includes(k));
+      if (!linkOnly) world.contactViolations.push(`local ${method} contacts`);
+      const row = world.contacts[url.searchParams.get('id')?.replace(/^eq\./, '') ?? ''];
+      if (!row || row.xero_contact_id !== null) return json(200, wantsObject ? null : []);
+      Object.assign(row, body);
+      world.events.push(`db:LINK contact ${row.id} -> ${body.xero_contact_id}`);
+      return one({ id: row.id });
+    }
     if (r.path === '/auth/v1/user') return json(200, { id: 'user-1', aud: 'authenticated', email: 'luke@kindcontractors.co.uk', app_metadata: {}, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' });
     if (r.path === '/rest/v1/app_users') return one({ role: world.role, is_active: world.isActive });
     if (r.path === '/rest/v1/invoices' && method === 'PATCH') {
@@ -426,38 +478,6 @@ test('if Xero will not even issue a token, nothing is written to Xero and the in
   assert.equal(invoicePatches().length, 0);
   assert.equal(world.invoice.status, 'draft');
   assert.doesNotMatch(stringify(out), new RegExp(SECRET));
-});
-
-// ---- no automatic contact creation / search ----------------------------------------------------------------------------
-test('a recipient that is NOT linked is refused: no contact is searched for or created, and nothing is written to Xero', async () => {
-  world.contact.xero_contact_id = null;
-  const res = await call();
-  const out = await res.json();
-  assert.equal(res.status, 502);
-  assert.equal(out.code, 'NOT_LINKED');
-  assert.match(out.error, /never creates or guesses/);
-  assertNoXeroWrites();
-  assert.equal(contactRequests().length, 0, 'not even a read: there is no name search any more');
-  assert.equal(world.invoice.status, 'failed');
-});
-
-test('blank or whitespace links count as not linked', async () => {
-  for (const value of ['', '   ', null]) {
-    reset();
-    world.contact.xero_contact_id = value;
-    assert.equal((await (await call()).json()).code, 'NOT_LINKED', JSON.stringify(value));
-    assertNoXeroWrites();
-  }
-});
-
-test('AMBIGUITY cannot be guessed through: several Xero contacts with the recipient\'s own name exist, yet the unlinked recipient is refused and nothing is searched', async () => {
-  world.contact.xero_contact_id = null;
-  world.xeroContacts['11111111-1111-4111-8111-111111111111'] = { ContactID: '11111111-1111-4111-8111-111111111111', Name: 'Sam Client (Oak Estates)', EmailAddress: 'a@x.test', ContactStatus: 'ACTIVE' };
-  world.xeroContacts['22222222-2222-4222-8222-222222222222'] = { ContactID: '22222222-2222-4222-8222-222222222222', Name: 'Sam Client (Oak Estates)', EmailAddress: 'b@x.test', ContactStatus: 'ACTIVE' };
-  const res = await call();
-  assert.equal((await res.json()).code, 'NOT_LINKED');
-  assertNoXeroWrites();
-  assert.equal(contactRequests().length, 0);
 });
 
 test('a linked contact is used by its ID: no search, no create, and the stored link is not rewritten', async () => {
@@ -782,19 +802,9 @@ test('the Xero client can read a contact or invoice only by a well-formed id, an
   globalThis.fetch = original;
 });
 
-test('the Xero client has no way to create or search for a contact', () => {
-  for (const name of ['createContact', 'findContactByName']) {
-    assert.equal((xeroClient as Record<string, unknown>)[name], undefined, `${name} must not exist`);
-  }
-  // The one read-only search that exists serves the manager-only link dialog (tests/xeroLinkContactFunction.test.ts); the invoice
-  // flow never uses it (see the source guards below).
-  assert.equal(typeof (xeroClient as Record<string, unknown>).searchContacts, 'function');
-});
-
 // ---- duplicate-contact prevention -------------------------------------------------------------------------------------------------
-// The previous implementation searched Xero for a contact by name and created one when nothing matched. These tests prove
-// that behaviour cannot come back: with a valid link the existing contact is reused by its id; in every other case the
-// send fails safely; and no scenario, repeated or not, ever creates, searches for or changes a contact.
+// A LINKED contact is always used by its id and never searched for, changed or replaced. Automatic linking/creation applies
+// only to a contact with NO link at all (see the AUTO-CONTACT tests).
 const contactReads = () => contactRequests().filter((r) => r.method === 'GET');
 const snapshotXeroContacts = () => JSON.stringify(world.xeroContacts);
 
@@ -820,28 +830,6 @@ test('NO-DUPLICATES 2: the invoice names its contact by id ONLY (a Name or email
     assert.deepEqual(Object.keys(w.body.Invoices[0].Contact), ['ContactID'], `${w.method} ${w.path}`);
     assert.equal(w.body.Invoices[0].Contact.ContactID, CONTACT);
   }
-});
-
-test('NO-DUPLICATES 3: the contact-creation endpoint is never called - on a send, a failed send, or a retry', async () => {
-  world.emailStatus = 500;
-  await call();
-  world.emailStatus = 200;
-  await call();
-  reset();
-  world.contact.xero_contact_id = null;
-  await call();
-  assert.equal(accounting().filter((r) => /\/Contacts/.test(r.path) && r.method !== 'GET').length, 0);
-  assert.equal(accounting().filter((r) => /\/Contacts$/.test(r.path)).length, 0, 'no collection request (search, list or create)');
-  assert.deepEqual(world.contactViolations, []);
-});
-
-test('NO-DUPLICATES 4: a MISSING link fails safely - no contact is searched for or created, and the local contact stays unlinked', async () => {
-  world.contact.xero_contact_id = null;
-  const res = await call();
-  assert.equal((await res.json()).code, 'NOT_LINKED');
-  assert.equal(contactRequests().length, 0, 'not even a read');
-  assert.equal(world.contact.xero_contact_id, null, 'no link was invented');
-  assert.equal(invoiceCreatesOrUpdates().length, 0);
 });
 
 test('NO-DUPLICATES 5: an INVALID ContactID fails safely, whatever it looks like, and nothing is created in its place', async () => {
@@ -910,38 +898,6 @@ test('NO-DUPLICATES 10: a NAME or EMAIL MISMATCH between the local and the Xero 
   assert.equal(snapshotXeroContacts(), before);
 });
 
-test('NO-DUPLICATES 11: an UNLINKED local contact whose name and email EXACTLY match an existing Xero contact is still refused - no automatic match, no creation', async () => {
-  world.contact.xero_contact_id = null;
-  world.xeroContacts[OTHER_CONTACT] = { ContactID: OTHER_CONTACT, Name: 'Sam Client', EmailAddress: 'sam@client.test', ContactStatus: 'ACTIVE' };
-  const out = await (await call()).json();
-  assert.equal(out.code, 'NOT_LINKED');
-  assert.equal(contactRequests().length, 0, 'nothing was searched for');
-  assert.equal(world.contact.xero_contact_id, null, 'nothing was linked automatically');
-  assert.equal(invoiceCreatesOrUpdates().length, 0);
-});
-
-test('NO-DUPLICATES 12: REPEATED attempts on an unlinked contact (one after another) never create a contact or link one', async () => {
-  world.contact.xero_contact_id = null;
-  for (let attempt = 1; attempt <= 6; attempt += 1) {
-    const out = await (await call()).json();
-    assert.equal(out.code, 'NOT_LINKED', `attempt ${attempt}`);
-  }
-  assert.equal(contactRequests().length, 0);
-  assert.equal(world.contact.xero_contact_id, null);
-  assert.equal(invoiceCreatesOrUpdates().length, 0);
-  assert.equal(world.invoice.status, 'failed', 'still retryable after six refusals');
-});
-
-test('NO-DUPLICATES 13: REPEATED attempts at the same moment on an unlinked contact: still no contact request of any kind', async () => {
-  world.contact.xero_contact_id = null;
-  const results = await Promise.all(Array.from({ length: 6 }, () => call()));
-  const statuses = results.map((r) => r.status);
-  assert.ok(statuses.every((st) => st === 409 || st === 502), `every request was refused, none succeeded: ${statuses.join(',')}`);
-  assert.ok(statuses.includes(502), 'at least one request ran far enough to be refused as not linked');
-  assert.equal(contactRequests().length, 0);
-  assert.equal(invoiceCreatesOrUpdates().length, 0);
-});
-
 test('NO-DUPLICATES 14: REPEATED retries of a linked contact whose email step keeps failing create ONE invoice and read the same contact, never a new one', async () => {
   world.emailStatus = 500;
   for (let attempt = 1; attempt <= 5; attempt += 1) {
@@ -956,11 +912,14 @@ test('NO-DUPLICATES 14: REPEATED retries of a linked contact whose email step ke
   assert.equal(world.invoice.xero_contact_id, CONTACT);
 });
 
-test('NO-DUPLICATES 15: no source in the project can write a Xero contact - the only writes to Xero are invoice calls', () => {
+test('NO-DUPLICATES 15: the only Xero writes are invoice calls and ONE contact create, made only by the automatic-contact module', () => {
   const roots = ['supabase/functions', 'tools', 'src'];
   const files: Array<{ file: string; text: string }> = [];
   const walk = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    // tools/ is a local, untracked folder: absent in a clean checkout.
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
       else if (/\.(ts|tsx)$/.test(entry.name)) files.push({ file: full, text: readFileSync(full, 'utf8').replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '') });
@@ -969,8 +928,9 @@ test('NO-DUPLICATES 15: no source in the project can write a Xero contact - the 
   for (const r of roots) walk(join(process.cwd(), r));
   assert.ok(files.length > 20, 'the scan really covered the code');
   for (const { file, text } of files) {
-    assert.doesNotMatch(text, /createContact\b|findContactByName|updateContact\(.*xero/i, file);
-    if (/searchContacts/.test(text)) assert.match(file, /(_shared[\\/]xeroClient\.ts|xero-link-contact[\\/]index\.ts)$/, `${file} must not use the contact search`);
+    assert.doesNotMatch(text, /findContactByName|updateContact\(.*xero/i, file);
+    if (/createContact\b/.test(text)) assert.match(file, /_shared[\\/](xeroClient|autoXeroContact)\.ts$/, `${file} must not create Xero contacts`);
+    if (/searchContacts/.test(text)) assert.match(file, /(_shared[\\/](xeroClient|autoXeroContact)\.ts|xero-link-contact[\\/]index\.ts)$/, `${file} must not use the contact search`);
   }
   // Every call to xeroPost anywhere targets an invoice path.
   const callSites: string[] = [];
@@ -983,8 +943,8 @@ test('NO-DUPLICATES 15: no source in the project can write a Xero contact - the 
     }
   }
   assert.ok(callSites.length >= 2, 'the invoice and email calls were found');
-  for (const site of callSites) assert.match(site, /Invoices/, `a Xero POST that is not an invoice call: ${site}`);
-  assert.ok(callSites.every((site) => !/Contacts/.test(site)), 'no Xero POST targets a contact path');
+  for (const site of callSites) assert.match(site, /Invoices|xeroClient\.ts: '\/Contacts'$/, `a Xero POST that is not an invoice call or the one contact create: ${site}`);
+  assert.equal(callSites.filter((site) => /Contacts/.test(site)).length, 1, 'exactly one contact write: the create in xeroClient.ts (never an update /Contacts/{id})');
 });
 
 // ---- combined invoices: server-side validation of every line's visit against the invoice's job ----------------------------------------
@@ -1437,6 +1397,258 @@ test('DEFAULT 9: the default is used only for a FIRST send - an invoice Xero alr
   assert.equal(((await res.json()) as any).recipientSource, 'locked');
 });
 
+// ---- automatic Xero contact for an UNLINKED recipient (first send only) -------------------------------------------------------------
+const contactCreatesSent = () => accounting().filter((r) => r.method === 'POST' && r.path === '/api.xro/2.0/Contacts');
+const contactSearches = () => accounting().filter((r) => r.method === 'GET' && r.path === '/api.xro/2.0/Contacts');
+function unlinked(over: Record<string, unknown> = {}) {
+  Object.assign(world.contact, { xero_contact_id: null, xero_org_id: null, ...over });
+}
+
+test('AUTO-CONTACT 1: an already LINKED contact is reused by id: no search, no create, the link is not rewritten', async () => {
+  const res = await call();
+  assert.equal(res.status, 200);
+  assert.equal(contactSearches().length + contactCreatesSent().length, 0);
+  assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Contact.ContactID, CONTACT);
+  assert.equal(world.events.filter((e) => e.startsWith('db:LINK')).length, 0);
+  assert.equal(((await res.json()) as any).recipientSource, 'selected');
+});
+
+test('AUTO-CONTACT 2: an UNLINKED contact whose email matches exactly ONE active Xero contact is linked to it and reused - nothing created', async () => {
+  unlinked();
+  world.xeroContacts[OTHER_CONTACT] = { ContactID: OTHER_CONTACT, Name: 'Sam at Oak', EmailAddress: 'SAM@client.test', ContactStatus: 'ACTIVE' };
+  const res = await call();
+  const out = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(out));
+  assert.equal(out.recipientSource, 'auto_linked');
+  assert.equal(contactCreatesSent().length, 0, 'no contact created');
+  assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Contact.ContactID, OTHER_CONTACT);
+  assert.deepEqual(
+    [world.contact.xero_contact_id, world.contact.xero_org_id, world.contact.xero_contact_name],
+    [OTHER_CONTACT, ORG, 'Sam at Oak'],
+    'the link and the organisation are saved on the local contact',
+  );
+  assert.match(world.contact.xero_linked_by, /^auto \(invoice send\): /);
+});
+
+test('AUTO-CONTACT 3: an UNLINKED contact with no match is CREATED in Xero as "<person> (<client>)" with its email, idempotently, then linked and invoiced', async () => {
+  unlinked();
+  const res = await call();
+  const out = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(out));
+  assert.equal(out.recipientSource, 'auto_created');
+  const creates = contactCreatesSent();
+  assert.equal(creates.length, 1);
+  assert.deepEqual(creates[0].body, { Contacts: [{ Name: 'Sam Client (Oak Estates)', EmailAddress: 'sam@client.test' }] }, 'only a name and an email');
+  assert.match(creates[0].headers.get('idempotency-key') ?? '', /^[0-9a-f]{64}$/);
+  const newId = world.contact.xero_contact_id;
+  assert.match(newId, /^c1000000-/);
+  assert.equal(world.contact.xero_org_id, ORG);
+  assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Contact.ContactID, newId);
+  assert.equal(world.invoice.xero_contact_id, newId);
+  // Order: organisation verified -> claim -> contact created -> linked -> invoice created -> invoice emailed.
+  const at = (pred: (e: string) => boolean) => world.events.findIndex(pred);
+  const org = at((e) => e === 'xero:GET /Organisation');
+  const created = at((e) => e === 'xero:POST /Contacts');
+  const linked = at((e) => e.startsWith('db:LINK'));
+  const invoice = at((e) => e === 'xero:POST /Invoices');
+  const email = at((e) => e.endsWith('/Email'));
+  assert.ok(org < created && created < linked && linked < invoice && invoice < email, world.events.join('\n'));
+});
+
+test('AUTO-CONTACT 4: creating a contact never emails anything - no email call happens unless and until the invoice is created', async () => {
+  unlinked();
+  world.createStatus = 500; // the invoice create fails after the contact is created
+  await call();
+  assert.equal(contactCreatesSent().length, 1);
+  assert.equal(emailCalls().length, 0, 'no email at all');
+  assert.ok(contactCreatesSent().every((r) => !/Email/i.test(r.path)), 'the contact create is not an email request');
+});
+
+test('AUTO-CONTACT 5: SEVERAL Xero contacts with the same email are ambiguous - refused, nothing created, nothing linked, nothing invoiced', async () => {
+  unlinked();
+  world.xeroContacts['11111111-1111-4111-8111-111111111111'] = { ContactID: '11111111-1111-4111-8111-111111111111', Name: 'A', EmailAddress: 'sam@client.test', ContactStatus: 'ACTIVE' };
+  world.xeroContacts['22222222-2222-4222-8222-222222222222'] = { ContactID: '22222222-2222-4222-8222-222222222222', Name: 'B', EmailAddress: 'sam@client.test', ContactStatus: 'ACTIVE' };
+  const out = await (await call()).json();
+  assert.equal(out.code, 'CONTACT_AMBIGUOUS');
+  assert.match(out.error, /cannot tell which one to use/);
+  assert.equal(contactCreatesSent().length, 0);
+  assert.equal(world.contact.xero_contact_id, null);
+  assert.equal(invoiceCreatesOrUpdates().length, 0);
+  assert.equal(world.invoice.status, 'failed', 'retryable once the manager links the right one');
+});
+
+test('AUTO-CONTACT 6: an archived or merged email match, a name already taken by another email, or an incomplete search are refused - never guessed', async () => {
+  const cases: Array<[() => void, string]> = [
+    [() => { world.xeroContacts[OTHER_CONTACT] = { ContactID: OTHER_CONTACT, Name: 'Old', EmailAddress: 'sam@client.test', ContactStatus: 'ARCHIVED' }; }, 'CONTACT_MATCH_NOT_ACTIVE'],
+    [() => { world.xeroContacts[OTHER_CONTACT] = { ContactID: OTHER_CONTACT, Name: 'Old', EmailAddress: 'sam@client.test', ContactStatus: 'ACTIVE', MergedToContactID: CONTACT }; }, 'CONTACT_MATCH_NOT_ACTIVE'],
+    [() => { world.xeroContacts[OTHER_CONTACT] = { ContactID: OTHER_CONTACT, Name: 'Sam Client (Oak Estates)', EmailAddress: 'someone@else.test', ContactStatus: 'ACTIVE' }; }, 'CONTACT_NAME_TAKEN'],
+    [() => { world.searchPadding = Array.from({ length: 25 }, (_, i) => ({ ContactID: `${String(i).padStart(8, '0')}-0000-4000-8000-000000000000`, Name: `X${i}`, EmailAddress: `x${i}@y.test`, ContactStatus: 'ACTIVE' })); }, 'CONTACT_SEARCH_INCOMPLETE'],
+  ];
+  for (const [setup, code] of cases) {
+    reset();
+    unlinked();
+    setup();
+    const out = await (await call()).json();
+    assert.equal(out.code, code);
+    assert.equal(contactCreatesSent().length, 0, code);
+    assert.equal(world.contact.xero_contact_id, null, code);
+    assert.equal(invoiceCreatesOrUpdates().length, 0, code);
+  }
+});
+
+test('AUTO-CONTACT 7: missing details (no email, an invalid email, no name, no client name) are refused with what to fix - before Xero is searched', async () => {
+  const cases: Array<[() => void, RegExp]> = [
+    [() => unlinked({ email: null }), /a valid email address/],
+    [() => unlinked({ email: 'not-an-email' }), /a valid email address/],
+    [() => unlinked({ name: '  ' }), /a name/],
+    [() => { unlinked(); world.invoice.jobs.buildings.clients.company_name = ' '; }, /the client's name/],
+  ];
+  for (const [setup, message] of cases) {
+    reset();
+    setup();
+    const out = await (await call()).json();
+    assert.equal(out.code, 'CONTACT_DETAILS_MISSING');
+    assert.match(out.error, message);
+    assert.equal(contactSearches().length + contactCreatesSent().length, 0);
+    assert.equal(invoiceCreatesOrUpdates().length, 0);
+  }
+});
+
+test('AUTO-CONTACT 8: in the WRONG organisation nothing is searched, created or linked (the organisation check comes first)', async () => {
+  unlinked();
+  world.orgBody = { Organisations: [{ OrganisationID: OTHER_ORG }] };
+  const out = await (await call()).json();
+  assert.equal(out.code, 'ORG_MISMATCH');
+  assert.equal(contactRequests().length, 0);
+  assert.equal(world.contact.xero_contact_id, null);
+});
+
+test('AUTO-CONTACT 9: an EXISTING link is never replaced automatically - untagged, other-organisation or missing-in-Xero links are refused, not re-created', async () => {
+  for (const [setup, code] of [
+    [() => { world.contact.xero_org_id = null; }, 'LINK_UNTAGGED'],
+    [() => { world.contact.xero_org_id = OTHER_ORG; }, 'LINK_WRONG_ORGANISATION'],
+    [() => { world.contact.xero_contact_id = 'f0f0f0f0-f0f0-4f0f-8f0f-f0f0f0f0f0f0'; }, 'LINK_NOT_IN_ORGANISATION'],
+    [() => { world.contact.xero_contact_id = '   '; }, 'NOT_LINKED'],
+  ] as Array<[() => void, string]>) {
+    reset();
+    setup();
+    const out = await (await call()).json();
+    assert.equal(out.code, code);
+    assert.equal(contactSearches().length + contactCreatesSent().length, 0, code);
+  }
+});
+
+test('AUTO-CONTACT 10: if the contact CREATE fails, no invoice is created, nothing is linked, and the invoice is left retryable', async () => {
+  unlinked();
+  world.createContactStatus = 500;
+  const res = await call();
+  assert.equal(res.status, 502);
+  assert.equal(invoiceCreatesOrUpdates().length, 0);
+  assert.equal(world.contact.xero_contact_id, null);
+  assert.equal(world.invoice.status, 'failed');
+  assert.equal(emailCalls().length, 0);
+});
+
+test('AUTO-CONTACT 11: RETRY after the contact was created but the invoice failed: the link is reused, no second contact', async () => {
+  unlinked();
+  world.createStatus = 500;
+  await call();
+  assert.equal(world.contactCreates, 1);
+  const linkedTo = world.contact.xero_contact_id;
+  world.createStatus = 200;
+  const res = await call();
+  assert.equal(res.status, 200);
+  assert.equal(world.contactCreates, 1, 'still exactly one contact in Xero');
+  assert.equal(contactCreatesSent().length, 1, 'the retry did not even try to create');
+  assert.equal(invoiceCreatesOrUpdates().at(-1)!.body.Invoices[0].Contact.ContactID, linkedTo);
+});
+
+test('AUTO-CONTACT 12: TIMEOUT after Xero created the contact (response lost): the retry finds it by email and links it - no duplicate', async () => {
+  unlinked();
+  world.createContactLoseResponse = true;
+  const first = await call();
+  assert.equal(first.status, 502);
+  assert.equal(world.contactCreates, 1);
+  assert.equal(world.contact.xero_contact_id, null, 'nothing linked from a lost response');
+  world.createContactLoseResponse = false;
+  const out = await (await call()).json();
+  assert.equal(out.status, 'sent');
+  assert.equal(out.recipientSource, 'auto_linked');
+  assert.equal(world.contactCreates, 1, 'still one contact');
+  assert.match(world.contact.xero_contact_id, /^c1000000-/);
+});
+
+test('AUTO-CONTACT 13: the create request is IDEMPOTENT: the same organisation, contact and details always send the same key, which Xero answers with the same contact', async () => {
+  unlinked();
+  world.createStatus = 500;
+  await call();
+  const key1 = contactCreatesSent()[0].headers.get('idempotency-key');
+  // Simulate the link being lost locally, then a retry: the same key comes back to the same contact.
+  world.contact.xero_contact_id = null;
+  world.contact.xero_org_id = null;
+  delete world.xeroContacts[Object.keys(world.xeroContacts).find((k) => k.startsWith('c1000000-'))!]; // the search no longer sees it
+  world.createStatus = 200;
+  await call();
+  const key2 = contactCreatesSent()[1].headers.get('idempotency-key');
+  assert.equal(key1, key2);
+  assert.equal(world.contactCreates, 1, 'Xero replayed the original create');
+});
+
+test('AUTO-CONTACT 14: CONCURRENT first sends of the same invoice create at most ONE contact and ONE invoice', async () => {
+  unlinked();
+  const results = await Promise.all([call(), call(), call()]);
+  assert.equal(results.filter((r) => r.status === 200).length, 1);
+  assert.equal(world.contactCreates, 1);
+  assert.equal(world.invoiceCounter, 1);
+});
+
+test('AUTO-CONTACT 15: CONCURRENT link attempts for the same local contact (two invoices at once) end with ONE Xero contact and one link', async () => {
+  const { createClient } = await import('@supabase/supabase-js');
+  const { linkOrCreateXeroContact } = await import('../supabase/functions/_shared/autoXeroContact.ts');
+  unlinked();
+  const db = createClient('https://tests.invalid', 'anon-test-key', { auth: { persistSession: false } }) as any;
+  const input = { db, accessToken: ACCESS_TOKEN, connectedOrgId: ORG, clientName: 'Oak Estates', contact: world.contact, linkedBy: 'test' };
+  const [a, b] = await Promise.all([linkOrCreateXeroContact(input), linkOrCreateXeroContact(input)]);
+  assert.equal(a.xeroContactId, b.xeroContactId);
+  assert.equal(world.contactCreates, 1, 'the second create was answered with the first contact');
+  assert.equal(world.contact.xero_contact_id, a.xeroContactId);
+});
+
+test('AUTO-CONTACT 16: if another request linked the contact to a DIFFERENT Xero contact meanwhile, the send is refused rather than overwriting it', async () => {
+  unlinked();
+  // At the moment Xero creates the contact, another request links the local contact elsewhere: the conditional save then
+  // matches no row, and the link it finds is not the one just created.
+  world.contactsByIdempotencyKey = new Proxy({} as Record<string, XeroContactRec>, {
+    set(target, prop, value) {
+      Object.assign(world.contact, { xero_contact_id: 'd0d0d0d0-d0d0-4d0d-8d0d-d0d0d0d0d0d0', xero_org_id: ORG });
+      return Reflect.set(target, prop, value);
+    },
+  });
+  const out = await (await call()).json();
+  assert.equal(out.code, 'CONTACT_LINK_CONFLICT');
+  assert.equal(world.contact.xero_contact_id, 'd0d0d0d0-d0d0-4d0d-8d0d-d0d0d0d0d0d0', 'the other link was not overwritten');
+  assert.equal(invoiceCreatesOrUpdates().length, 0);
+});
+
+test('AUTO-CONTACT 17: the building DEFAULT path is unchanged - no default and no chosen contact is still refused, never auto-created', async () => {
+  unlinked();
+  const out = await (await call({ invoiceId: 'inv-1' })).json();
+  assert.equal(out.code, 'NO_RECIPIENT');
+  assert.equal(contactSearches().length + contactCreatesSent().length, 0);
+});
+
+test('AUTO-CONTACT 18: a retry of an invoice Xero already holds never creates or links a contact (the recipient is locked)', async () => {
+  unlinked();
+  world.invoice.status = 'failed';
+  world.invoice.xero_invoice_id = XERO_INVOICE;
+  world.invoice.xero_contact_id = CONTACT;
+  world.invoice.xero_org_id = ORG;
+  world.xeroInvoices[XERO_INVOICE] = { InvoiceID: XERO_INVOICE, InvoiceNumber: 'INV-001', Contact: { ContactID: CONTACT } };
+  const out = await (await call({ invoiceId: 'inv-1', contactId: 'ct-1' })).json();
+  assert.ok(['RECIPIENT_LOCKED', 'LINK_UNTAGGED'].includes(out.code), out.code);
+  assert.equal(contactSearches().length + contactCreatesSent().length, 0);
+});
+
 // ---- source guards: DEV stays on its own organisation, and contact creation cannot creep back in -------------------------------
 function functionSources(): Array<{ file: string; text: string }> {
   const root = join(process.cwd(), 'supabase', 'functions');
@@ -1452,17 +1664,19 @@ function functionSources(): Array<{ file: string; text: string }> {
   return out;
 }
 
-test('no Edge Function source can create or search Xero contacts', () => {
+test('Edge Function sources: contacts are created only by the automatic-contact module, never updated, never looked up by name', () => {
   for (const { file, text } of functionSources()) {
     const code = text.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-    assert.doesNotMatch(code, /createContact|findContactByName/, file);
-    // The read-only candidate search exists for the manager-only link function ALONE: never the invoice flow or anything else.
-    if (/searchContacts/.test(code)) assert.match(file, /(_shared[\\/]xeroClient\.ts|xero-link-contact[\\/]index\.ts)$/, `${file} must not use the contact search`);
-    // No write to /Contacts anywhere, and no name search ("where=Name==...").
-    assert.doesNotMatch(code, /xeroPost\s*(<[^>]*>)?\s*\([^)]*\/Contacts/, `${file} must not POST to /Contacts`);
+    assert.doesNotMatch(code, /findContactByName/, file);
+    if (/createContact\b/.test(code)) assert.match(file, /_shared[\\/](xeroClient|autoXeroContact)\.ts$/, `${file} must not create Xero contacts`);
+    // The read-only search: the manager-only link function, and the automatic-contact module (by email, then exact name).
+    if (/searchContacts/.test(code)) assert.match(file, /(_shared[\\/](xeroClient|autoXeroContact)\.ts|xero-link-contact[\\/]index\.ts)$/, `${file} must not use the contact search`);
+    // The one POST to /Contacts is the create in xeroClient.ts; nothing ever posts to /Contacts/{id} (an update).
+    if (/xeroPost\s*(<[^>]*>)?\s*\([^)]*\/Contacts/.test(code)) assert.match(file, /_shared[\\/]xeroClient\.ts$/, `${file} must not POST to /Contacts`);
+    assert.doesNotMatch(code, /\/Contacts\/\$\{[^}]*\}['"`]\s*,\s*\{/, `${file} must not update a contact`);
     assert.doesNotMatch(code, /where=Name|where\s*=\s*`?Name==/, `${file} must not search contacts by name`);
     // The only read of the whole /Contacts collection is xero-test's diagnostic count (it returns a number, never contact data).
-    if (/['"`]\/Contacts['"`?]/.test(code)) assert.match(file, /(xero-test[\\/]index\.ts|_shared[\\/]xeroClient\.ts)$/, `${file} reads the /Contacts collection`);
+    if (/['"`]\/Contacts['"`?]/.test(code)) assert.match(file, /(xero-test[\\/]index\.ts|_shared[\\/]xeroClient\.ts)$/, `${file} uses the /Contacts collection directly`);
   }
 });
 

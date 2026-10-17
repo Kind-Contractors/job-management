@@ -16,6 +16,19 @@ export function localLinkStatus(c: Pick<JobContactSummary, 'xeroContactId' | 'xe
 /** True when an invoice could be addressed to this contact as far as the stored data shows (the server still re-verifies). */
 export const isUsableRecipient = (c: Pick<JobContactSummary, 'xeroContactId' | 'xeroOrgId'>): boolean => localLinkStatus(c) === 'linked';
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * A contact with NO Xero link at all but a valid email: on a first send the server links it to its one existing Xero contact
+ * with that email, or creates it in Xero (supabase/functions/_shared/autoXeroContact.ts), and refuses when that is ambiguous.
+ */
+export const canLinkAutomatically = (c: Pick<JobContactSummary, 'xeroContactId' | 'email'>): boolean =>
+  c.xeroContactId === null && EMAIL_PATTERN.test((c.email ?? '').trim());
+
+/** Can an invoice be sent to this contact (the server still verifies everything)? Linked, or linkable automatically. */
+export const canSendInvoiceTo = (c: Pick<JobContactSummary, 'xeroContactId' | 'xeroOrgId' | 'email'>): boolean =>
+  isUsableRecipient(c) || canLinkAutomatically(c);
+
 export function linkStatusLabel(c: Pick<JobContactSummary, 'xeroContactId' | 'xeroOrgId' | 'xeroContactName'>): string {
   switch (localLinkStatus(c)) {
     case 'linked':

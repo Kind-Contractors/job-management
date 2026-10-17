@@ -1,7 +1,8 @@
 // Who an invoice goes to, decided on the server and never guessed.
 //
 // FIRST SEND (no Xero invoice yet): the recipient is
-//   - the local contact the manager explicitly chose for this invoice, if one was sent; otherwise
+//   - the local contact the manager explicitly chose for this invoice, if one was sent (when it is not linked to Xero
+//     yet, it is linked to an existing Xero contact with its email or a new one is created - see ./autoXeroContact.ts); otherwise
 //   - the building's saved default recipient; otherwise
 //   - nothing: the send is refused with an explanation. A default is never guessed (not the primary contact, not the
 //     only contact, not a name or email match).
@@ -16,7 +17,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import type { XeroInvoiceSummary } from './xeroClient.ts';
 import { requireLinkInOrganisation, requireVerifiedContactLink, XeroSafeguardError } from './xeroSafeguards.ts';
 
-export type RecipientSource = 'selected' | 'building_default' | 'locked';
+export type RecipientSource = 'selected' | 'building_default' | 'locked' | 'auto_linked' | 'auto_created';
 
 export interface ResolvedRecipient {
   xeroContactId: string;
@@ -54,6 +55,9 @@ interface ResolveContext {
   clientId: string;
 }
 
+/** Links (or creates) the Xero contact for an UNLINKED local contact the manager explicitly chose. See ./autoXeroContact.ts. */
+export type AutoLinkContact = (contact: RecipientContactRow) => Promise<{ xeroContactId: string; outcome: 'reused' | 'created' }>;
+
 async function verifiedLinkOf(ctx: ResolveContext, contact: RecipientContactRow): Promise<string> {
   requireLinkInOrganisation(contact, ctx.connectedOrgId);
   await requireVerifiedContactLink(ctx.accessToken, contact);
@@ -62,10 +66,17 @@ async function verifiedLinkOf(ctx: ResolveContext, contact: RecipientContactRow)
 
 /** The recipient of an invoice Xero does not hold yet: the manager's explicit choice, else the building's saved default, else a refusal. */
 export async function resolveFirstSendRecipient(
-  ctx: ResolveContext & { buildingId: string; requestedContactId: string | undefined },
+  ctx: ResolveContext & { buildingId: string; requestedContactId: string | undefined; autoLink?: AutoLinkContact },
 ): Promise<ResolvedRecipient> {
   if (ctx.requestedContactId) {
     const contact = await loadContactForClient(ctx.db, ctx.requestedContactId, ctx.clientId);
+    // Only a contact with NO link at all (NULL) is linked automatically. A link that exists (even a blank one, one without an
+    // organisation recorded, or one from another organisation) is never replaced here: it is verified, and refused if unusable.
+    if (contact.xero_contact_id === null && ctx.autoLink) {
+      const auto = await ctx.autoLink(contact);
+      const linked = { ...contact, xero_contact_id: auto.xeroContactId, xero_org_id: ctx.connectedOrgId };
+      return { xeroContactId: await verifiedLinkOf(ctx, linked), source: auto.outcome === 'created' ? 'auto_created' : 'auto_linked' };
+    }
     return { xeroContactId: await verifiedLinkOf(ctx, contact), source: 'selected' };
   }
 

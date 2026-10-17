@@ -12,7 +12,7 @@ import {
   NOT_LINKED_RECIPIENT_MESSAGE,
   resolveSendRecipientId,
 } from '../src/lib/invoiceRecipient';
-import { defaultRecipientProblem, isUsableRecipient, linkStatusLabel, localLinkStatus } from '../src/lib/xeroLinkStatus';
+import { canLinkAutomatically, canSendInvoiceTo, defaultRecipientProblem, isUsableRecipient, linkStatusLabel, localLinkStatus } from '../src/lib/xeroLinkStatus';
 
 const src = (...p: string[]) => readFileSync(join(process.cwd(), 'src', ...p), 'utf8').replace(/\r\n/g, '\n');
 const stripComments = (t: string) => t.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -81,11 +81,11 @@ test('the invoice editor no longer guesses a recipient from the primary or only 
   assert.match(code, /usableDefaultContactId/);
 });
 
-test('the invoice editor locks the picker once the invoice exists in Xero, and offers only linked contacts', () => {
+test('the invoice editor locks the picker once the invoice exists in Xero, and offers linked contacts plus unlinked ones that can be linked automatically', () => {
   const code = stripComments(src('components', 'jobs', 'InvoiceEditor.tsx'));
   assert.match(code, /const recipientLocked = !!invoice\?\.xeroInvoiceId;/);
   assert.match(code, /disabled=\{anyMutationPending \|\| recipientLocked\}/);
-  assert.match(code, /<option key=\{c\.id\} value=\{c\.id\} disabled=\{!isUsableRecipient\(c\)\}>/);
+  assert.match(code, /<option key=\{c\.id\} value=\{c\.id\} disabled=\{!canSendInvoiceTo\(c\)\}>/);
   assert.match(code, /LOCKED_RECIPIENT_MESSAGE/);
 });
 
@@ -114,4 +114,15 @@ test('the browser never writes link or default columns directly (the server deci
   for (const f of [['repository', 'contactsRepository.ts'], ['repository', 'buildingsRepository.ts'], ['repository', 'jobsRepository.ts']]) {
     assert.doesNotMatch(stripComments(src(...f)), /xero_contact_id\s*:|xero_org_id\s*:|default_invoice_\w+\s*:/, `${f.join('/')} must not write link columns`);
   }
+});
+
+test('automatic linking is offered only for a contact with NO link at all and a valid email; existing links are never bypassed', () => {
+  assert.equal(canLinkAutomatically({ xeroContactId: null, email: 'sam@client.test' }), true);
+  assert.equal(canLinkAutomatically({ xeroContactId: null, email: null }), false, 'no email: nothing to match or create with');
+  assert.equal(canLinkAutomatically({ xeroContactId: null, email: 'not-an-email' }), false);
+  assert.equal(canLinkAutomatically({ xeroContactId: XC, email: 'sam@client.test' }), false, 'already linked: used by id, never re-matched');
+  assert.equal(canLinkAutomatically({ xeroContactId: '', email: 'sam@client.test' }), false, 'a blank link is not silently replaced');
+  assert.equal(canSendInvoiceTo({ xeroContactId: XC, xeroOrgId: ORG, email: null }), true, 'linked');
+  assert.equal(canSendInvoiceTo({ xeroContactId: XC, xeroOrgId: null, email: 'sam@client.test' }), false, 'an untagged legacy link must be re-linked by hand');
+  assert.equal(canSendInvoiceTo({ xeroContactId: null, xeroOrgId: null, email: 'sam@client.test' }), true);
 });

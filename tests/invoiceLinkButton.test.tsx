@@ -89,7 +89,7 @@ test('the invoice editor shows the Link button beside an unlinked contact, and k
   assert.match(html, />Mo<\/div><div[^>]*>ct-mo@example\.test<\/div>/, 'the email is shown beside the name in the Link list');
   assert.doesNotMatch(html, /aria-label="Link Linked Person/);
   assert.match(html, /<option value="ct-linked">Linked Person — ct-linked@example\.test · Xero: Oak Estates Ltd<\/option>/, 'linked: selectable');
-  assert.match(html, /<option value="ct-mo" disabled="">Mo — ct-mo@example\.test · not linked to Xero<\/option>/, 'unlinked: not selectable until linked');
+  assert.match(html, /<option value="ct-mo">Mo — ct-mo@example\.test · not linked: matched or created in Xero on send<\/option>/, 'unlinked with an email: selectable, linked or created on send');
 });
 
 test('after a link, the refreshed contacts show the contact as linked and selectable, and its Link button is gone', () => {
@@ -140,6 +140,6 @@ test('nothing on the Link path can send an invoice', () => {
 
 test('a contact with no email shows just its name, in the list and in the selector', () => {
   const html = renderEditor([{ ...MO, email: null }]);
-  assert.match(html, /<option value="ct-mo" disabled="">Mo · not linked to Xero<\/option>/);
+  assert.match(html, /<option value="ct-mo" disabled="">Mo · not linked to Xero<\/option>/, 'unlinked with no email: cannot be created in Xero, so not selectable');
   assert.match(html, />Mo<\/div><div class="text-\[11px\] text-due-fg">/);
 });

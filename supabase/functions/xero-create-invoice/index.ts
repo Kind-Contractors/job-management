@@ -33,10 +33,11 @@
 //   2. XERO_EXPECTED_ORG_ID must be set, and the organisation the connection is actually bound to (GET /Organisation)
 //      must equal it. Both the token request and this comparison are read-only and run BEFORE the invoice is claimed,
 //      so a wrong organisation leaves the invoice row untouched (the atomic claim remains the concurrency guard).
-//   3. This function NEVER searches for or creates a Xero contact. The chosen recipient must already be linked
-//      (contacts.xero_contact_id), and that link is re-read by id in the connected organisation (it must exist there,
-//      be ACTIVE and have an email) before any invoice is created, updated or authorised. An id from another
-//      organisation does not exist here and is refused.
+//   3. A linked recipient (contacts.xero_contact_id) is re-read by id in the connected organisation (it must exist there,
+//      be ACTIVE and have an email) before any invoice is created, updated or authorised; an id from another organisation
+//      does not exist here and is refused. A recipient the manager chose that is NOT linked yet is, on a first send only,
+//      linked to its one existing Xero contact with the same email, or created in Xero (../_shared/autoXeroContact.ts):
+//      after the organisation check, never by name alone, refused when ambiguous, idempotent across retries.
 //   4. An invoice that already has a Xero invoice id must still exist in the connected organisation before it is updated.
 //   5. The recipient is never guessed (see ../_shared/invoiceRecipients.ts). On a first send it is the contact the manager
 //      explicitly chose, else the BUILDING'S SAVED DEFAULT, else the send is refused. The contact's link must be recorded
@@ -88,6 +89,7 @@ import {
 } from '../_shared/xeroClient.ts';
 import { InvoiceRelationshipError, loadAndValidateInvoice, type ValidatedInvoice } from '../_shared/invoiceRelationships.ts';
 import { resolveFirstSendRecipient, resolveLockedRecipient, type ResolvedRecipient } from '../_shared/invoiceRecipients.ts';
+import { linkOrCreateXeroContact } from '../_shared/autoXeroContact.ts';
 import {
   assertConnectedToExpectedOrganisation,
   assertExpectedOrganisationConfigured,
@@ -322,7 +324,25 @@ Deno.serve(async (req: Request) => {
     const recipientContext = { db: callerClient, accessToken, connectedOrgId, clientId: client.id };
     const recipient: ResolvedRecipient = existingXeroInvoice
       ? await resolveLockedRecipient({ ...recipientContext, invoice: row, existingXeroInvoice, requestedContactId: contactId })
-      : await resolveFirstSendRecipient({ ...recipientContext, buildingId: recheck.buildingId, requestedContactId: contactId });
+      : await resolveFirstSendRecipient({
+          ...recipientContext,
+          buildingId: recheck.buildingId,
+          requestedContactId: contactId,
+          // An explicitly chosen contact that is not linked yet is linked to its existing Xero contact (by email) or created
+          // in Xero - in the connected organisation verified above, never by name alone, never on a retry of an invoice
+          // Xero already holds (that recipient is locked).
+          autoLink: async (contact) => {
+            const { data: who } = await callerClient.auth.getUser();
+            return linkOrCreateXeroContact({
+              db: callerClient,
+              accessToken,
+              connectedOrgId,
+              clientName: client.company_name,
+              contact,
+              linkedBy: `auto (invoice send): ${who.user?.email ?? 'unknown'}`,
+            });
+          },
+        });
     const xeroContactId = recipient.xeroContactId;
 
     // FIRST creation only: record who this invoice is for, and in which Xero organisation, BEFORE it is created in Xero.

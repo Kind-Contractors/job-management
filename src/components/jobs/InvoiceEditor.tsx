@@ -9,7 +9,7 @@ import {
   updateInvoiceLineItem,
 } from '../../repository/invoicesRepository';
 import { LOCKED_RECIPIENT_MESSAGE, resolveSendRecipientId, UNLINKED_NEW_CONTACT_MESSAGE } from '../../lib/invoiceRecipient';
-import { defaultRecipientProblem, isUsableRecipient, linkStatusLabel } from '../../lib/xeroLinkStatus';
+import { canLinkAutomatically, canSendInvoiceTo, defaultRecipientProblem, isUsableRecipient, linkStatusLabel } from '../../lib/xeroLinkStatus';
 import LinkXeroContactDialog from './LinkXeroContactDialog';
 import UnlinkedRecipientsList, { refreshAfterXeroLink } from './UnlinkedRecipientsList';
 
@@ -116,7 +116,7 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
   const selectedContact = selectedContactId && !addingNewContact ? (clientContacts.find((c) => c.id === selectedContactId) ?? null) : null;
   // "+ Add another email address" can never be a valid recipient yet: a brand-new contact has no Xero link, and the
   // server refuses to send to an unlinked recipient (it never creates or guesses a Xero contact).
-  const recipientValid = recipientLocked || (!addingNewContact && (selectedContact ? isUsableRecipient(selectedContact) : !!usableDefaultContactId));
+  const recipientValid = recipientLocked || (!addingNewContact && (selectedContact ? canSendInvoiceTo(selectedContact) : !!usableDefaultContactId));
 
   const sendMutation = useMutation({
     mutationFn: async () => {
@@ -126,7 +126,7 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
         addingNewContact,
         selectedContactId,
         usableDefaultContactId,
-        selectedIsLinked: selectedContact ? isUsableRecipient(selectedContact) : undefined,
+        selectedIsLinked: selectedContact ? canSendInvoiceTo(selectedContact) : undefined,
         recipientLocked,
       });
 
@@ -323,10 +323,16 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
                       : 'Choose a recipient…'}
                 </option>
                 {clientContacts.map((c) => (
-                  <option key={c.id} value={c.id} disabled={!isUsableRecipient(c)}>
+                  <option key={c.id} value={c.id} disabled={!canSendInvoiceTo(c)}>
                     {c.name}
                     {c.email ? ` — ${c.email}` : ''}
-                    {isUsableRecipient(c) ? (c.xeroContactName ? ` · Xero: ${c.xeroContactName}` : ' · linked to Xero') : ' · not linked to Xero'}
+                    {isUsableRecipient(c)
+                      ? c.xeroContactName
+                        ? ` · Xero: ${c.xeroContactName}`
+                        : ' · linked to Xero'
+                      : canLinkAutomatically(c)
+                        ? ' · not linked: matched or created in Xero on send'
+                        : ' · not linked to Xero'}
                   </option>
                 ))}
                 <option value={ADD_NEW_CONTACT_VALUE}>+ Add another email address</option>
@@ -342,7 +348,13 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
                   'This building has no default recipient. Choose a contact that is linked to Xero, or set the default recipient on the building page.'}
               </div>
             )}
-            {!recipientLocked && selectedContact && !isUsableRecipient(selectedContact) && (
+            {!recipientLocked && selectedContact && !isUsableRecipient(selectedContact) && canLinkAutomatically(selectedContact) && (
+              <div className="border border-neutral-300 bg-neutral-100 p-2 text-[11.5px] text-neutral-700">
+                Not linked to Xero yet. On send, the app uses the one Xero contact with this email address, or creates one if there is
+                none. If several match, it stops and asks you to link the right one.
+              </div>
+            )}
+            {!recipientLocked && selectedContact && !canSendInvoiceTo(selectedContact) && (
               <div className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg">{linkStatusLabel(selectedContact)}.</div>
             )}
             {addingNewContact ? (
