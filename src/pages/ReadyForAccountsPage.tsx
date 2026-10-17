@@ -33,6 +33,8 @@ function accountsRowPresentation(row: AccountsRow): StatusPresentation {
     return { label: 'Ready to invoice', fg: 'text-due-fg', dot: 'bg-due', border: 'border-due', bg: 'bg-due/10' };
   }
   switch (row.visit.invoiceStatus) {
+    case 'in_xero_not_emailed':
+      return { label: 'In Xero · not emailed', fg: 'text-teal-700', dot: 'bg-teal-700', border: 'border-teal-700', bg: 'bg-teal-700/10' };
     case 'sent':
       return { label: 'Sent', fg: 'text-teal-700', dot: 'bg-teal-700', border: 'border-teal-700', bg: 'bg-teal-700/10' };
     case 'failed':

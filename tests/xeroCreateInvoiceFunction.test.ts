@@ -97,6 +97,7 @@ function reset() {
   ENV.XERO_CLIENT_ID = 'test-client-id';
   ENV.XERO_CLIENT_SECRET = SECRET;
   ENV.XERO_SENDING_ENABLED = 'true';
+  delete ENV.XERO_CREATION_ENABLED;
   ENV.XERO_EXPECTED_ORG_ID = ORG;
   world.role = 'manager';
   world.isActive = true;
@@ -324,7 +325,7 @@ function assertNoXeroWrites() {
 test('a send with every safeguard satisfied creates ONE invoice for the linked contact and emails it', async () => {
   const res = await call();
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { status: 'sent', xeroInvoiceId: XERO_INVOICE, xeroInvoiceNumber: 'INV-001', recipientSource: 'selected' });
+  assert.deepEqual(await res.json(), { status: 'sent', emailed: true, xeroInvoiceId: XERO_INVOICE, xeroInvoiceNumber: 'INV-001', recipientSource: 'selected' });
 
   const creates = invoiceCreatesOrUpdates();
   assert.equal(creates.length, 1);
@@ -357,15 +358,17 @@ test('if the recipient cannot be recorded, NOTHING is created in Xero', async ()
 });
 
 // ---- kill switch ----------------------------------------------------------------------------------------------------
-test('the kill switch is DEFAULT-OFF: anything but the exact string "true" blocks the send', async () => {
+test('the kill switch is DEFAULT-OFF: unless XERO_CREATION_ENABLED or XERO_SENDING_ENABLED is exactly "true", nothing is attempted', async () => {
+  for (const name of ['XERO_SENDING_ENABLED', 'XERO_CREATION_ENABLED'] as const)
   for (const value of [undefined, '', 'false', 'TRUE', 'True', '1', 'yes', ' true', 'true ']) {
     reset();
-    if (value === undefined) delete ENV.XERO_SENDING_ENABLED;
-    else ENV.XERO_SENDING_ENABLED = value;
+    delete ENV.XERO_SENDING_ENABLED;
+    delete ENV.XERO_CREATION_ENABLED;
+    if (value !== undefined) ENV[name] = value;
     const res = await call();
     const out = await res.json();
-    assert.equal(res.status, 503, `value ${JSON.stringify(value)}`);
-    assert.equal(out.code, 'SENDING_DISABLED');
+    assert.equal(res.status, 503, `${name}=${JSON.stringify(value)}`);
+    assert.equal(out.code, 'CREATION_DISABLED');
     assert.equal(out.status, 'blocked');
     assert.equal(world.xeroLog.length, 0, 'not even a token request: Xero is never contacted');
     assert.equal(invoicePatches().length, 0, 'the invoice is never claimed or changed');
@@ -1647,6 +1650,133 @@ test('AUTO-CONTACT 18: a retry of an invoice Xero already holds never creates or
   const out = await (await call({ invoiceId: 'inv-1', contactId: 'ct-1' })).json();
   assert.ok(['RECIPIENT_LOCKED', 'LINK_UNTAGGED'].includes(out.code), out.code);
   assert.equal(contactSearches().length + contactCreatesSent().length, 0);
+});
+
+// ---- creation allowed, emailing NOT allowed (XERO_CREATION_ENABLED on, XERO_SENDING_ENABLED absent) ---------------------------------
+function creationOnly() {
+  delete ENV.XERO_SENDING_ENABLED;
+  ENV.XERO_CREATION_ENABLED = 'true';
+}
+
+test('EMAIL-OFF 1: with creation on and emailing absent, the invoice is CREATED in Xero, NOT emailed, and recorded as in_xero_not_emailed', async () => {
+  creationOnly();
+  const res = await call();
+  const out = await res.json();
+  assert.equal(res.status, 200);
+  assert.deepEqual(out, { status: 'in_xero_not_emailed', emailed: false, code: 'EMAIL_DISABLED', xeroInvoiceId: XERO_INVOICE, xeroInvoiceNumber: 'INV-001', recipientSource: 'selected' });
+  assert.equal(world.invoiceCounter, 1, 'created');
+  assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Status, 'AUTHORISED');
+  assert.equal(emailCalls().length, 0, 'no email request of any kind');
+  assert.equal(world.invoice.status, 'in_xero_not_emailed');
+  assert.equal(world.invoice.sent_at ?? null, null, 'never stamped as sent');
+  assert.equal(world.invoice.xero_invoice_id, XERO_INVOICE);
+  assert.equal(world.invoice.xero_contact_id, CONTACT);
+  assert.equal(world.invoice.xero_org_id, ORG);
+});
+
+test('EMAIL-OFF 2: an UNLINKED recipient is linked or created automatically with emailing off - and nothing is emailed', async () => {
+  creationOnly();
+  Object.assign(world.contact, { xero_contact_id: null, xero_org_id: null });
+  const out = await (await call()).json();
+  assert.equal(out.status, 'in_xero_not_emailed');
+  assert.equal(out.recipientSource, 'auto_created');
+  assert.equal(world.contactCreates, 1);
+  assert.match(world.contact.xero_contact_id, /^c1000000-/);
+  assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Contact.ContactID, world.contact.xero_contact_id);
+  assert.equal(emailCalls().length, 0);
+});
+
+test('EMAIL-OFF 3: XERO_SENDING_ENABLED alone still creates AND emails (environments that already send keep working)', async () => {
+  delete ENV.XERO_CREATION_ENABLED;
+  ENV.XERO_SENDING_ENABLED = 'true';
+  const out = await (await call()).json();
+  assert.equal(out.status, 'sent');
+  assert.equal(emailCalls().length, 1);
+});
+
+test('EMAIL-OFF 4: every other safeguard still applies with emailing off: organisation, recipient links, relationships, building defaults', async () => {
+  creationOnly();
+  world.orgBody = { Organisations: [{ OrganisationID: OTHER_ORG }] };
+  assert.equal((await (await call()).json()).code, 'ORG_MISMATCH');
+  reset(); creationOnly();
+  delete ENV.XERO_EXPECTED_ORG_ID;
+  assert.equal((await (await call()).json()).code, 'ORG_NOT_CONFIGURED');
+  reset(); creationOnly();
+  world.contact.xero_org_id = null;
+  assert.equal((await (await call()).json()).code, 'LINK_UNTAGGED');
+  reset(); creationOnly();
+  world.xeroContacts[CONTACT].ContactStatus = 'ARCHIVED';
+  assert.equal((await (await call()).json()).code, 'CONTACT_NOT_ACTIVE');
+  reset(); creationOnly();
+  setLines(lineFor(1), lineFor(2, { visits: visitFor('visit-2', 'job-2') }));
+  assert.equal((await call()).status, 422);
+  reset(); creationOnly();
+  assert.equal((await (await call({ invoiceId: 'inv-1' })).json()).code, 'NO_RECIPIENT');
+  assert.equal(world.invoiceCounter, 0, 'none of them created anything');
+  assert.equal(world.contactCreates, 0);
+  assert.equal(emailCalls().length, 0);
+});
+
+test('EMAIL-OFF 5: the building DEFAULT recipient works with emailing off', async () => {
+  creationOnly();
+  Object.assign(world.building, { default_invoice_contact_id: 'ct-1', default_invoice_xero_contact_id: CONTACT, default_invoice_xero_org_id: ORG });
+  const out = await (await call({ invoiceId: 'inv-1' })).json();
+  assert.equal(out.status, 'in_xero_not_emailed');
+  assert.equal(out.recipientSource, 'building_default');
+  assert.equal(emailCalls().length, 0);
+});
+
+test('EMAIL-OFF 6: a RETRY of an invoice whose email failed earlier updates the SAME Xero invoice and, with emailing now off, does not email', async () => {
+  world.emailStatus = 500; // emailing was on, and the email failed
+  await call();
+  assert.equal(world.invoice.status, 'failed');
+  const emailsBefore = emailCalls().length;
+  creationOnly();
+  const out = await (await call()).json();
+  assert.equal(out.status, 'in_xero_not_emailed');
+  assert.equal(world.invoiceCounter, 1, 'no duplicate invoice');
+  assert.equal(invoiceCreatesOrUpdates().at(-1)!.path, `/api.xro/2.0/Invoices/${XERO_INVOICE}`);
+  assert.equal(emailCalls().length, emailsBefore, 'no further email attempt');
+});
+
+test('EMAIL-OFF 7: turning emailing ON later never emails an invoice created while it was off (it is not claimable again)', async () => {
+  creationOnly();
+  await call();
+  assert.equal(world.invoice.status, 'in_xero_not_emailed');
+  ENV.XERO_SENDING_ENABLED = 'true';
+  const res = await call();
+  assert.equal(res.status, 409);
+  assert.equal(emailCalls().length, 0);
+  assert.equal(world.invoice.status, 'in_xero_not_emailed');
+  assert.equal(world.invoiceCounter, 1);
+});
+
+test('EMAIL-OFF 8: CONCURRENT sends with emailing off create ONE invoice and email nothing', async () => {
+  creationOnly();
+  const results = await Promise.all([call(), call(), call()]);
+  assert.equal(results.filter((r) => r.status === 200).length, 1);
+  assert.equal(world.invoiceCounter, 1);
+  assert.equal(emailCalls().length, 0);
+});
+
+test('EMAIL-OFF 9: with BOTH switches absent (production today) nothing at all happens: no token, no contact, no invoice, no email', async () => {
+  delete ENV.XERO_SENDING_ENABLED;
+  delete ENV.XERO_CREATION_ENABLED;
+  Object.assign(world.contact, { xero_contact_id: null, xero_org_id: null });
+  const out = await (await call()).json();
+  assert.equal(out.code, 'CREATION_DISABLED');
+  assert.equal(world.xeroLog.length, 0);
+  assert.equal(world.invoice.status, 'draft');
+  assert.equal(world.contact.xero_contact_id, null);
+});
+
+test('EMAIL-OFF 10: the email permission is read right before the email step - the only email call is guarded by it', () => {
+  const code = readFileSync(join(process.cwd(), 'supabase', 'functions', 'xero-create-invoice', 'index.ts'), 'utf8').replace(/\/\/[^\n]*/g, '');
+  const guard = code.indexOf('if (!isSendingEnabled()) {');
+  const email = code.indexOf('await emailInvoiceOrExplain(');
+  const created = code.indexOf('await createOrUpdateAuthorisedInvoice(');
+  assert.ok(created > 0 && created < guard && guard < email, 'create -> email permission check -> email');
+  assert.equal(code.split('emailInvoiceOrExplain(').length - 1, 2, 'one definition and exactly one call');
 });
 
 // ---- source guards: DEV stays on its own organisation, and contact creation cannot creep back in -------------------------------

@@ -10,6 +10,7 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { JobRow, JobVisitSummary } from '../domain/types';
 import { listJobRows, listJobRowsWithOpenReportWork } from '../repository/jobsRepository';
+import { isInvoiceInXero } from './invoiceStatus';
 import { isReportReadyForClient, isVisitReadyForAccounts } from './statusPresentation';
 import { isOpenVisit } from './cancelWork';
 
@@ -23,9 +24,9 @@ export function isVisitInReviewQueue(visit: JobVisitSummary): boolean {
   return !!visit.reportId && (visit.reportReviewStatus === 'awaiting_review' || visit.reportReviewStatus === 'returned_for_correction');
 }
 
-/** Approved, with no invoice yet or an invoice that has not been sent (draft / sending / failed). Completed or not. */
+/** Approved, with no invoice yet or an invoice that is not in Xero yet (draft / sending / failed). Completed or not. */
 export function hasOpenAccountsWork(visit: JobVisitSummary): boolean {
-  return visit.reportReviewStatus === 'approved' && (!visit.invoiceId || visit.invoiceStatus !== 'sent');
+  return visit.reportReviewStatus === 'approved' && (!visit.invoiceId || !isInvoiceInXero(visit.invoiceStatus));
 }
 
 /** Ready for client: approved and not yet marked Completed - the same rule for active and non-active jobs. */

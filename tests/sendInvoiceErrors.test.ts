@@ -41,7 +41,7 @@ test('a successful send returns the function\'s answer, posted to xero-create-in
 
 test('a refusal shows the server\'s own explanation, not the generic non-2xx text', async () => {
   const cases: Array<[number, Record<string, unknown>]> = [
-    [503, { status: 'blocked', code: 'SENDING_DISABLED', error: 'Xero invoice sending is disabled for this environment (XERO_SENDING_ENABLED is not "true"). Nothing was sent.' }],
+    [503, { status: 'blocked', code: 'CREATION_DISABLED', error: 'Creating invoices in Xero is disabled for this environment (neither XERO_CREATION_ENABLED nor XERO_SENDING_ENABLED is "true"). Nothing was sent.' }],
     [503, { status: 'blocked', code: 'ORG_MISMATCH', error: 'Xero sending is blocked: the connected Xero organisation is not the one this environment is configured for.' }],
     [502, { status: 'failed', code: 'NOT_LINKED', error: 'This recipient is not linked to a Xero contact. Link it to an existing Xero contact before sending; the app never creates or guesses one.' }],
     [502, { status: 'blocked', code: 'XERO_AUTH_FAILED', error: 'Xero token request failed (HTTP 401): {"error":"invalid_client"}' }],

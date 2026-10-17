@@ -16,7 +16,8 @@
 //
 // Every action that touches Xero first checks that XERO_EXPECTED_ORG_ID is configured and that the connected organisation is
 // that organisation, exactly as xero-create-invoice does. A link is recorded WITH the organisation it was made in, and is only
-// ever used against that organisation. It does not depend on XERO_SENDING_ENABLED: linking sends nothing.
+// ever used against that organisation. It does not depend on XERO_CREATION_ENABLED or XERO_SENDING_ENABLED: linking writes
+// nothing to Xero (it only reads) and sends nothing.
 //
 // Never logs or returns XERO_CLIENT_ID, XERO_CLIENT_SECRET, a token, or a full contact email address.
 

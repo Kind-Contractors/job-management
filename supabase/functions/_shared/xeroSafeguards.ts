@@ -1,8 +1,11 @@
 // Server-side safeguards for anything that writes to Xero. Each one FAILS CLOSED: a missing setting, a failed lookup or
 // an unexpected answer stops the operation before a single Xero write is attempted.
 //
-//   XERO_SENDING_ENABLED      kill switch; sending happens only when this is exactly "true" (unset = disabled)
+//   XERO_CREATION_ENABLED     may the app CREATE (or update) contacts and invoices in Xero? Only the exact string "true".
+//   XERO_SENDING_ENABLED      may the app EMAIL invoices from Xero? Only the exact string "true". Emailing needs an
+//                             invoice, so this also permits creation (an environment that already sends keeps working).
 //   XERO_EXPECTED_ORG_ID      the Xero organisation id this environment is allowed to write to
+// Both switches are unset (disabled) by default; neither overrides the organisation check or any other safeguard.
 //
 // A Custom Connection's credentials do not say which organisation they belong to, so the connected organisation's id is
 // read from Xero (GET /Organisation) and compared with the expected one on every send. Swapping the Xero secret to a
@@ -21,6 +24,7 @@ import {
 
 export type SafeguardCode =
   | 'SENDING_DISABLED'
+  | 'CREATION_DISABLED'
   | 'ORG_NOT_CONFIGURED'
   | 'ORG_LOOKUP_FAILED'
   | 'ORG_MISMATCH'
@@ -52,9 +56,17 @@ export class XeroSafeguardError extends Error {
   }
 }
 
-/** The kill switch. Anything other than the exact string "true" - unset, empty, "TRUE", "1", "yes" - means disabled. */
+/** May the app EMAIL invoices? Anything other than the exact string "true" - unset, empty, "TRUE", "1", "yes" - means no. */
 export function isSendingEnabled(): boolean {
   return Deno.env.get('XERO_SENDING_ENABLED') === 'true';
+}
+
+/**
+ * May the app CREATE contacts and invoices in Xero? XERO_CREATION_ENABLED exactly "true", or emailing enabled (which needs
+ * an invoice to exist). Anything else - unset, empty, "TRUE", "1" - means no: nothing at all is written to Xero.
+ */
+export function isCreationEnabled(): boolean {
+  return Deno.env.get('XERO_CREATION_ENABLED') === 'true' || isSendingEnabled();
 }
 
 function normaliseOrganisationId(value: string | null | undefined): string | null {

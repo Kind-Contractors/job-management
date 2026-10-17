@@ -141,6 +141,11 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
       invalidate();
       if (result.status === 'sent') {
         setSendResult({ ok: true, message: `Sent — Xero invoice ${result.xeroInvoiceNumber}.` });
+      } else if (result.status === 'in_xero_not_emailed') {
+        setSendResult({
+          ok: true,
+          message: `Created in Xero as invoice ${result.xeroInvoiceNumber}. It was not emailed: invoice emailing is turned off. Review and send it from Xero.`,
+        });
       } else {
         setSendResult({ ok: false, message: result.error ?? 'Failed to send.' });
       }
@@ -180,6 +185,12 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
       {invoice.status === 'sent' && invoice.xeroInvoiceNumber && (
         <div className="mt-2 border border-teal-700/40 bg-teal-100 p-2 text-[12.5px] text-teal-700">
           Sent to Xero as invoice {invoice.xeroInvoiceNumber}.
+        </div>
+      )}
+      {invoice.status === 'in_xero_not_emailed' && (
+        <div className="mt-2 border border-teal-700/40 bg-teal-100 p-2 text-[12.5px] text-teal-700">
+          Created in Xero as invoice {invoice.xeroInvoiceNumber ?? ''}, but not emailed: invoice emailing was turned off. Review and send it from
+          Xero.
         </div>
       )}
       {invoice.status === 'failed' && invoice.xeroInvoiceId && (
@@ -422,6 +433,8 @@ function invoiceStatusLabel(status: string): string {
       return 'Sent';
     case 'failed':
       return 'Failed';
+    case 'in_xero_not_emailed':
+      return 'In Xero · not emailed';
     default:
       return status;
   }

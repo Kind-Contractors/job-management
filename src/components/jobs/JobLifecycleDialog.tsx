@@ -7,6 +7,7 @@ import {
   type ActiveToHistoricalLifecycleStatus,
 } from '../../repository/jobsRepository';
 import { isReportCompleted, isReportReadyForClient } from '../../lib/statusPresentation';
+import { isInvoiceInXero } from '../../lib/invoiceStatus';
 
 export type JobLifecycleTransition = ActiveToHistoricalLifecycleStatus;
 
@@ -66,7 +67,7 @@ export function hasIncompleteReportWork(visit: JobVisitSummary): boolean {
   if (isReportCompleted(visit)) return false;
   if (visit.reportReviewStatus === 'awaiting_review' || visit.reportReviewStatus === 'returned_for_correction') return true;
   if (isReportReadyForClient(visit)) return true;
-  if (visit.reportReviewStatus === 'approved' && (!visit.invoiceId || visit.invoiceStatus !== 'sent')) return true;
+  if (visit.reportReviewStatus === 'approved' && (!visit.invoiceId || !isInvoiceInXero(visit.invoiceStatus))) return true;
   return false;
 }
 

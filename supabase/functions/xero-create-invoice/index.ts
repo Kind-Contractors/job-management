@@ -28,8 +28,13 @@
 // rejects reusing a key against a different body.
 //
 // SAFEGUARDS (see ../_shared/xeroSafeguards.ts), all fail-closed:
-//   1. Kill switch: nothing is attempted unless XERO_SENDING_ENABLED is exactly "true". Checked BEFORE the invoice is
-//      claimed, so a blocked request leaves the invoice row exactly as it was.
+//   1. Two switches, both off unless exactly "true" (see ../_shared/xeroSafeguards.ts):
+//      - XERO_CREATION_ENABLED (or XERO_SENDING_ENABLED): may contacts and invoices be created in Xero at all? Checked
+//        BEFORE the invoice is claimed, so a blocked request leaves the invoice row exactly as it was.
+//      - XERO_SENDING_ENABLED: may the invoice be EMAILED? Checked again immediately before the email step. When it is off
+//        the invoice is still created and authorised in Xero, nobody is emailed, and it is recorded as
+//        'in_xero_not_emailed' - never 'sent'. Such an invoice is not retried by the app (only draft/failed are claimed),
+//        so turning emailing on later never emails it.
 //   2. XERO_EXPECTED_ORG_ID must be set, and the organisation the connection is actually bound to (GET /Organisation)
 //      must equal it. Both the token request and this comparison are read-only and run BEFORE the invoice is claimed,
 //      so a wrong organisation leaves the invoice row untouched (the atomic claim remains the concurrency guard).
@@ -93,6 +98,7 @@ import { linkOrCreateXeroContact } from '../_shared/autoXeroContact.ts';
 import {
   assertConnectedToExpectedOrganisation,
   assertExpectedOrganisationConfigured,
+  isCreationEnabled,
   isSendingEnabled,
   requireInvoiceInConnectedOrganisation,
   XeroSafeguardError,
@@ -208,9 +214,13 @@ Deno.serve(async (req: Request) => {
 
   // Kill switch and organisation configuration are checked BEFORE the invoice is claimed: a blocked request must
   // leave the invoice row untouched (never 'sending', never 'failed'), and needs no Xero call.
-  if (!isSendingEnabled()) {
+  if (!isCreationEnabled()) {
     return json(
-      { status: 'blocked', code: 'SENDING_DISABLED', error: 'Xero invoice sending is disabled for this environment (XERO_SENDING_ENABLED is not "true"). Nothing was sent.' },
+      {
+        status: 'blocked',
+        code: 'CREATION_DISABLED',
+        error: 'Creating invoices in Xero is disabled for this environment (neither XERO_CREATION_ENABLED nor XERO_SENDING_ENABLED is "true"). Nothing was sent.',
+      },
       503,
     );
   }
@@ -429,6 +439,28 @@ Deno.serve(async (req: Request) => {
       `Invoice ${row.xero_invoice_id ? 'updated' : 'created'} in Xero (${createdOrUpdatedInvoice.InvoiceNumber}) but failed to save locally`,
     );
 
+    // Emailing is a separate permission, checked immediately before the only email call. Off: the invoice exists in Xero,
+    // authorised, nobody is emailed, and it is recorded as exactly that (never 'sent').
+    if (!isSendingEnabled()) {
+      await updateInvoiceRow(
+        callerClient,
+        invoiceId,
+        { status: 'in_xero_not_emailed', last_error: null },
+        `Invoice created in Xero (${createdOrUpdatedInvoice.InvoiceNumber}) but failed to record it locally`,
+      );
+      return json(
+        {
+          status: 'in_xero_not_emailed',
+          emailed: false,
+          code: 'EMAIL_DISABLED',
+          xeroInvoiceId: createdOrUpdatedInvoice.InvoiceID,
+          xeroInvoiceNumber: createdOrUpdatedInvoice.InvoiceNumber,
+          recipientSource: recipient.source,
+        },
+        200,
+      );
+    }
+
     await emailInvoiceOrExplain(accessToken, createdOrUpdatedInvoice.InvoiceID);
 
     await updateInvoiceRow(
@@ -441,6 +473,7 @@ Deno.serve(async (req: Request) => {
     return json(
       {
         status: 'sent',
+        emailed: true,
         xeroInvoiceId: createdOrUpdatedInvoice.InvoiceID,
         xeroInvoiceNumber: createdOrUpdatedInvoice.InvoiceNumber,
         recipientSource: recipient.source,
