@@ -173,7 +173,23 @@ export async function getContactById(accessToken: string, contactId: string): Pr
  * Its result is never used to decide anything: nothing is linked, matched or created from it. The term travels as one
  * encoded query parameter, never inside a `where` expression.
  */
+/** Xero refuses a Contacts searchTerm longer than this (HTTP 400 "SearchTerm has a maximum length of 50 characters"). */
+export const XERO_SEARCH_TERM_MAX = 50;
+
+/**
+ * A term Xero will accept: whitespace collapsed, at most XERO_SEARCH_TERM_MAX characters. Xero's search matches a term CONTAINED
+ * in a name or email, so a shortened term finds every contact the full one would (and more); callers must still compare the
+ * full name or email of each result themselves.
+ */
+export function boundedSearchTerm(term: string): string {
+  return term.replace(/\s+/g, ' ').trim().slice(0, XERO_SEARCH_TERM_MAX).trim();
+}
+
 export async function searchContacts(accessToken: string, term: string, pageSize = 25): Promise<XeroContact[]> {
+  if (term.length > XERO_SEARCH_TERM_MAX) {
+    // Never sent: Xero would answer 400. Callers shorten with boundedSearchTerm() and compare full values themselves.
+    throw new Error(`A Xero contact search term may be at most ${XERO_SEARCH_TERM_MAX} characters.`);
+  }
   const params = new URLSearchParams({ searchTerm: term, includeArchived: 'true', page: '1', pageSize: String(pageSize) });
   const result = await xeroGet<{ Contacts?: XeroContact[] }>(accessToken, `/Contacts?${params.toString()}`);
   return result.Contacts ?? [];

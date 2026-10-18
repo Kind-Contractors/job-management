@@ -18,6 +18,9 @@ interface LinkXeroContactDialogProps {
   onLinked: () => void;
 }
 
+/** Xero's limit for a contact search term. */
+const SEARCH_TERM_MAX = 50;
+
 const BLOCKED_TEXT: Record<XeroBlockedReason, string> = {
   ARCHIVED: 'Archived in Xero',
   NOT_ACTIVE: 'Not active in Xero',
@@ -38,7 +41,8 @@ export default function LinkXeroContactDialog({
   onClose,
   onLinked,
 }: LinkXeroContactDialogProps) {
-  const [term, setTerm] = useState(suggestedTerm);
+  // Xero accepts a search term of at most 50 characters (the server refuses longer ones too).
+  const [term, setTerm] = useState(suggestedTerm.replace(/\s+/g, ' ').trim().slice(0, SEARCH_TERM_MAX));
   const [chosen, setChosen] = useState<XeroContactCandidate | null>(null);
   const [replace, setReplace] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,7 +97,8 @@ export default function LinkXeroContactDialog({
           <input
             value={term}
             onChange={(e) => setTerm(e.target.value)}
-            placeholder="Search Xero contacts by name"
+            maxLength={SEARCH_TERM_MAX}
+            placeholder="Search Xero contacts by name or email"
             aria-label="Search Xero contacts"
             className="min-w-0 flex-1 border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
           />

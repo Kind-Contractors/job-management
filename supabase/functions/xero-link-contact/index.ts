@@ -24,7 +24,7 @@
 import { corsHeaders } from 'npm:@supabase/supabase-js@2/cors';
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import { assertManager, UnauthorizedError } from '../_shared/auth.ts';
-import { getContactById, getXeroAccessToken, isXeroId, searchContacts, XeroHttpError } from '../_shared/xeroClient.ts';
+import { getContactById, getXeroAccessToken, isXeroId, searchContacts, XERO_SEARCH_TERM_MAX, XeroHttpError } from '../_shared/xeroClient.ts';
 import {
   assertConnectedToExpectedOrganisation,
   assertExpectedOrganisationConfigured,
@@ -123,7 +123,9 @@ function normaliseTerm(value: unknown): string {
   if (typeof value !== 'string') throw new LinkError('BAD_REQUEST', 'Enter something to search for.', 400);
   const term = value.replace(/\s+/g, ' ').trim();
   if (term.length < 2) throw new LinkError('TERM_TOO_SHORT', 'Enter at least 2 characters to search for.', 400);
-  if (term.length > 80) throw new LinkError('TERM_TOO_LONG', 'That search is too long (80 characters at most).', 400);
+  if (term.length > XERO_SEARCH_TERM_MAX) {
+    throw new LinkError('TERM_TOO_LONG', `That search is too long: Xero accepts ${XERO_SEARCH_TERM_MAX} characters at most. Try part of the name or the email.`, 400);
+  }
   if (/[\u0000-\u001f\u007f]/.test(term)) throw new LinkError('BAD_REQUEST', 'The search contains characters that are not allowed.', 400);
   return term;
 }

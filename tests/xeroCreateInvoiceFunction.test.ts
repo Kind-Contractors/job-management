@@ -69,6 +69,8 @@ const world = {
   contactCreates: 0,
   /** Extra search results Xero returns (to simulate a full page). */
   searchPadding: [] as XeroContactRec[],
+  /** Contacts that exist in Xero but are beyond the first page of a search (not returned by it). */
+  hiddenFromSearch: [] as string[],
   /** Number of times the invoice row was read, and an optional action to run right after read number n (to change the data between reads). */
   invoiceReads: 0,
   afterInvoiceRead: null as null | ((n: number) => void),
@@ -126,6 +128,7 @@ function reset() {
   world.contactsByIdempotencyKey = {};
   world.contactCreates = 0;
   world.searchPadding = [];
+  world.hiddenFromSearch = [];
   world.invoiceReads = 0;
   world.afterInvoiceRead = null;
   world.invoiceReadFails = false;
@@ -145,9 +148,14 @@ function xeroApi(r: Req): Response {
   }
   if (r.method === 'GET' && p === '/Contacts') {
     const q = new URLSearchParams(r.search);
+    // Exactly what the real API does with a longer term (the DEV failure this guards against).
+    if ((q.get('searchTerm') ?? '').length > 50) {
+      world.contactViolations.push(`overlong searchTerm (${(q.get('searchTerm') ?? '').length} characters)`);
+      return json(400, { Type: 'ValidationException', Message: 'SearchTerm has a maximum length of 50 characters' });
+    }
     const term = (q.get('searchTerm') ?? '').toLowerCase();
     const size = Number(q.get('pageSize') ?? '100');
-    const found = Object.values(world.xeroContacts).filter((c) => c.Name.toLowerCase().includes(term) || (c.EmailAddress ?? '').toLowerCase().includes(term));
+    const found = Object.values(world.xeroContacts).filter((c) => !world.hiddenFromSearch.includes(c.ContactID) && (c.Name.toLowerCase().includes(term) || (c.EmailAddress ?? '').toLowerCase().includes(term)));
     return json(200, { Contacts: [...found, ...world.searchPadding].slice(0, size) });
   }
   if (r.method === 'POST' && p === '/Contacts') {
@@ -1631,6 +1639,79 @@ test('AUTO-CONTACT 16: if another request linked the contact to a DIFFERENT Xero
   assert.equal(out.code, 'CONTACT_LINK_CONFLICT');
   assert.equal(world.contact.xero_contact_id, 'd0d0d0d0-d0d0-4d0d-8d0d-d0d0d0d0d0d0', 'the other link was not overwritten');
   assert.equal(invoiceCreatesOrUpdates().length, 0);
+});
+
+test('AUTO-CONTACT 19 (DEV regression): a long client and contact name - "Finity - not in xero yet (New Client - Not in xero)" - is created, with no search over 50 characters', async () => {
+  Object.assign(world.contact, { name: 'Finity - not in xero yet', email: 'finity@newclient.test', xero_contact_id: null, xero_org_id: null });
+  world.invoice.jobs.buildings.clients.company_name = 'New Client - Not in xero';
+  const fullName = 'Finity - not in xero yet (New Client - Not in xero)';
+  assert.ok(fullName.length > 50, `the generated name is ${fullName.length} characters`);
+  const res = await call();
+  const out = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(out));
+  assert.equal(out.recipientSource, 'auto_created');
+  const terms = contactSearches().map((r) => new URLSearchParams(r.search).get('searchTerm') ?? '');
+  assert.ok(terms.length >= 2, 'searched by email, then checked the name');
+  assert.ok(terms.every((t) => t.length <= 50), `every searchTerm is at most 50 characters: ${JSON.stringify(terms)}`);
+  assert.equal(terms[0], 'finity@newclient.test', 'the first search is the email, not the display name');
+  assert.deepEqual(contactCreatesSent()[0].body, { Contacts: [{ Name: fullName, EmailAddress: 'finity@newclient.test' }] }, 'created with the FULL name');
+  assert.equal(world.contact.xero_contact_name, fullName);
+  assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Contact.ContactID, world.contact.xero_contact_id);
+});
+
+test('AUTO-CONTACT 20: a long name that IS taken (exact full name) is still refused, found through the shortened search', async () => {
+  Object.assign(world.contact, { name: 'Finity - not in xero yet', email: 'finity@newclient.test', xero_contact_id: null, xero_org_id: null });
+  world.invoice.jobs.buildings.clients.company_name = 'New Client - Not in xero';
+  world.xeroContacts[OTHER_CONTACT] = { ContactID: OTHER_CONTACT, Name: 'Finity - not in xero yet (New Client - Not in xero)', EmailAddress: 'someone@else.test', ContactStatus: 'ACTIVE' };
+  const out = await (await call()).json();
+  assert.equal(out.code, 'CONTACT_NAME_TAKEN');
+  assert.equal(contactCreatesSent().length, 0);
+  assert.equal(world.contact.xero_contact_id, null);
+});
+
+test('AUTO-CONTACT 21: a DIFFERENT contact that only shares the first 50 characters is never treated as a match - the new contact is created', async () => {
+  Object.assign(world.contact, { name: 'Finity - not in xero yet', email: 'finity@newclient.test', xero_contact_id: null, xero_org_id: null });
+  world.invoice.jobs.buildings.clients.company_name = 'New Client - Not in xero';
+  // Same first 50 characters, different full name and email.
+  world.xeroContacts[OTHER_CONTACT] = { ContactID: OTHER_CONTACT, Name: 'Finity - not in xero yet (New Client - Not in xero) Ltd', EmailAddress: 'other@else.test', ContactStatus: 'ACTIVE' };
+  const out = await (await call()).json();
+  assert.equal(out.recipientSource, 'auto_created');
+  assert.notEqual(world.contact.xero_contact_id, OTHER_CONTACT, 'never linked by a shortened name');
+  assert.equal(contactCreatesSent().length, 1);
+});
+
+test('AUTO-CONTACT 22: if the name search cannot see a clash (it is past the first page), the unique-name refusal from Xero is reported as name taken - nothing linked, no invoice', async () => {
+  Object.assign(world.contact, { xero_contact_id: null, xero_org_id: null });
+  // The exact name exists in Xero (different email) but the search does not return it.
+  world.xeroContacts['abababab-abab-4bab-8bab-abababababab'] = { ContactID: 'abababab-abab-4bab-8bab-abababababab', Name: 'Sam Client (Oak Estates)', EmailAddress: 'x@y.test', ContactStatus: 'ACTIVE' };
+  world.hiddenFromSearch = ['abababab-abab-4bab-8bab-abababababab'];
+  const out = await (await call()).json();
+  assert.equal(out.code, 'CONTACT_NAME_TAKEN');
+  assert.equal(contactCreatesSent().length, 1, 'the create was attempted and refused by Xero');
+  assert.equal(world.contactCreates, 0, 'nothing was created');
+  assert.equal(world.contact.xero_contact_id, null);
+  assert.equal(invoiceCreatesOrUpdates().length, 0);
+  assert.equal(world.invoice.status, 'failed', 'retryable once the name clash is resolved');
+});
+
+test('AUTO-CONTACT 23: an email longer than 50 characters is searched with its first 50, and only an EXACT full email counts as a match', async () => {
+  const longEmail = 'accounts.payable.department.for.new.client@newclient-property-management.test';
+  assert.ok(longEmail.length > 50);
+  Object.assign(world.contact, { email: longEmail, xero_contact_id: null, xero_org_id: null });
+  world.xeroContacts[OTHER_CONTACT] = { ContactID: OTHER_CONTACT, Name: 'NewClient AP', EmailAddress: longEmail.toUpperCase(), ContactStatus: 'ACTIVE' };
+  world.xeroContacts['abababab-abab-4bab-8bab-abababababab'] = { ContactID: 'abababab-abab-4bab-8bab-abababababab', Name: 'Prefix twin', EmailAddress: longEmail.slice(0, 50) + '.other', ContactStatus: 'ACTIVE' };
+  const out = await (await call()).json();
+  assert.equal(out.recipientSource, 'auto_linked');
+  assert.equal(world.contact.xero_contact_id, OTHER_CONTACT, 'the exact email match, not the prefix twin');
+  assert.ok(contactSearches().every((r) => (new URLSearchParams(r.search).get('searchTerm') ?? '').length <= 50));
+  assert.equal(contactCreatesSent().length, 0);
+});
+
+test('AUTO-CONTACT 24: the Xero client itself refuses to send a search term over 50 characters (no request is made)', async () => {
+  await assert.rejects(xeroClient.searchContacts(ACCESS_TOKEN, 'x'.repeat(51)), /at most 50 characters/);
+  assert.equal(contactSearches().length, 0);
+  assert.equal(xeroClient.boundedSearchTerm('  a   b  '), 'a b');
+  assert.equal(xeroClient.boundedSearchTerm('y'.repeat(60)).length, 50);
 });
 
 test('AUTO-CONTACT 17: the building DEFAULT path is unchanged - no default and no chosen contact is still refused, never auto-created', async () => {

@@ -75,7 +75,14 @@ function xeroApi(r: Req): Response {
   const p = r.path.replace('/api.xro/2.0', '');
   if (r.method !== 'GET') world.violations.push(`${r.method} ${p}`);
   if (p === '/Organisation') return json(200, world.orgBody ?? { Organisations: [{ OrganisationID: ORG }] });
-  if (p === '/Contacts') return json(200, { Contacts: world.searchResults });
+  if (p === '/Contacts') {
+    const term = new URLSearchParams(r.search).get('searchTerm') ?? '';
+    if (term.length > 50) {
+      world.violations.push(`overlong searchTerm (${term.length})`);
+      return json(400, { Type: 'ValidationException', Message: 'SearchTerm has a maximum length of 50 characters' });
+    }
+    return json(200, { Contacts: world.searchResults });
+  }
   const m = p.match(/^\/Contacts\/([^/]+)$/);
   if (m) {
     const c = world.xeroContacts[m[1]];
@@ -277,7 +284,7 @@ test('SEARCH: archived, merged and email-less candidates are marked as unlinkabl
 });
 
 test('SEARCH: a too-short, too-long or control-character term is refused without asking Xero', async () => {
-  for (const term of ['a', ' ', 'x'.repeat(81), 'ab\u0000cd', 7 as unknown as string]) {
+  for (const term of ['a', ' ', 'x'.repeat(51), 'ab\u0000cd', 7 as unknown as string]) {
     const { status } = await post({ action: 'search', term });
     assert.equal(status, 400, JSON.stringify(term));
   }
@@ -497,4 +504,17 @@ test('EVERYTHING: across every action, Xero only ever received GETs (plus the to
   assert.ok(xeroGets().every((r) => r.method === 'GET' || r.host === 'identity.xero.com'));
   assert.equal(xeroGets().filter((r) => r.method === 'POST' && r.host === 'api.xero.com').length, 0);
   for (const line of consoleLines) assert.doesNotMatch(line, new RegExp(`${SECRET}|${ACCESS_TOKEN}`));
+});
+
+test('SEARCH: a 50-character term is sent; a 51-character one is refused with Xero\'s limit explained, before Xero is asked', async () => {
+  const fifty = 'f'.repeat(50);
+  assert.equal((await post({ action: 'search', term: fifty })).status, 200);
+  const req = xeroGets().find((r) => r.path === '/api.xro/2.0/Contacts')!;
+  assert.equal(new URLSearchParams(req.search).get('searchTerm'), fifty);
+  world.xeroLog = [];
+  const { status, out } = await post({ action: 'search', term: 'f'.repeat(51) });
+  assert.equal(status, 400);
+  assert.equal(out.code, 'TERM_TOO_LONG');
+  assert.match(out.error, /Xero accepts 50 characters at most/);
+  assert.equal(xeroGets().length, 0);
 });

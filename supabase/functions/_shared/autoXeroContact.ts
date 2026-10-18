@@ -7,6 +7,9 @@
 //      matches, a match that is archived or merged, or a search that may have missed matches are refused: never guessed.
 //   3. With no email match, the contact is created as "<person> (<client>)" (the app's earlier naming), unless a Xero contact
 //      already has exactly that name: then it is refused (a contact is never linked by name alone, and Xero names are unique).
+//      Xero accepts a search term of at most 50 characters, so both searches use a shortened term (boundedSearchTerm) and every
+//      result is compared on its FULL email or name. If the name search cannot rule out a clash, Xero's own unique-name rule
+//      refuses the create, and that refusal is reported the same way.
 //   4. The create carries an Idempotency-Key derived from the organisation, the local contact and the details sent, so a
 //      retry or timeout returns the same contact instead of a second one.
 //   5. The link (ContactID + organisation) is saved on the local contact only if it is still unlinked; if another request
@@ -14,7 +17,7 @@
 // Nothing here sends an email or touches an invoice.
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
-import { createContact, searchContacts, type XeroContact } from './xeroClient.ts';
+import { boundedSearchTerm, createContact, searchContacts, XeroHttpError, type XeroContact } from './xeroClient.ts';
 import { XeroSafeguardError } from './xeroSafeguards.ts';
 
 export interface AutoContactInput {
@@ -58,7 +61,7 @@ export async function linkOrCreateXeroContact(input: AutoContactInput): Promise<
   }
 
   // ---- 2. an existing contact with the same email ------------------------------------------------------------------------
-  const byEmail = await searchContacts(input.accessToken, email, SEARCH_PAGE);
+  const byEmail = await searchContacts(input.accessToken, boundedSearchTerm(email), SEARCH_PAGE);
   const sameEmail = byEmail.filter((c) => lower(c.EmailAddress) === lower(email));
   const usable = sameEmail.filter((c) => c.ContactStatus === 'ACTIVE' && !(c.MergedToContactID ?? '').trim());
   let chosen: XeroContact | null = null;
@@ -85,16 +88,23 @@ export async function linkOrCreateXeroContact(input: AutoContactInput): Promise<
   if (!chosen) {
     // ---- 3. the name must be free: never link by name alone, never collide with an existing contact ----------------------
     const xeroName = xeroNameFor(name, clientName);
-    const byName = await searchContacts(input.accessToken, xeroName, SEARCH_PAGE);
-    if (byName.some((c) => lower(c.Name) === lower(xeroName))) {
-      throw new XeroSafeguardError(
+    const nameTaken = () =>
+      new XeroSafeguardError(
         'CONTACT_NAME_TAKEN',
         `A Xero contact named "${xeroName}" already exists with a different email address. Link it manually if it is the same recipient, or correct the email in Xero or in the app. Nothing was sent.`,
       );
-    }
+    // A shortened term finds every contact whose name contains it; only an EXACT full-name match counts as taken.
+    const byName = await searchContacts(input.accessToken, boundedSearchTerm(xeroName), SEARCH_PAGE);
+    if (byName.some((c) => lower(c.Name) === lower(xeroName))) throw nameTaken();
     // ---- 4. create, idempotently ------------------------------------------------------------------------------------------
+    // If the name search could not see every candidate (a full page), Xero's own rule still refuses a duplicate name.
     const key = await idempotencyKeyFor([lower(input.connectedOrgId), input.contact.id, xeroName, lower(email)]);
-    chosen = await createContact(input.accessToken, { Name: xeroName, EmailAddress: email }, key);
+    try {
+      chosen = await createContact(input.accessToken, { Name: xeroName, EmailAddress: email }, key);
+    } catch (err) {
+      if (err instanceof XeroHttpError && err.status === 400 && /already (been )?assigned|must be unique|already exists/i.test(err.message)) throw nameTaken();
+      throw err;
+    }
     outcome = 'created';
   }
 
