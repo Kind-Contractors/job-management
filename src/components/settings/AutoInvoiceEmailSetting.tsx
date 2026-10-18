@@ -38,7 +38,8 @@ export function AutoInvoiceEmailSettingView({ enabled, loading, loadError, state
           <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">Automatic Invoice Emails</div>
           <p className="mt-0.5 text-[11.5px] text-neutral-600">
             Controls whether the app emails an invoice to the client after creating it in Xero. It does not stop invoices being created.
-            Emails are only sent when invoice emailing is also enabled for this system.
+            This is the app setting. An invoice is emailed only when it is on AND invoice email sending is enabled for this system (an
+            administrator setting on the server); otherwise invoices are created in Xero without being emailed.
           </p>
         </div>
         <div className="flex items-center gap-2">

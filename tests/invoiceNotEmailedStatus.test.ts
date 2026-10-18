@@ -29,8 +29,9 @@ test('the invoice editor shows it honestly and cannot re-send it (only draft and
   const e = code('src', 'components', 'jobs', 'InvoiceEditor.tsx');
   assert.match(e, /const editable = invoice\?\.status === 'draft' \|\| invoice\?\.status === 'failed';/);
   assert.match(e, /invoice\.status === 'in_xero_not_emailed'/);
-  assert.match(e, /but not emailed \(automatic invoice emails were off, or emailing is not\s+enabled on this system\)/);
-  assert.match(e, /result\.status === 'in_xero_not_emailed'/);
+  assert.match(e, /\{deliveryLine\(invoice, clientContacts\)\}/, 'the delivery line (recipient and why it was or was not emailed) comes from src/lib/invoiceDelivery.ts');
+  assert.match(e, /setSendResult\(sendResultMessage\(result\)\)/, 'the post-send message comes from the server answer via sendResultMessage');
+  assert.match(code('src', 'lib', 'invoiceDelivery.ts'), /result\.status === 'in_xero_not_emailed'/);
   assert.match(code('src', 'pages', 'ReadyForAccountsPage.tsx'), /case 'in_xero_not_emailed':\s*return \{ label: 'In Xero · not emailed'/);
   assert.match(code('src', 'components', 'jobs', 'JobLifecycleDialog.tsx'), /!isInvoiceInXero\(visit\.invoiceStatus\)/);
 });

@@ -22,6 +22,9 @@ export type RecipientSource = 'selected' | 'building_default' | 'locked' | 'auto
 export interface ResolvedRecipient {
   xeroContactId: string;
   source: RecipientSource;
+  /** The Xero contact's name and email as Xero holds them now (read while verifying it): what the invoice is sent to. */
+  xeroContactName: string | null;
+  xeroContactEmail: string | null;
 }
 
 export interface RecipientContactRow {
@@ -58,10 +61,14 @@ interface ResolveContext {
 /** Links (or creates) the Xero contact for an UNLINKED local contact the manager explicitly chose. See ./autoXeroContact.ts. */
 export type AutoLinkContact = (contact: RecipientContactRow) => Promise<{ xeroContactId: string; outcome: 'reused' | 'created' }>;
 
-async function verifiedLinkOf(ctx: ResolveContext, contact: RecipientContactRow): Promise<string> {
+async function verifiedLinkOf(ctx: ResolveContext, contact: RecipientContactRow): Promise<{ xeroContactId: string; xeroContactName: string | null; xeroContactEmail: string | null }> {
   requireLinkInOrganisation(contact, ctx.connectedOrgId);
-  await requireVerifiedContactLink(ctx.accessToken, contact);
-  return contact.xero_contact_id!.trim();
+  const verified = await requireVerifiedContactLink(ctx.accessToken, contact);
+  return { xeroContactId: contact.xero_contact_id!.trim(), ...detailsOf(verified) };
+}
+
+function detailsOf(c: { Name?: string; EmailAddress?: string }): { xeroContactName: string | null; xeroContactEmail: string | null } {
+  return { xeroContactName: c.Name?.trim() || null, xeroContactEmail: c.EmailAddress?.trim() || null };
 }
 
 /** The recipient of an invoice Xero does not hold yet: the manager's explicit choice, else the building's saved default, else a refusal. */
@@ -75,9 +82,9 @@ export async function resolveFirstSendRecipient(
     if (contact.xero_contact_id === null && ctx.autoLink) {
       const auto = await ctx.autoLink(contact);
       const linked = { ...contact, xero_contact_id: auto.xeroContactId, xero_org_id: ctx.connectedOrgId };
-      return { xeroContactId: await verifiedLinkOf(ctx, linked), source: auto.outcome === 'created' ? 'auto_created' : 'auto_linked' };
+      return { ...(await verifiedLinkOf(ctx, linked)), source: auto.outcome === 'created' ? 'auto_created' : 'auto_linked' };
     }
-    return { xeroContactId: await verifiedLinkOf(ctx, contact), source: 'selected' };
+    return { ...(await verifiedLinkOf(ctx, contact)), source: 'selected' };
   }
 
   const { data, error } = await ctx.db
@@ -125,7 +132,7 @@ export async function resolveFirstSendRecipient(
       "This building's default recipient's Xero link has changed since it was chosen. Choose the default recipient again. Nothing was sent.",
     );
   }
-  return { xeroContactId: await verifiedLinkOf(ctx, contact), source: 'building_default' };
+  return { ...(await verifiedLinkOf(ctx, contact)), source: 'building_default' };
 }
 
 /** The recipient of an invoice Xero already holds. It can only be the Xero contact the invoice was created for. */
@@ -169,6 +176,6 @@ export async function resolveLockedRecipient(
   }
 
   // The locked contact must still be a usable one: active, with an email.
-  await requireVerifiedContactLink(ctx.accessToken, { xero_contact_id: locked });
-  return { xeroContactId: locked, source: 'locked' };
+  const verified = await requireVerifiedContactLink(ctx.accessToken, { xero_contact_id: locked });
+  return { xeroContactId: locked, source: 'locked', ...detailsOf(verified) };
 }

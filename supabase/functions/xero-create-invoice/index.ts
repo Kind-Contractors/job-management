@@ -474,6 +474,9 @@ Deno.serve(async (req: Request) => {
         // are filled in once.
         xero_contact_id: xeroContactId,
         xero_org_id: connectedOrgId,
+        // Who Xero holds this invoice for, as Xero names them now: shown to the manager as the recipient.
+        xero_recipient_name: recipient.xeroContactName,
+        xero_recipient_email: recipient.xeroContactEmail,
       },
       `Invoice ${row.xero_invoice_id ? 'updated' : 'created'} in Xero (${createdOrUpdatedInvoice.InvoiceNumber}) but failed to save locally`,
     );
@@ -497,7 +500,7 @@ Deno.serve(async (req: Request) => {
       await updateInvoiceRow(
         callerClient,
         invoiceId,
-        { status: 'in_xero_not_emailed', last_error: null },
+        { status: 'in_xero_not_emailed', last_error: null, not_emailed_reason: emailDecision.reason === 'environment' ? 'environment' : 'app_setting_off' },
         `Invoice created in Xero (${createdOrUpdatedInvoice.InvoiceNumber}) but failed to record it locally`,
       );
       return json(
@@ -508,6 +511,8 @@ Deno.serve(async (req: Request) => {
           xeroInvoiceId: createdOrUpdatedInvoice.InvoiceID,
           xeroInvoiceNumber: createdOrUpdatedInvoice.InvoiceNumber,
           recipientSource: recipient.source,
+          recipientName: recipient.xeroContactName,
+          recipientEmail: recipient.xeroContactEmail,
         },
         200,
       );
@@ -518,7 +523,7 @@ Deno.serve(async (req: Request) => {
     await updateInvoiceRow(
       callerClient,
       invoiceId,
-      { status: 'sent', sent_at: new Date().toISOString() },
+      { status: 'sent', sent_at: new Date().toISOString(), not_emailed_reason: null },
       'Invoice sent but failed to record it locally',
     );
 
@@ -529,6 +534,8 @@ Deno.serve(async (req: Request) => {
         xeroInvoiceId: createdOrUpdatedInvoice.InvoiceID,
         xeroInvoiceNumber: createdOrUpdatedInvoice.InvoiceNumber,
         recipientSource: recipient.source,
+        recipientName: recipient.xeroContactName,
+        recipientEmail: recipient.xeroContactEmail,
       },
       200,
     );

@@ -12,6 +12,7 @@ import { LOCKED_RECIPIENT_MESSAGE, resolveSendRecipientId, UNLINKED_NEW_CONTACT_
 import { canLinkAutomatically, canSendInvoiceTo, defaultRecipientProblem, isUsableRecipient, linkStatusLabel } from '../../lib/xeroLinkStatus';
 import LinkXeroContactDialog from './LinkXeroContactDialog';
 import { getAutoInvoiceEmailSetting } from '../../repository/appSettingsRepository';
+import { deliveryLine, sendResultMessage } from '../../lib/invoiceDelivery';
 import { AUTO_INVOICE_EMAIL_QUERY_KEY } from '../settings/AutoInvoiceEmailSetting';
 import UnlinkedRecipientsList, { refreshAfterXeroLink } from './UnlinkedRecipientsList';
 
@@ -143,16 +144,7 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
     },
     onSuccess: (result) => {
       invalidate();
-      if (result.status === 'sent') {
-        setSendResult({ ok: true, message: `Sent — Xero invoice ${result.xeroInvoiceNumber}.` });
-      } else if (result.status === 'in_xero_not_emailed') {
-        setSendResult({
-          ok: true,
-          message: `Created in Xero as invoice ${result.xeroInvoiceNumber}. It was not emailed (automatic invoice emails are off, or emailing is not enabled on this system): review and send it from Xero.`,
-        });
-      } else {
-        setSendResult({ ok: false, message: result.error ?? 'Failed to send.' });
-      }
+      setSendResult(sendResultMessage(result));
     },
     // A failed send may have changed the invoice (it is marked failed, with the reason stored), so reload it too.
     onError: (err) => {
@@ -186,15 +178,9 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
         </button>
       </div>
 
-      {invoice.status === 'sent' && invoice.xeroInvoiceNumber && (
-        <div className="mt-2 border border-teal-700/40 bg-teal-100 p-2 text-[12.5px] text-teal-700">
-          Sent to Xero as invoice {invoice.xeroInvoiceNumber}.
-        </div>
-      )}
-      {invoice.status === 'in_xero_not_emailed' && (
-        <div className="mt-2 border border-teal-700/40 bg-teal-100 p-2 text-[12.5px] text-teal-700">
-          Created in Xero as invoice {invoice.xeroInvoiceNumber ?? ''}, but not emailed (automatic invoice emails were off, or emailing is not
-          enabled on this system). Review and send it from Xero.
+      {(invoice.status === 'sent' || invoice.status === 'in_xero_not_emailed') && (
+        <div data-testid="invoice-delivery" className="mt-2 border border-teal-700/40 bg-teal-100 p-2 text-[12.5px] text-teal-700">
+          {deliveryLine(invoice, clientContacts)}
         </div>
       )}
       {invoice.status === 'failed' && invoice.xeroInvoiceId && (
@@ -401,7 +387,10 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
           <div className={`text-[11.5px] ${sendResult.ok ? 'text-teal-700' : 'text-missed-fg'}`}>{sendResult.message}</div>
         )}
 
-        <div className="flex flex-wrap gap-1.5">
+        <div
+          data-testid="invoice-actions"
+          className="sticky bottom-0 z-10 -mx-3 -mb-3 flex flex-wrap gap-1.5 border-t border-divider bg-white px-3 py-2"
+        >
           {editable && (
             <>
               <button

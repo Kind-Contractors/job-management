@@ -373,7 +373,7 @@ function assertNoXeroWrites() {
 test('a send with every safeguard satisfied creates ONE invoice for the linked contact and emails it', async () => {
   const res = await call();
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { status: 'sent', emailed: true, xeroInvoiceId: XERO_INVOICE, xeroInvoiceNumber: 'INV-001', recipientSource: 'selected' });
+  assert.deepEqual(await res.json(), { status: 'sent', emailed: true, xeroInvoiceId: XERO_INVOICE, xeroInvoiceNumber: 'INV-001', recipientSource: 'selected', recipientName: 'Oak Estates Ltd', recipientEmail: 'accounts@oak.test' });
 
   const creates = invoiceCreatesOrUpdates();
   assert.equal(creates.length, 1);
@@ -1784,7 +1784,7 @@ test('EMAIL-OFF 1: with creation on and emailing absent, the invoice is CREATED 
   const res = await call();
   const out = await res.json();
   assert.equal(res.status, 200);
-  assert.deepEqual(out, { status: 'in_xero_not_emailed', emailed: false, code: 'EMAIL_DISABLED', xeroInvoiceId: XERO_INVOICE, xeroInvoiceNumber: 'INV-001', recipientSource: 'selected' });
+  assert.deepEqual(out, { status: 'in_xero_not_emailed', emailed: false, code: 'EMAIL_DISABLED', xeroInvoiceId: XERO_INVOICE, xeroInvoiceNumber: 'INV-001', recipientSource: 'selected', recipientName: 'Oak Estates Ltd', recipientEmail: 'accounts@oak.test' });
   assert.equal(world.invoiceCounter, 1, 'created');
   assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Status, 'AUTHORISED');
   assert.equal(emailCalls().length, 0, 'no email request of any kind');
@@ -2187,6 +2187,76 @@ test('EMAIL-POLICY 5: neither creation nor sending allowed -> nothing at all hap
   assert.equal(out.code, 'CREATION_DISABLED');
   assert.equal(world.xeroLog.length, 0);
   assert.equal(world.appSettingsReads, 0);
+});
+
+// ---- the recipient and the reason an invoice was not emailed are recorded with the invoice --------------------------------------------
+test('RECIPIENT 1: an emailed invoice records the Xero contact\'s name and email (as Xero holds them, not the local contact\'s) and no not-emailed reason', async () => {
+  // The local contact is "Sam Client" / sam@client.test; the linked Xero contact is "Oak Estates Ltd" / accounts@oak.test.
+  const out = await (await call()).json();
+  assert.equal(out.status, 'sent');
+  assert.deepEqual([out.recipientName, out.recipientEmail], ['Oak Estates Ltd', 'accounts@oak.test']);
+  assert.deepEqual([world.invoice.xero_recipient_name, world.invoice.xero_recipient_email], ['Oak Estates Ltd', 'accounts@oak.test']);
+  assert.equal(world.invoice.not_emailed_reason, null);
+  assert.equal(emailCalls().length, 1);
+});
+
+test('RECIPIENT 2: the recipient is recorded with the Xero invoice id, BEFORE the email is attempted', async () => {
+  await call();
+  const saved = world.events.findIndex((e) => e.startsWith('db:PATCH invoices') && e.includes('"xero_invoice_id"') && e.includes('"xero_recipient_email"'));
+  const emailed = world.events.findIndex((e) => e.endsWith('/Email'));
+  assert.ok(saved >= 0 && saved < emailed, world.events.join('\n'));
+});
+
+test('RECIPIENT 3: a contact CREATED automatically is recorded with the generated Xero name and its email', async () => {
+  Object.assign(world.contact, { xero_contact_id: null, xero_org_id: null });
+  const out = await (await call()).json();
+  assert.equal(out.recipientSource, 'auto_created');
+  assert.deepEqual([world.invoice.xero_recipient_name, world.invoice.xero_recipient_email], ['Sam Client (Oak Estates)', 'sam@client.test']);
+});
+
+test('RECIPIENT 4: not emailed because the SYSTEM does not allow invoice emails -> reason "environment", code EMAIL_DISABLED, recipient still recorded', async () => {
+  delete ENV.XERO_SENDING_ENABLED;
+  ENV.XERO_CREATION_ENABLED = 'true';
+  world.appSettings = { auto_invoice_emails_enabled: true };
+  const out = await (await call()).json();
+  assert.equal(out.code, 'EMAIL_DISABLED');
+  assert.equal(world.invoice.status, 'in_xero_not_emailed');
+  assert.equal(world.invoice.not_emailed_reason, 'environment');
+  assert.equal(world.invoice.xero_recipient_email, 'accounts@oak.test');
+  assert.equal(emailCalls().length, 0);
+});
+
+test('RECIPIENT 5: not emailed because the APP toggle is off -> reason "app_setting_off", code AUTO_EMAIL_OFF', async () => {
+  ENV.XERO_SENDING_ENABLED = 'true';
+  world.appSettings = { auto_invoice_emails_enabled: false };
+  const out = await (await call()).json();
+  assert.equal(out.code, 'AUTO_EMAIL_OFF');
+  assert.equal(world.invoice.not_emailed_reason, 'app_setting_off');
+  assert.equal(emailCalls().length, 0);
+});
+
+test('RECIPIENT 6: email FAILS -> failed with the reason, recipient recorded; the retry emails the SAME invoice once and ends sent', async () => {
+  world.emailStatus = 500;
+  await call();
+  assert.equal(world.invoice.status, 'failed');
+  assert.equal(world.invoice.xero_recipient_email, 'accounts@oak.test');
+  world.emailStatus = 200;
+  const out = await (await call()).json();
+  assert.equal(out.status, 'sent');
+  assert.equal(world.invoiceCounter, 1, 'no second Xero invoice');
+  assert.equal(emailCalls().length, 2, 'the failed attempt and the one successful retry');
+  assert.equal(world.invoice.not_emailed_reason, null);
+});
+
+test('RECIPIENT 7: a retry after the email failed, with emailing now off, records why it was not emailed - never "sent"', async () => {
+  world.emailStatus = 500;
+  await call();
+  delete ENV.XERO_SENDING_ENABLED;
+  ENV.XERO_CREATION_ENABLED = 'true';
+  const out = await (await call()).json();
+  assert.equal(out.status, 'in_xero_not_emailed');
+  assert.equal(world.invoice.not_emailed_reason, 'environment');
+  assert.equal(world.invoice.sent_at ?? null, null);
 });
 
 // ---- source guards: DEV stays on its own organisation, and contact creation cannot creep back in -------------------------------

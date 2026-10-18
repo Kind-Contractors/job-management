@@ -511,6 +511,11 @@ export interface InvoiceDetail {
   xeroInvoiceNumber: string | null;
   /** The Xero contact the invoice was created for. Once xeroInvoiceId is set this is locked: it cannot be changed. */
   xeroContactId: string | null;
+  /** That Xero contact's name and email when the invoice was created/updated (null for invoices sent before this was recorded). */
+  xeroRecipientName: string | null;
+  xeroRecipientEmail: string | null;
+  /** Why an in_xero_not_emailed invoice was not emailed. */
+  notEmailedReason: 'environment' | 'app_setting_off' | null;
   lastError: string | null;
   sentAt: string | null;
   lineItems: InvoiceLineItem[];

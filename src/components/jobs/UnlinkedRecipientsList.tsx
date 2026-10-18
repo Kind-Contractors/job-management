@@ -31,6 +31,7 @@ export default function UnlinkedRecipientsList({
   return (
     <div className="flex flex-col gap-1">
       <div className="font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-600 uppercase">Not linked to Xero</div>
+      <div data-testid="unlinked-list" className="flex max-h-[40vh] flex-col gap-1 overflow-y-auto">
       {unlinked.map((c) => (
         <div key={c.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 border border-neutral-300 px-2 py-1.5 text-[12px]">
           <div className="min-w-0 flex-1">
@@ -52,6 +53,7 @@ export default function UnlinkedRecipientsList({
           </button>
         </div>
       ))}
+      </div>
     </div>
   );
 }

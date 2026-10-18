@@ -16,7 +16,7 @@ import { supabase } from '../lib/supabaseClient';
 
 const INVOICE_SELECT = `
   id, job_id, status, description, works_order_number, due_date,
-  xero_invoice_id, xero_invoice_number, xero_contact_id, last_error, sent_at,
+  xero_invoice_id, xero_invoice_number, xero_contact_id, xero_recipient_name, xero_recipient_email, not_emailed_reason, last_error, sent_at,
   invoice_line_items ( id, visit_id, description, quantity, unit_amount, sort_order )
 `;
 
@@ -39,6 +39,9 @@ interface SupabaseInvoiceRow {
   xero_invoice_id: string | null;
   xero_invoice_number: string | null;
   xero_contact_id: string | null;
+  xero_recipient_name: string | null;
+  xero_recipient_email: string | null;
+  not_emailed_reason: 'environment' | 'app_setting_off' | null;
   last_error: string | null;
   sent_at: string | null;
   invoice_line_items: SupabaseInvoiceLineItemRow[] | null;
@@ -65,6 +68,9 @@ function mapInvoice(row: SupabaseInvoiceRow): InvoiceDetail {
     xeroInvoiceId: row.xero_invoice_id,
     xeroInvoiceNumber: row.xero_invoice_number,
     xeroContactId: row.xero_contact_id,
+    xeroRecipientName: row.xero_recipient_name ?? null,
+    xeroRecipientEmail: row.xero_recipient_email ?? null,
+    notEmailedReason: row.not_emailed_reason ?? null,
     lastError: row.last_error,
     sentAt: row.sent_at,
     lineItems,
@@ -183,6 +189,10 @@ export interface SendInvoiceResult {
   status: LocalInvoiceStatus;
   /** Whether the invoice was emailed (false when emailing is not permitted here or automatic invoice emails are off). */
   emailed?: boolean;
+  /** EMAIL_DISABLED (the system does not allow invoice emails) or AUTO_EMAIL_OFF (the app toggle is off) when not emailed. */
+  code?: string;
+  recipientName?: string | null;
+  recipientEmail?: string | null;
   xeroInvoiceId?: string;
   xeroInvoiceNumber?: string;
   error?: string;

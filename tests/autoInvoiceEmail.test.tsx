@@ -244,7 +244,7 @@ test('11. the invoice editor cannot re-send an invoice that is in Xero without a
   const e = code('src', 'components', 'jobs', 'InvoiceEditor.tsx');
   assert.match(e, /const editable = invoice\?\.status === 'draft' \|\| invoice\?\.status === 'failed';/);
   assert.match(e, /invoice\.status === 'in_xero_not_emailed'/);
-  assert.match(e, /not emailed \(automatic invoice emails were off, or emailing is not\s+enabled on this system\)/);
+  assert.match(e, /\{deliveryLine\(invoice, clientContacts\)\}/, 'the delivery line (recipient and why it was or was not emailed) comes from src/lib/invoiceDelivery.ts');
 });
 
 test('the setting cannot be changed from anywhere but the settings repository, and the only email call is in the invoice function', () => {

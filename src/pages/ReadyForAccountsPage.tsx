@@ -315,7 +315,7 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
         )}
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div data-testid="accounts-detail" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
         {!selected ? (
           <div className="flex flex-1 items-center justify-center p-5 text-center">
             <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
