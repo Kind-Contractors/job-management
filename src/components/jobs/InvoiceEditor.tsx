@@ -353,11 +353,21 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
             {!recipientLocked && <UnlinkedRecipientsList contacts={clientContacts} onLink={setLinkingContact} disabled={anyMutationPending} />}
 
             {recipientLocked && <div className="border border-neutral-300 bg-neutral-100 p-2 text-[11.5px] text-neutral-700">{LOCKED_RECIPIENT_MESSAGE}</div>}
-            {!recipientLocked && !selectedContactId && !usableDefaultContactId && (
-              <div className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg">
-                {defaultProblem ??
-                  'This building has no default recipient. Choose a contact that is linked to Xero, or set the default recipient on the building page.'}
-              </div>
+            {!recipientLocked && !selectedContactId && !usableDefaultContactId && defaultProblem && (
+              <div className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg">{defaultProblem}</div>
+            )}
+            {!recipientLocked && !selectedContactId && !usableDefaultContactId && !defaultProblem && (
+              clientContacts.some(canSendInvoiceTo) ? (
+                <div className="border border-neutral-300 bg-neutral-100 p-2 text-[11.5px] text-neutral-700">
+                  Choose who to send this invoice to. A contact that is not in Xero yet can be chosen: it is matched to its Xero contact
+                  by email, or created in Xero, when you submit the invoice.
+                </div>
+              ) : (
+                <div className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg">
+                  None of this client's contacts can receive an invoice yet: add an email address to a contact, or link one to its Xero
+                  contact.
+                </div>
+              )
             )}
             {!recipientLocked && selectedContact && !isUsableRecipient(selectedContact) && canLinkAutomatically(selectedContact) && (
               <div className="border border-neutral-300 bg-neutral-100 p-2 text-[11.5px] text-neutral-700">
@@ -372,7 +382,8 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
               <div className="border border-missed bg-missed/10 p-2 text-[11.5px] text-missed-fg">{UNLINKED_NEW_CONTACT_MESSAGE}</div>
             ) : (
               <div className="text-[10px] text-neutral-400">
-                Xero creates this invoice for the linked Xero contact and emails it to that contact's address in Xero.
+                Xero creates this invoice for the chosen contact. Whether Xero also emails it depends on this environment's invoice-email
+                setting.
               </div>
             )}
           </div>

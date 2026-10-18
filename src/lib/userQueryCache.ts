@@ -31,7 +31,7 @@ export const QUERY_CACHE_MAX_AGE_MS = 1000 * 60 * 60 * 24;
  * Schedule (cached visits had no additionalTechnicianIds). A changed version
  * makes every previously persisted cache be discarded on restore.
  */
-export const QUERY_CACHE_SCHEMA_VERSION = '2026-10-13-report-videos';
+export const QUERY_CACHE_SCHEMA_VERSION = '2026-10-18-xero-recipients'; // contacts' Xero link fields, building default recipient, in_xero_not_emailed
 
 /**
  * The `buster` the persisted cache is stamped with and restored against: the

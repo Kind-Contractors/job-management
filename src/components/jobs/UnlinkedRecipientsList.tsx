@@ -1,6 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query';
 import type { JobContactSummary } from '../../domain/types';
-import { isUsableRecipient, linkStatusLabel } from '../../lib/xeroLinkStatus';
+import { canLinkAutomatically, isUsableRecipient, linkStatusLabel } from '../../lib/xeroLinkStatus';
 
 /**
  * Everything that shows a contact's Xero link reads it from these queries (the invoice editor's contacts come from
@@ -37,6 +37,9 @@ export default function UnlinkedRecipientsList({
             <div className="truncate font-semibold text-ink">{c.name}</div>
             {c.email && <div className="truncate text-[11px] text-neutral-600">{c.email}</div>}
             <div className="text-[11px] text-due-fg">{linkStatusLabel(c)}</div>
+            {canLinkAutomatically(c) && (
+              <div className="text-[11px] text-neutral-600">Can still be chosen above: matched or created in Xero when the invoice is submitted.</div>
+            )}
           </div>
           <button
             type="button"

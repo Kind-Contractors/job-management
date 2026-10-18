@@ -23,7 +23,9 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * with that email, or creates it in Xero (supabase/functions/_shared/autoXeroContact.ts), and refuses when that is ambiguous.
  */
 export const canLinkAutomatically = (c: Pick<JobContactSummary, 'xeroContactId' | 'email'>): boolean =>
-  c.xeroContactId === null && EMAIL_PATTERN.test((c.email ?? '').trim());
+  // `== null`: no link at all, whether the field is null or missing (a contact cached before the field existed). A blank or
+  // whitespace link is NOT treated as unlinked: the server refuses it rather than replacing it.
+  c.xeroContactId == null && EMAIL_PATTERN.test((c.email ?? '').trim());
 
 /** Can an invoice be sent to this contact (the server still verifies everything)? Linked, or linkable automatically. */
 export const canSendInvoiceTo = (c: Pick<JobContactSummary, 'xeroContactId' | 'xeroOrgId' | 'email'>): boolean =>
