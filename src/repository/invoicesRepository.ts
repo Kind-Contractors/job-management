@@ -181,7 +181,7 @@ export async function discardInvoiceDraft(invoiceId: string): Promise<void> {
 
 export interface SendInvoiceResult {
   status: LocalInvoiceStatus;
-  /** Whether the invoice was emailed (false when invoice emailing is off in this environment). */
+  /** Whether the invoice was emailed (false when emailing is not permitted here or automatic invoice emails are off). */
   emailed?: boolean;
   xeroInvoiceId?: string;
   xeroInvoiceNumber?: string;

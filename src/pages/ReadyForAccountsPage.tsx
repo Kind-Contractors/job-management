@@ -10,6 +10,7 @@ import StatusPill from '../components/jobs/StatusPill';
 import InvoiceEditor from '../components/jobs/InvoiceEditor';
 import CompleteVisitForm from '../components/jobs/CompleteVisitForm';
 import ClosedJobsNotice from '../components/reports/ClosedJobsNotice';
+import AutoInvoiceEmailSetting from '../components/settings/AutoInvoiceEmailSetting';
 
 interface AccountsRow {
   job: JobRow;
@@ -192,6 +193,9 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
         <div className="flex-none border-b border-divider px-3.5 py-3">
           <h1 className="font-heading text-lg font-semibold">Ready for accounts</h1>
           <div className="mt-0.5 text-xs text-neutral-600 tabular-nums">{rows.length} needing attention</div>
+        </div>
+        <div className="flex-none border-b border-divider">
+          <AutoInvoiceEmailSetting />
         </div>
 
         {selectedForInvoiceIds.size >= 2 && (

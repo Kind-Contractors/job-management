@@ -41,6 +41,11 @@ const world = {
   /** Every local contact by id (world.contact is contacts['ct-1']); the fake database answers a read of a contact by its id filter. */
   contacts: {} as Record<string, any>,
   building: null as any,
+  /** The app_settings row (null = no row). 'error' makes the read fail. Existing tests run with automatic emails ON. */
+  appSettings: null as null | 'error' | { auto_invoice_emails_enabled: unknown },
+  appSettingsReads: 0,
+  /** Runs right after each app_settings read (used to change the setting between attempts). */
+  afterSettingsRead: null as null | (() => void),
   failRecipientWrite: false,
   // Xero
   tokenStatus: 200,
@@ -116,6 +121,9 @@ function reset() {
   world.contacts = { 'ct-1': world.contact };
   world.building = { id: 'building-1', client_id: 'client-1', default_invoice_contact_id: null, default_invoice_xero_contact_id: null, default_invoice_xero_org_id: null };
   world.failRecipientWrite = false;
+  world.appSettings = { auto_invoice_emails_enabled: true };
+  world.appSettingsReads = 0;
+  world.afterSettingsRead = null;
   world.tokenStatus = 200;
   world.orgStatus = 200;
   world.orgBody = null;
@@ -300,6 +308,15 @@ globalThis.fetch = (async (input: any, init?: any) => {
       return row ? one(row) : json(200, wantsObject ? null : []);
     }
     if (r.path === '/rest/v1/buildings' && method === 'GET') return world.building ? one(world.building) : json(200, wantsObject ? null : []);
+    if (r.path === '/rest/v1/app_settings' && method === 'GET') {
+      world.appSettingsReads += 1;
+      world.events.push('db:GET app_settings');
+      const setting = world.appSettings;
+      world.afterSettingsRead?.();
+      if (setting === 'error') return json(500, { message: 'settings unavailable' });
+      return setting ? one(setting) : json(200, wantsObject ? null : []);
+    }
+    if (r.path === '/rest/v1/app_settings') world.unexpected.push(`the invoice function wrote app_settings (${method})`);
     world.unexpected.push(`database request ${method} ${r.path}`);
     return json(404, { message: `unexpected request ${method} ${r.path}` });
   }
@@ -1876,10 +1893,12 @@ test('EMAIL-OFF 9: with BOTH switches absent (production today) nothing at all h
 
 test('EMAIL-OFF 10: the email permission is read right before the email step - the only email call is guarded by it', () => {
   const code = readFileSync(join(process.cwd(), 'supabase', 'functions', 'xero-create-invoice', 'index.ts'), 'utf8').replace(/\/\/[^\n]*/g, '');
-  const guard = code.indexOf('if (!isSendingEnabled()) {');
+  const guard = code.indexOf('const emailDecision');
   const email = code.indexOf('await emailInvoiceOrExplain(');
   const created = code.indexOf('await createOrUpdateAuthorisedInvoice(');
   assert.ok(created > 0 && created < guard && guard < email, 'create -> email permission check -> email');
+  // The check needs BOTH: the environment switch first, then the manager's toggle read from the database.
+  assert.match(code.slice(guard, email), /isSendingEnabled\(\)\s*\?\s*await decideAutoInvoiceEmail\(callerClient\)\s*:\s*\{ send: false, reason: 'environment' \}/);
   assert.equal(code.split('emailInvoiceOrExplain(').length - 1, 2, 'one definition and exactly one call');
 });
 
@@ -1979,6 +1998,195 @@ test('IDEMPOTENCY 6: the key is scoped to the local invoice id in the Xero clien
   const b = await xeroClient.computeInvoiceIdempotencyKey({ ...base, localInvoiceId: 'inv-b' });
   assert.equal(a1, a2);
   assert.notEqual(a1, b);
+});
+
+// ---- automatic invoice emails (app_settings.auto_invoice_emails_enabled) ------------------------------------------------------------
+const emailRequests = () => accounting().filter((r) => r.path.endsWith('/Email'));
+
+test('AUTO-EMAIL 1: with automatic emails OFF the invoice is still CREATED in Xero, nobody is emailed, and it is recorded as in_xero_not_emailed (not sent)', async () => {
+  world.appSettings = { auto_invoice_emails_enabled: false };
+  const res = await call();
+  const out = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(out.status, 'in_xero_not_emailed');
+  assert.equal(out.emailed, false);
+  assert.equal(out.xeroInvoiceNumber, 'INV-001');
+  assert.equal(world.invoiceCounter, 1, 'the invoice was created');
+  assert.equal(emailRequests().length, 0, 'no Xero email call');
+  assert.equal(world.invoice.status, 'in_xero_not_emailed');
+  assert.equal(world.invoice.sent_at ?? null, null, 'never stamped as sent');
+  assert.equal(world.invoice.xero_invoice_id, XERO_INVOICE, 'the Xero invoice is recorded');
+  assert.equal(world.invoice.xero_contact_id, CONTACT);
+});
+
+test('AUTO-EMAIL 2: with automatic emails ON the invoice is created AND emailed, and recorded as sent', async () => {
+  const res = await call();
+  const out = await res.json();
+  assert.equal(out.status, 'sent');
+  assert.equal(out.emailed, true);
+  assert.equal(emailRequests().length, 1);
+  assert.equal(world.invoice.status, 'sent');
+  assert.ok(world.invoice.sent_at);
+});
+
+test('AUTO-EMAIL 3: the setting is read IMMEDIATELY before the email step - after the invoice is created and saved - and not before', async () => {
+  await call();
+  const read = world.events.indexOf('db:GET app_settings');
+  const created = world.events.indexOf('xero:POST /Invoices');
+  const saved = world.events.findIndex((e) => e.startsWith('db:PATCH invoices') && e.includes('"xero_invoice_number"'));
+  const emailed = world.events.findIndex((e) => e.endsWith('/Email'));
+  assert.ok(created < saved && saved < read && read < emailed, world.events.join('\n'));
+  assert.equal(world.appSettingsReads, 1);
+});
+
+test('AUTO-EMAIL 4: if the setting CANNOT be read (error, no row, or not a boolean) nothing is emailed and the invoice is left retryable', async () => {
+  for (const setting of ['error', null, { auto_invoice_emails_enabled: null }, { auto_invoice_emails_enabled: 'true' }] as const) {
+    reset();
+    world.appSettings = setting as any;
+    const res = await call();
+    const out = await res.json();
+    assert.equal(res.status, 502, JSON.stringify(setting));
+    assert.equal(out.status, 'failed');
+    assert.match(out.error, /created in Xero but NOT emailed: the automatic invoice email setting could not be read/);
+    assert.equal(emailRequests().length, 0, `no email for ${JSON.stringify(setting)}`);
+    assert.equal(world.invoice.status, 'failed', 'retryable');
+    assert.equal(world.invoice.xero_invoice_id, XERO_INVOICE, 'the created invoice is recorded, so a retry updates it');
+  }
+});
+
+test('AUTO-EMAIL 5: a RETRY respects the setting at the time of the retry - off now means not emailed, on the SAME Xero invoice', async () => {
+  // First attempt: created, email failed (automatic emails were on).
+  world.emailStatus = 500;
+  await call();
+  assert.equal(world.invoice.status, 'failed');
+  assert.equal(world.invoiceCounter, 1);
+  // Meanwhile automatic emails are turned off. The retry updates the same invoice and does NOT email.
+  world.emailStatus = 200;
+  world.appSettings = { auto_invoice_emails_enabled: false };
+  const before = emailRequests().length;
+  const out = await (await call()).json();
+  assert.equal(out.status, 'in_xero_not_emailed');
+  assert.equal(emailRequests().length, before, 'no further email attempt');
+  assert.equal(world.invoiceCounter, 1, 'no duplicate invoice');
+  assert.equal(invoiceCreatesOrUpdates().at(-1)!.path, `/api.xro/2.0/Invoices/${XERO_INVOICE}`);
+});
+
+test('AUTO-EMAIL 6: turning the setting ON never emails an invoice that is already in Xero without an email - it cannot be claimed again', async () => {
+  world.appSettings = { auto_invoice_emails_enabled: false };
+  await call();
+  assert.equal(world.invoice.status, 'in_xero_not_emailed');
+  world.appSettings = { auto_invoice_emails_enabled: true };
+  const res = await call();
+  assert.equal(res.status, 409, 'not claimable: only draft or failed invoices are');
+  assert.equal(emailRequests().length, 0, 'still never emailed');
+  assert.equal(world.invoice.status, 'in_xero_not_emailed');
+  assert.equal(world.invoiceCounter, 1);
+});
+
+test('AUTO-EMAIL 7: a sent invoice is never re-emailed when the setting changes', async () => {
+  await call();
+  assert.equal(world.invoice.status, 'sent');
+  world.appSettings = { auto_invoice_emails_enabled: false };
+  assert.equal((await call()).status, 409);
+  world.appSettings = { auto_invoice_emails_enabled: true };
+  assert.equal((await call()).status, 409);
+  assert.equal(emailRequests().length, 1, 'only the original email');
+});
+
+test('AUTO-EMAIL 8: the setting never overrides the kill switch, the organisation check or the recipient and relationship checks', async () => {
+  world.appSettings = { auto_invoice_emails_enabled: true };
+  ENV.XERO_SENDING_ENABLED = undefined;
+  assert.equal((await (await call()).json()).code, 'CREATION_DISABLED', 'the toggle cannot switch on anything the environment forbids');
+  reset();
+  world.orgBody = { Organisations: [{ OrganisationID: OTHER_ORG }] };
+  assert.equal((await (await call()).json()).code, 'ORG_MISMATCH');
+  reset();
+  world.contact.xero_org_id = null;
+  assert.equal((await (await call()).json()).code, 'LINK_UNTAGGED');
+  reset();
+  setLines(lineFor(1), lineFor(2, { visits: visitFor('visit-2', 'job-2') }));
+  assert.equal((await call()).status, 422);
+  assert.equal(world.invoiceCounter, 0, 'nothing was created by any of them');
+  assert.equal(emailRequests().length, 0);
+  assert.equal(world.appSettingsReads, 0, 'the setting is not even consulted before those checks pass');
+});
+
+test('AUTO-EMAIL 9: concurrent sends with automatic emails ON create ONE invoice and email it ONCE', async () => {
+  const results = await Promise.all([call(), call(), call()]);
+  assert.equal(results.filter((r) => r.status === 200).length, 1);
+  assert.equal(world.invoiceCounter, 1);
+  assert.equal(emailRequests().length, 1);
+});
+
+test('AUTO-EMAIL 10: the setting turned OFF between two attempts takes effect on the next one (it is read every time, never cached)', async () => {
+  world.createStatus = 500;
+  await call();
+  assert.equal(world.appSettingsReads, 0, 'a failed creation never reaches the setting');
+  world.createStatus = 200;
+  world.afterSettingsRead = () => { world.appSettings = { auto_invoice_emails_enabled: true }; };
+  world.appSettings = { auto_invoice_emails_enabled: false };
+  const out = await (await call()).json();
+  assert.equal(out.status, 'in_xero_not_emailed', 'the value read at the email step is the one used');
+  assert.equal(emailRequests().length, 0);
+});
+
+test('AUTO-EMAIL 11: the invoice function never changes the setting', async () => {
+  await call();
+  world.appSettings = { auto_invoice_emails_enabled: false };
+  await call();
+  assert.deepEqual(world.unexpected.filter((u) => u.includes('app_settings')), []);
+});
+
+// ---- the two email permissions together (environment switch AND the manager's toggle) ---------------------------------------------------
+test('EMAIL-POLICY 1: environment allows emails, toggle ON -> created AND emailed, recorded as sent', async () => {
+  ENV.XERO_SENDING_ENABLED = 'true';
+  world.appSettings = { auto_invoice_emails_enabled: true };
+  const out = await (await call()).json();
+  assert.equal(out.status, 'sent');
+  assert.equal(emailCalls().length, 1);
+});
+
+test('EMAIL-POLICY 2: environment allows emails, toggle OFF -> created, NOT emailed (code AUTO_EMAIL_OFF)', async () => {
+  ENV.XERO_SENDING_ENABLED = 'true';
+  world.appSettings = { auto_invoice_emails_enabled: false };
+  const out = await (await call()).json();
+  assert.equal(out.status, 'in_xero_not_emailed');
+  assert.equal(out.code, 'AUTO_EMAIL_OFF');
+  assert.equal(emailCalls().length, 0);
+  assert.equal(world.invoiceCounter, 1);
+});
+
+test('EMAIL-POLICY 3: environment does NOT allow emails (creation only), toggle ON -> created, NOT emailed (code EMAIL_DISABLED), the toggle is not even read', async () => {
+  delete ENV.XERO_SENDING_ENABLED;
+  ENV.XERO_CREATION_ENABLED = 'true';
+  world.appSettings = { auto_invoice_emails_enabled: true };
+  const out = await (await call()).json();
+  assert.equal(out.status, 'in_xero_not_emailed');
+  assert.equal(out.code, 'EMAIL_DISABLED');
+  assert.equal(emailCalls().length, 0);
+  assert.equal(world.appSettingsReads, 0, 'the environment switch is the ceiling: the toggle cannot lift it');
+});
+
+test('EMAIL-POLICY 4: environment allows emails, toggle UNREADABLE -> created, NOT emailed, left failed and retryable on the same Xero invoice', async () => {
+  ENV.XERO_SENDING_ENABLED = 'true';
+  world.appSettings = 'error';
+  const res = await call();
+  const out = await res.json();
+  assert.equal(res.status, 502);
+  assert.match(out.error, /the automatic invoice email setting could not be read/);
+  assert.equal(emailCalls().length, 0);
+  assert.equal(world.invoice.status, 'failed');
+  assert.equal(world.invoice.xero_invoice_id, XERO_INVOICE);
+});
+
+test('EMAIL-POLICY 5: neither creation nor sending allowed -> nothing at all happens, whatever the toggle says', async () => {
+  delete ENV.XERO_SENDING_ENABLED;
+  delete ENV.XERO_CREATION_ENABLED;
+  world.appSettings = { auto_invoice_emails_enabled: true };
+  const out = await (await call()).json();
+  assert.equal(out.code, 'CREATION_DISABLED');
+  assert.equal(world.xeroLog.length, 0);
+  assert.equal(world.appSettingsReads, 0);
 });
 
 // ---- source guards: DEV stays on its own organisation, and contact creation cannot creep back in -------------------------------

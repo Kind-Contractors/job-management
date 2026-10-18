@@ -195,7 +195,7 @@ export type VisitStatus = 'due' | 'booked' | 'completed' | 'missed' | 'cancelled
 export type ReportReviewStatus = 'awaiting_review' | 'approved' | 'returned_for_correction';
 
 /** Local invoice lifecycle state (`invoices.status`) — independent of any Xero-side status. */
-/** 'sent' = created in Xero AND emailed; 'in_xero_not_emailed' = created in Xero while invoice emailing was off. */
+/** 'sent' = created in Xero AND emailed; 'in_xero_not_emailed' = created in Xero but not emailed (invoice emailing not permitted, or automatic invoice emails off). */
 export type LocalInvoiceStatus = 'draft' | 'sending' | 'sent' | 'failed' | 'in_xero_not_emailed';
 
 /** A technician's own contribution state on a visit's report — 'pending' until they submit or the office waives them. */

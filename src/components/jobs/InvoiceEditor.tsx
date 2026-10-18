@@ -11,6 +11,8 @@ import {
 import { LOCKED_RECIPIENT_MESSAGE, resolveSendRecipientId, UNLINKED_NEW_CONTACT_MESSAGE } from '../../lib/invoiceRecipient';
 import { canLinkAutomatically, canSendInvoiceTo, defaultRecipientProblem, isUsableRecipient, linkStatusLabel } from '../../lib/xeroLinkStatus';
 import LinkXeroContactDialog from './LinkXeroContactDialog';
+import { getAutoInvoiceEmailSetting } from '../../repository/appSettingsRepository';
+import { AUTO_INVOICE_EMAIL_QUERY_KEY } from '../settings/AutoInvoiceEmailSetting';
 import UnlinkedRecipientsList, { refreshAfterXeroLink } from './UnlinkedRecipientsList';
 
 function money(n: number): string {
@@ -40,6 +42,8 @@ interface InvoiceEditorProps {
 export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buildingDefault = null }: InvoiceEditorProps) {
   const queryClient = useQueryClient();
   const { data: invoice, isLoading } = useQuery({ queryKey: ['invoice', invoiceId], queryFn: () => getInvoice(invoiceId) });
+  // For the note beside Send only. Whether an invoice is emailed is decided by the server at the moment of sending.
+  const autoEmail = useQuery({ queryKey: AUTO_INVOICE_EMAIL_QUERY_KEY, queryFn: getAutoInvoiceEmailSetting });
 
   const [description, setDescription] = useState('');
   const [worksOrderNumber, setWorksOrderNumber] = useState('');
@@ -144,7 +148,7 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
       } else if (result.status === 'in_xero_not_emailed') {
         setSendResult({
           ok: true,
-          message: `Created in Xero as invoice ${result.xeroInvoiceNumber}. It was not emailed: invoice emailing is turned off. Review and send it from Xero.`,
+          message: `Created in Xero as invoice ${result.xeroInvoiceNumber}. It was not emailed (automatic invoice emails are off, or emailing is not enabled on this system): review and send it from Xero.`,
         });
       } else {
         setSendResult({ ok: false, message: result.error ?? 'Failed to send.' });
@@ -189,8 +193,8 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
       )}
       {invoice.status === 'in_xero_not_emailed' && (
         <div className="mt-2 border border-teal-700/40 bg-teal-100 p-2 text-[12.5px] text-teal-700">
-          Created in Xero as invoice {invoice.xeroInvoiceNumber ?? ''}, but not emailed: invoice emailing was turned off. Review and send it from
-          Xero.
+          Created in Xero as invoice {invoice.xeroInvoiceNumber ?? ''}, but not emailed (automatic invoice emails were off, or emailing is not
+          enabled on this system). Review and send it from Xero.
         </div>
       )}
       {invoice.status === 'failed' && invoice.xeroInvoiceId && (
@@ -382,8 +386,11 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
               <div className="border border-missed bg-missed/10 p-2 text-[11.5px] text-missed-fg">{UNLINKED_NEW_CONTACT_MESSAGE}</div>
             ) : (
               <div className="text-[10px] text-neutral-400">
-                Xero creates this invoice for the chosen contact. Whether Xero also emails it depends on this environment's invoice-email
-                setting.
+                {autoEmail.data?.enabled === true
+                  ? 'Automatic invoice emails are on: once this invoice is created in Xero, it is emailed to the contact, provided invoice emailing is enabled on this system.'
+                  : autoEmail.data?.enabled === false
+                    ? 'Automatic invoice emails are off: this invoice will be created in Xero but not emailed. Send it from Xero.'
+                    : 'The automatic invoice email setting could not be read: the invoice will not be emailed.'}
               </div>
             )}
           </div>

@@ -31,7 +31,8 @@
 //   1. Two switches, both off unless exactly "true" (see ../_shared/xeroSafeguards.ts):
 //      - XERO_CREATION_ENABLED (or XERO_SENDING_ENABLED): may contacts and invoices be created in Xero at all? Checked
 //        BEFORE the invoice is claimed, so a blocked request leaves the invoice row exactly as it was.
-//      - XERO_SENDING_ENABLED: may the invoice be EMAILED? Checked again immediately before the email step. When it is off
+//      - XERO_SENDING_ENABLED: may invoices be EMAILED at all here? Checked again immediately before the email step, together
+//        with the manager's Automatic Invoice Emails toggle (safeguard 7): both must allow it. When either does not
 //        the invoice is still created and authorised in Xero, nobody is emailed, and it is recorded as
 //        'in_xero_not_emailed' - never 'sent'. Such an invoice is not retried by the app (only draft/failed are claimed),
 //        so turning emailing on later never emails it.
@@ -54,6 +55,10 @@
 //      is checked BEFORE any Xero call and before the claim, so an invalid invoice leaves the row exactly as it was; it
 //      is checked again after the claim, on the data as it is then. A combined invoice therefore cannot mix jobs or
 //      buildings whatever the screen allowed.
+//   7. Automatic invoice emails (app_settings.auto_invoice_emails_enabled, see ../_shared/invoiceEmailSetting.ts) is read
+//      immediately before the email step on every attempt. Off: the invoice is still created in Xero, nobody is emailed,
+//      and it is recorded as 'in_xero_not_emailed' (never 'sent'). Unreadable: not emailed, and recorded as 'failed' so a
+//      retry updates the same Xero invoice. It never overrides XERO_SENDING_ENABLED or any check above.
 //
 // Never fabricates a Sales AccountCode or VAT TaxType — both are resolved
 // live against the connected organisation, exactly like xero-test does. If
@@ -95,6 +100,7 @@ import {
 import { InvoiceRelationshipError, loadAndValidateInvoice, type ValidatedInvoice } from '../_shared/invoiceRelationships.ts';
 import { resolveFirstSendRecipient, resolveLockedRecipient, type ResolvedRecipient } from '../_shared/invoiceRecipients.ts';
 import { linkOrCreateXeroContact } from '../_shared/autoXeroContact.ts';
+import { decideAutoInvoiceEmail } from '../_shared/invoiceEmailSetting.ts';
 import {
   assertConnectedToExpectedOrganisation,
   assertExpectedOrganisationConfigured,
@@ -472,9 +478,22 @@ Deno.serve(async (req: Request) => {
       `Invoice ${row.xero_invoice_id ? 'updated' : 'created'} in Xero (${createdOrUpdatedInvoice.InvoiceNumber}) but failed to save locally`,
     );
 
-    // Emailing is a separate permission, checked immediately before the only email call. Off: the invoice exists in Xero,
-    // authorised, nobody is emailed, and it is recorded as exactly that (never 'sent').
-    if (!isSendingEnabled()) {
+    // An email needs BOTH permissions, checked immediately before the only email call, on every attempt (first send or retry):
+    //   1. XERO_SENDING_ENABLED - the operator's switch for this environment (the ceiling; absent = never email), then
+    //   2. app_settings.auto_invoice_emails_enabled - the manager's "Automatic Invoice Emails" toggle, read from the database
+    //      now (only an explicit "on" counts; off or unreadable never emails).
+    // Without both, the invoice exists in Xero, authorised, nobody is emailed, and it is recorded as exactly that.
+    const emailDecision: { send: true } | { send: false; reason: 'environment' | 'disabled' | 'unreadable' } = isSendingEnabled()
+      ? await decideAutoInvoiceEmail(callerClient)
+      : { send: false, reason: 'environment' };
+    if (!emailDecision.send) {
+      if (emailDecision.reason === 'unreadable') {
+        // Fail safe, and stay retryable: the invoice exists in Xero (saved above), so a retry updates that same invoice.
+        throw new Error(
+          `Invoice ${createdOrUpdatedInvoice.InvoiceNumber} was created in Xero but NOT emailed: the automatic invoice email setting could not be read, so the app did not email it. ` +
+            'Try again later (the same Xero invoice is used), or send it from Xero.',
+        );
+      }
       await updateInvoiceRow(
         callerClient,
         invoiceId,
@@ -485,7 +504,7 @@ Deno.serve(async (req: Request) => {
         {
           status: 'in_xero_not_emailed',
           emailed: false,
-          code: 'EMAIL_DISABLED',
+          code: emailDecision.reason === 'environment' ? 'EMAIL_DISABLED' : 'AUTO_EMAIL_OFF',
           xeroInvoiceId: createdOrUpdatedInvoice.InvoiceID,
           xeroInvoiceNumber: createdOrUpdatedInvoice.InvoiceNumber,
           recipientSource: recipient.source,
