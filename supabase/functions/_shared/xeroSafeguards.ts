@@ -45,7 +45,8 @@ export type SafeguardCode =
   | 'CONTACT_MATCH_NOT_ACTIVE'
   | 'CONTACT_NAME_TAKEN'
   | 'CONTACT_SEARCH_INCOMPLETE'
-  | 'CONTACT_LINK_CONFLICT';
+  | 'CONTACT_LINK_CONFLICT'
+  | 'XERO_INVOICE_ALREADY_RECORDED';
 
 export class XeroSafeguardError extends Error {
   readonly code: SafeguardCode;

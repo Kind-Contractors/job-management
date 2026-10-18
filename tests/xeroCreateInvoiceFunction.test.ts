@@ -49,6 +49,14 @@ const world = {
   xeroContacts: {} as Record<string, XeroContactRec>,
   xeroInvoices: {} as Record<string, { InvoiceID: string; InvoiceNumber: string; Contact: { ContactID: string } }>,
   createStatus: 200,
+  /** Xero's idempotency: a create repeated with the same Idempotency-Key gets the ORIGINAL response back, nothing is created. */
+  invoicesByIdempotencyKey: {} as Record<string, { InvoiceID: string; InvoiceNumber: string; Contact: { ContactID: string } }>,
+  /** When set, every invoice create is answered with this existing Xero invoice (a replayed or confused response). */
+  forceCreateResponse: null as null | { InvoiceID: string; InvoiceNumber: string; Contact: { ContactID: string } },
+  /** OTHER local invoices (id + their recorded Xero invoice id), for the "already recorded elsewhere?" check. */
+  otherInvoices: [] as Array<{ id: string; xero_invoice_id: string | null }>,
+  /** When true, that check fails with a database error. */
+  otherInvoicesQueryFails: false,
   emailStatus: 200,
   accounts: [{ AccountID: 'acc-1', Code: '200', Name: 'Sales', Type: 'REVENUE', Status: 'ACTIVE' }] as unknown[],
   taxRates: [{ Name: '20% (VAT on Income)', TaxType: 'OUTPUT2', DisplayTaxRate: 20, Status: 'ACTIVE', CanApplyToRevenue: true }] as unknown[],
@@ -114,6 +122,10 @@ function reset() {
   world.xeroContacts = { [CONTACT]: { ContactID: CONTACT, Name: 'Oak Estates Ltd', EmailAddress: 'accounts@oak.test', ContactStatus: 'ACTIVE' } };
   world.xeroInvoices = {};
   world.createStatus = 200;
+  world.invoicesByIdempotencyKey = {};
+  world.forceCreateResponse = null;
+  world.otherInvoices = [];
+  world.otherInvoicesQueryFails = false;
   world.emailStatus = 200;
   world.accounts = [{ AccountID: 'acc-1', Code: '200', Name: 'Sales', Type: 'REVENUE', Status: 'ACTIVE' }];
   world.taxRates = [{ Name: '20% (VAT on Income)', TaxType: 'OUTPUT2', DisplayTaxRate: 20, Status: 'ACTIVE', CanApplyToRevenue: true }];
@@ -193,11 +205,15 @@ function xeroApi(r: Req): Response {
   if (r.method === 'GET' && p === '/Accounts') return json(200, { Accounts: world.accounts });
   if (r.method === 'GET' && p === '/TaxRates') return json(200, { TaxRates: world.taxRates });
   if (r.method === 'POST' && p === '/Invoices') {
+    const key = r.headers.get('idempotency-key') ?? '';
+    if (world.invoicesByIdempotencyKey[key]) return json(200, { Invoices: [world.invoicesByIdempotencyKey[key]] });
+    if (world.forceCreateResponse) return json(200, { Invoices: [world.forceCreateResponse] });
     if (world.createStatus !== 200) return json(world.createStatus, { Type: 'Error', Message: 'create failed' });
     world.invoiceCounter += 1;
     const id = world.invoiceCounter === 1 ? XERO_INVOICE : `eeeeeeee-eeee-4eee-8eee-${String(world.invoiceCounter).padStart(12, '0')}`;
     const inv = { InvoiceID: id, InvoiceNumber: `INV-${String(world.invoiceCounter).padStart(3, '0')}`, Contact: { ContactID: r.body.Invoices[0].Contact.ContactID } };
     world.xeroInvoices[id] = inv;
+    if (key) world.invoicesByIdempotencyKey[key] = inv;
     return json(200, { Invoices: [inv] });
   }
   m = p.match(/^\/Invoices\/([^/]+)$/);
@@ -263,6 +279,13 @@ globalThis.fetch = (async (input: any, init?: any) => {
       world.events.push(`db:PATCH invoices ${JSON.stringify(body)}`);
       if (url.searchParams.get('select')) return one({ id: world.invoice.id });
       return new Response(null, { status: 204 });
+    }
+    if (r.path === '/rest/v1/invoices' && method === 'GET' && url.searchParams.has('xero_invoice_id')) {
+      // "Is this Xero invoice already recorded on ANOTHER local invoice?"
+      if (world.otherInvoicesQueryFails) return json(500, { message: 'database unavailable' });
+      const xid = url.searchParams.get('xero_invoice_id')!.replace(/^eq\./, '');
+      const notId = url.searchParams.get('id')?.replace(/^neq\./, '');
+      return json(200, world.otherInvoices.filter((o) => o.xero_invoice_id === xid && o.id !== notId).map((o) => ({ id: o.id })));
     }
     if (r.path === '/rest/v1/invoices' && method === 'GET') {
       if (world.invoiceReadFails) return json(500, { message: 'database unavailable' });
@@ -1858,6 +1881,104 @@ test('EMAIL-OFF 10: the email permission is read right before the email step - t
   const created = code.indexOf('await createOrUpdateAuthorisedInvoice(');
   assert.ok(created > 0 && created < guard && guard < email, 'create -> email permission check -> email');
   assert.equal(code.split('emailInvoiceOrExplain(').length - 1, 2, 'one definition and exactly one call');
+});
+
+// ---- one Xero invoice per local invoice (the DEV INV-0015 incident) --------------------------------------------------------------------
+/** A second, different local invoice with exactly the same content as the first (same recipient, no reference, same due date, same lines). */
+function secondIdenticalInvoice(id = 'inv-2') {
+  world.otherInvoices.push({ id: world.invoice.id, xero_invoice_id: world.invoice.xero_invoice_id });
+  world.invoice = { ...freshInvoice(), id };
+}
+
+test('IDEMPOTENCY 1 (DEV regression): two DIFFERENT invoices with identical recipient, reference, due date and lines create TWO Xero invoices', async () => {
+  creationOnly();
+  const first = await (await call()).json();
+  assert.equal(first.xeroInvoiceNumber, 'INV-001');
+  secondIdenticalInvoice();
+  const second = await (await call({ invoiceId: 'inv-2', contactId: 'ct-1' })).json();
+  assert.equal(second.status, 'in_xero_not_emailed');
+  assert.equal(second.xeroInvoiceNumber, 'INV-002', 'a NEW Xero invoice, not the first one replayed');
+  assert.notEqual(second.xeroInvoiceId, first.xeroInvoiceId);
+  assert.equal(world.invoiceCounter, 2);
+  const keys = invoiceCreatesOrUpdates().map((r) => r.headers.get('idempotency-key'));
+  assert.equal(new Set(keys).size, 2, 'different local invoices never share a key');
+});
+
+test('IDEMPOTENCY 2: retries of the SAME local invoice still reuse the same key (a lost response is answered with the same invoice)', async () => {
+  world.emailStatus = 500;
+  await call();
+  const key1 = invoiceCreatesOrUpdates()[0].headers.get('idempotency-key');
+  // The local record of the create is lost (as after a timeout), so the retry posts the create again.
+  Object.assign(world.invoice, { status: 'failed', xero_invoice_id: null, xero_invoice_number: null });
+  world.emailStatus = 200;
+  const out = await (await call()).json();
+  const key2 = invoiceCreatesOrUpdates()[1].headers.get('idempotency-key');
+  assert.equal(key2, key1, 'same local invoice and content: same key');
+  assert.equal(out.xeroInvoiceNumber, 'INV-001', 'Xero replayed the original: no duplicate');
+  assert.equal(world.invoiceCounter, 1);
+});
+
+test('IDEMPOTENCY 3: a Xero invoice already recorded on ANOTHER local invoice is refused - nothing saved, nothing emailed, the other invoice untouched', async () => {
+  world.otherInvoices = [{ id: 'inv-other', xero_invoice_id: XERO_INVOICE }];
+  world.forceCreateResponse = { InvoiceID: XERO_INVOICE, InvoiceNumber: 'INV-0015', Contact: { ContactID: CONTACT } };
+  const res = await call();
+  const out = await res.json();
+  assert.equal(res.status, 502);
+  assert.equal(out.code, 'XERO_INVOICE_ALREADY_RECORDED');
+  assert.match(out.error, /Xero answered with invoice INV-0015, which is already recorded on another invoice in the app\. Nothing was saved or emailed\./);
+  assert.equal(emailCalls().length, 0, 'not emailed');
+  assert.equal(world.invoice.xero_invoice_id, null, 'the other invoice\'s Xero id was not saved here');
+  assert.equal(world.invoice.xero_invoice_number, null);
+  assert.equal(world.invoice.status, 'failed', 'left retryable, with the reason');
+  assert.match(world.invoice.last_error, /already recorded on another invoice/);
+  assert.deepEqual(world.otherInvoices, [{ id: 'inv-other', xero_invoice_id: XERO_INVOICE }]);
+});
+
+test('IDEMPOTENCY 4: if that check cannot be made (database error) the response is refused too - fail safe, nothing emailed', async () => {
+  world.otherInvoicesQueryFails = true;
+  const out = await (await call()).json();
+  assert.equal(out.code, 'XERO_INVOICE_ALREADY_RECORDED');
+  assert.match(out.error, /could not check whether another invoice already has it/);
+  assert.equal(emailCalls().length, 0);
+  assert.equal(world.invoice.xero_invoice_id, null);
+});
+
+test('IDEMPOTENCY 5: an UPDATE that comes back with a DIFFERENT Xero invoice than the one this invoice has is refused', async () => {
+  world.invoice.status = 'failed';
+  world.invoice.xero_invoice_id = XERO_INVOICE;
+  world.invoice.xero_invoice_number = 'INV-001';
+  world.invoice.xero_contact_id = CONTACT;
+  world.invoice.xero_org_id = ORG;
+  world.xeroInvoices[XERO_INVOICE] = { InvoiceID: XERO_INVOICE, InvoiceNumber: 'INV-001', Contact: { ContactID: CONTACT } };
+  // Xero answers the update with a different invoice.
+  const other = 'eeeeeeee-0000-4000-8000-000000000099';
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: any, init?: any) => {
+    const url = new URL(typeof input === 'string' ? input : input.url);
+    if (url.host === 'api.xero.com' && (init?.method ?? 'GET') === 'POST' && url.pathname.endsWith(`/Invoices/${XERO_INVOICE}`)) {
+      world.xeroLog.push({ method: 'POST', host: url.host, path: decodeURIComponent(url.pathname), search: url.search, body: JSON.parse(init.body), headers: new Headers(init.headers) });
+      return json(200, { Invoices: [{ InvoiceID: other, InvoiceNumber: 'INV-099', Contact: { ContactID: CONTACT } }] });
+    }
+    return realFetch(input, init);
+  }) as typeof fetch;
+  try {
+    const out = await (await call()).json();
+    assert.equal(out.code, 'XERO_INVOICE_ALREADY_RECORDED');
+    assert.match(out.error, /not the Xero invoice this invoice already has/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(world.invoice.xero_invoice_id, XERO_INVOICE, 'its own Xero invoice is kept');
+  assert.equal(emailCalls().length, 0);
+});
+
+test('IDEMPOTENCY 6: the key is scoped to the local invoice id in the Xero client itself', async () => {
+  const base = { contactId: CONTACT, reference: null, dueDate: '2026-11-17', lineItems: [{ Description: 'Clean', Quantity: 1, UnitAmount: 700, AccountCode: '200', TaxType: 'OUTPUT2' }] };
+  const a1 = await xeroClient.computeInvoiceIdempotencyKey({ ...base, localInvoiceId: 'inv-a' });
+  const a2 = await xeroClient.computeInvoiceIdempotencyKey({ ...base, localInvoiceId: 'inv-a' });
+  const b = await xeroClient.computeInvoiceIdempotencyKey({ ...base, localInvoiceId: 'inv-b' });
+  assert.equal(a1, a2);
+  assert.notEqual(a1, b);
 });
 
 // ---- source guards: DEV stays on its own organisation, and contact creation cannot creep back in -------------------------------

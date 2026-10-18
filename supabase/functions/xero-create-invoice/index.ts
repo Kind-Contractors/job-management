@@ -170,6 +170,33 @@ async function updateInvoiceRow(
 }
 
 /**
+ * Refuses a Xero response that does not belong to this local invoice: an update must come back with the invoice it updated,
+ * and a newly created invoice must not already be recorded on another local invoice. Fails safe: if that cannot be checked,
+ * it is refused too. Throws before anything is saved or emailed.
+ */
+async function requireXeroInvoiceBelongsHere(
+  client: SupabaseClient,
+  invoiceId: string,
+  existingXeroInvoiceId: string | null,
+  returned: { InvoiceID: string; InvoiceNumber: string },
+): Promise<void> {
+  const refuse = (detail: string) =>
+    new XeroSafeguardError(
+      'XERO_INVOICE_ALREADY_RECORDED',
+      `Xero answered with invoice ${returned.InvoiceNumber}, ${detail} Nothing was saved or emailed. Check Xero before sending again.`,
+    );
+  if (existingXeroInvoiceId) {
+    if (existingXeroInvoiceId.trim().toLowerCase() !== returned.InvoiceID.trim().toLowerCase()) {
+      throw refuse('which is not the Xero invoice this invoice already has.');
+    }
+    return;
+  }
+  const { data, error } = await client.from('invoices').select('id').eq('xero_invoice_id', returned.InvoiceID).neq('id', invoiceId).limit(1);
+  if (error) throw refuse(`and the app could not check whether another invoice already has it (${error.message}).`);
+  if ((data ?? []).length > 0) throw refuse('which is already recorded on another invoice in the app.');
+}
+
+/**
  * Wraps emailInvoice() only to turn a failure AT THIS SPECIFIC STEP into a
  * clear explanation — never to change the request itself, guess Xero's
  * exact cause from its error text, or retry automatically. By the time
@@ -414,6 +441,7 @@ Deno.serve(async (req: Request) => {
     const createdOrUpdatedInvoice = await createOrUpdateAuthorisedInvoice(
       accessToken,
       {
+        localInvoiceId: invoiceId,
         contactId: xeroContactId,
         reference: row.works_order_number,
         dueDate: row.due_date,
@@ -421,6 +449,11 @@ Deno.serve(async (req: Request) => {
       },
       row.xero_invoice_id ?? undefined,
     );
+
+    // The Xero invoice Xero answered with must be THIS local invoice's: the same one it already had, or - on a first
+    // creation - one no other local invoice has recorded. Otherwise (for example Xero replaying another invoice's request)
+    // nothing is saved and nothing is emailed: two local invoices must never claim one Xero invoice.
+    await requireXeroInvoiceBelongsHere(callerClient, invoiceId, row.xero_invoice_id, createdOrUpdatedInvoice);
 
     // Persisted before attempting the email step — if emailing fails, a
     // retry must not create/duplicate anything, only retry the send.

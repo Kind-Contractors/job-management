@@ -236,6 +236,12 @@ export interface XeroCreatedInvoice {
 }
 
 export interface XeroInvoiceRequest {
+  /**
+   * The LOCAL invoice (invoices.id) this request is for. Part of the idempotency key, so two different local invoices with
+   * identical content can never share a key (Xero would answer the second with the first one's invoice), while every retry
+   * of the same local invoice still reuses its key.
+   */
+  localInvoiceId: string;
   contactId: string;
   reference: string | null;
   dueDate: string;
@@ -267,6 +273,7 @@ export interface XeroInvoiceRequest {
  */
 export async function computeInvoiceIdempotencyKey(request: XeroInvoiceRequest): Promise<string> {
   const canonical = JSON.stringify({
+    localInvoiceId: request.localInvoiceId,
     contactId: request.contactId,
     reference: request.reference,
     dueDate: request.dueDate,
