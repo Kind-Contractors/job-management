@@ -231,6 +231,26 @@ export async function describeInvokeError(error: Error): Promise<string> {
   return error.message;
 }
 
+export interface XeroInvoiceCapabilities {
+  /** May this environment create invoices in Xero at all? */
+  creationEnabled: boolean;
+  /** May this environment EMAIL invoices from Xero (XERO_SENDING_ENABLED)? The app toggle can never override a false here. */
+  sendingEnabled: boolean;
+}
+
+/**
+ * What this environment's server-side switches permit right now, for the invoice editor's wording only. It decides nothing:
+ * the server re-checks every switch and the app setting when an invoice is actually submitted.
+ */
+export async function getXeroInvoiceCapabilities(): Promise<XeroInvoiceCapabilities> {
+  const { data, error } = await supabase.functions.invoke<XeroInvoiceCapabilities>('xero-create-invoice', { body: { action: 'capabilities' } });
+  if (error) throw new Error(await describeInvokeError(error));
+  if (!data || typeof data.sendingEnabled !== 'boolean' || typeof data.creationEnabled !== 'boolean') {
+    throw new Error('Could not read what this system allows for invoices.');
+  }
+  return { creationEnabled: data.creationEnabled, sendingEnabled: data.sendingEnabled };
+}
+
 export async function sendInvoice(invoiceId: string, contactId?: string): Promise<SendInvoiceResult> {
   const { data, error } = await supabase.functions.invoke<SendInvoiceResult>('xero-create-invoice', {
     body: { invoiceId, contactId },

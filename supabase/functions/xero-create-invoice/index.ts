@@ -245,6 +245,23 @@ Deno.serve(async (req: Request) => {
     return json({ error: errorMessage(err) }, 500);
   }
 
+  let body: Record<string, unknown> | null = null;
+  let bodyError: string | null = null;
+  try {
+    const parsed = await req.json();
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('the body must be a JSON object.');
+    body = parsed as Record<string, unknown>;
+  } catch (err) {
+    bodyError = errorMessage(err);
+  }
+
+  // Read-only, for the invoice editor's wording only ("Send invoice" or "Create in Xero"): what this environment's switches
+  // permit right now. Touches no invoice, no database row and no Xero endpoint. It decides nothing: every send re-checks
+  // both switches and the app setting on the server, immediately before the step they govern.
+  if (body?.action === 'capabilities') {
+    return json({ creationEnabled: isCreationEnabled(), sendingEnabled: isSendingEnabled() }, 200);
+  }
+
   // Kill switch and organisation configuration are checked BEFORE the invoice is claimed: a blocked request must
   // leave the invoice row untouched (never 'sending', never 'failed'), and needs no Xero call.
   if (!isCreationEnabled()) {
@@ -267,15 +284,15 @@ Deno.serve(async (req: Request) => {
   let invoiceId: string;
   let contactId: string | undefined;
   try {
-    const body = await req.json();
-    invoiceId = body.invoiceId;
+    if (!body) throw new Error(bodyError ?? 'the body must be a JSON object.');
+    invoiceId = body.invoiceId as string;
     if (!invoiceId || typeof invoiceId !== 'string') throw new Error('Missing invoiceId.');
     // Optional in the body's shape, but effectively always required in
     // practice — the frontend always supplies it. If genuinely omitted and
     // this invoice already has a Xero invoice, the currently-assigned Xero
     // Contact is reused as a fallback rather than failing outright.
     if (body.contactId !== undefined && typeof body.contactId !== 'string') throw new Error('contactId must be a string.');
-    contactId = body.contactId || undefined;
+    contactId = (body.contactId as string) || undefined;
   } catch (err) {
     return json({ error: `Invalid request body: ${errorMessage(err)}` }, 400);
   }

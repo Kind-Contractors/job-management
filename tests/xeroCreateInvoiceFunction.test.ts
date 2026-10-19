@@ -2310,3 +2310,96 @@ test('the token request only ever goes to Xero\'s identity server with the envir
   assert.equal(tokenRequests[0].path, '/connect/token');
   assert.equal(world.unexpected.filter((u) => /token/.test(u)).length, 0, 'the credentials presented were exactly the configured ones');
 });
+
+// ---- capabilities: the editor's read-only check of the switches, and the contact used when "Send invoice to" is hidden -----------
+const capabilities = async () => {
+  const res = await call({ action: 'capabilities' });
+  return { status: res.status, out: await res.json() };
+};
+
+test('CAPS 1: reports exactly what XERO_CREATION_ENABLED / XERO_SENDING_ENABLED permit, for every combination', async () => {
+  const cases: Array<[string | undefined, string | undefined, { creationEnabled: boolean; sendingEnabled: boolean }]> = [
+    [undefined, undefined, { creationEnabled: false, sendingEnabled: false }],
+    ['true', undefined, { creationEnabled: true, sendingEnabled: false }],
+    [undefined, 'true', { creationEnabled: true, sendingEnabled: true }],
+    ['true', 'true', { creationEnabled: true, sendingEnabled: true }],
+    ['true', 'TRUE', { creationEnabled: true, sendingEnabled: false }],
+    ['true', '1', { creationEnabled: true, sendingEnabled: false }],
+  ];
+  for (const [creation, sending, expected] of cases) {
+    reset();
+    if (creation === undefined) delete ENV.XERO_CREATION_ENABLED; else ENV.XERO_CREATION_ENABLED = creation;
+    if (sending === undefined) delete ENV.XERO_SENDING_ENABLED; else ENV.XERO_SENDING_ENABLED = sending;
+    const { status, out } = await capabilities();
+    assert.equal(status, 200, `${creation}/${sending}`);
+    assert.deepEqual(out, expected, `${creation}/${sending}`);
+  }
+});
+
+test('CAPS 2: read-only - no Xero request, no database write, the invoice untouched, the app setting not read - and manager-only', async () => {
+  const before = JSON.stringify(world.invoice);
+  const res = await call({ action: 'capabilities', invoiceId: 'inv-1', contactId: 'ct-1' });
+  assert.equal(res.status, 200);
+  assert.deepEqual(Object.keys(await res.json()).sort(), ['creationEnabled', 'sendingEnabled']);
+  assert.equal(world.xeroLog.length, 0, 'not even a token request');
+  assert.equal(world.dbLog.filter((r) => r.method !== 'GET' && r.method !== 'HEAD').length, 0);
+  assert.equal(JSON.stringify(world.invoice), before);
+  assert.equal(world.appSettingsReads, 0);
+  world.role = 'technician';
+  assert.equal((await capabilities()).status, 403);
+  reset();
+  assert.equal((await call({ action: 'capabilities' }, { auth: false })).status, 403);
+});
+
+test('TOGGLE-OFF 1: no contact chosen ("Send invoice to" hidden) - the building default is the Xero contact, and nothing is emailed', async () => {
+  world.appSettings = { auto_invoice_emails_enabled: false };
+  setBuildingDefault();
+  const out = await (await call({ invoiceId: 'inv-1' })).json();
+  assert.equal(out.status, 'in_xero_not_emailed');
+  assert.equal(out.code, 'AUTO_EMAIL_OFF');
+  assert.equal(out.recipientSource, 'building_default');
+  assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Contact.ContactID, CONTACT);
+  assert.equal(world.invoice.xero_contact_id, CONTACT);
+  assert.equal(emailCalls().length, 0);
+});
+
+test('TOGGLE-OFF 2: no contact chosen and NO default - refused before anything reaches Xero; no contact is guessed, found or created', async () => {
+  world.appSettings = { auto_invoice_emails_enabled: false };
+  world.contact.is_primary = true;
+  const res = await call({ invoiceId: 'inv-1' });
+  const out = await res.json();
+  assert.equal(out.code, 'NO_RECIPIENT');
+  assert.equal(invoiceCreatesOrUpdates().length, 0);
+  assert.equal(contactRequests().length, 0);
+  assert.equal(world.contactCreates ?? 0, 0);
+  assert.equal(world.invoice.xero_contact_id, null);
+});
+
+test('TOGGLE-OFF 3: an unlinked contact chosen as the Xero contact is still matched by exact email or created under the usual rules, and not emailed', async () => {
+  world.appSettings = { auto_invoice_emails_enabled: false };
+  Object.assign(world.contact, { xero_contact_id: null, xero_org_id: null });
+  const out = await (await call()).json();
+  assert.equal(out.status, 'in_xero_not_emailed');
+  assert.equal(out.code, 'AUTO_EMAIL_OFF');
+  assert.match(out.recipientSource, /^auto_(linked|created)$/);
+  assert.equal(emailCalls().length, 0);
+});
+
+test('TOGGLE-ON, SWITCH OFF: the toggle never overrides XERO_SENDING_ENABLED - created, not emailed, reason "environment"', async () => {
+  creationOnly();
+  world.appSettings = { auto_invoice_emails_enabled: true };
+  const out = await (await call()).json();
+  assert.equal(out.code, 'EMAIL_DISABLED');
+  assert.equal(emailCalls().length, 0);
+  assert.equal(world.invoice.not_emailed_reason, 'environment');
+});
+
+test('NO CATCH-UP: an in_xero_not_emailed invoice is never emailed later, even with the toggle and the switch both on', async () => {
+  Object.assign(world.invoice, { status: 'in_xero_not_emailed', xero_invoice_id: XERO_INVOICE, xero_invoice_number: 'INV-001', xero_contact_id: CONTACT, xero_org_id: ORG });
+  world.appSettings = { auto_invoice_emails_enabled: true };
+  ENV.XERO_SENDING_ENABLED = 'true';
+  await call();
+  assert.equal(emailCalls().length, 0);
+  assert.equal(invoiceCreatesOrUpdates().length, 0);
+  assert.equal(world.invoice.status, 'in_xero_not_emailed');
+});

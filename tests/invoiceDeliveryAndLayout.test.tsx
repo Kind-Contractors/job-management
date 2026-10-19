@@ -26,6 +26,9 @@ function invoice(over: Partial<InvoiceDetail> = {}): InvoiceDetail {
 function render(inv: InvoiceDetail, contacts: JobContactSummary[] = []) {
   const qc = new QueryClient();
   qc.setQueryData(['invoice', inv.id], inv);
+  // Automatic emails on, and this system allowed to email: the main button reads "Send invoice".
+  qc.setQueryData(['appSettings', 'autoInvoiceEmails'], { enabled: true, updatedAt: '2026-10-18T00:00:00Z' });
+  qc.setQueryData(['xeroInvoiceCapabilities'], { creationEnabled: true, sendingEnabled: true });
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
       <InvoiceEditor invoiceId={inv.id} onClose={() => {}} clientId="client-1" clientContacts={contacts} buildingDefault={null} />
