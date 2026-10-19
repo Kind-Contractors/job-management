@@ -441,7 +441,13 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
             ) : (
               <div
                 data-testid="invoice-email-notice"
-                className={mode.notice.warn ? 'border border-due bg-due/10 p-2 text-[11.5px] text-due-fg' : 'text-[10px] text-neutral-400'}
+                className={
+                  mode.notice.warn
+                    ? 'border border-due bg-due/10 p-2 text-[11.5px] text-due-fg'
+                    : mode.kind === 'send'
+                      ? 'text-[10px] text-due-fg'
+                      : 'text-[10px] text-neutral-400'
+                }
               >
                 {mode.notice.text}
               </div>
