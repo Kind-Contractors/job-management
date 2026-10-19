@@ -106,7 +106,7 @@ test('the link dialog selects nothing for the manager, searches only on submit, 
 test('the Xero link repository only ever calls the manager-only link function, with explicit actions', () => {
   const code = stripComments(src('repository', 'xeroLinksRepository.ts'));
   assert.deepEqual([...code.matchAll(/functions\.invoke<[^>]*>\('([^']+)'/g)].map((m) => m[1]), ['xero-link-contact']);
-  for (const a of ['search', 'verify', 'link', 'unlink', 'setBuildingDefault', 'clearBuildingDefault']) assert.match(code, new RegExp(`action: '${a}'`));
+  for (const a of ['findByEmail', 'search', 'verify', 'link', 'unlink', 'setBuildingDefault', 'clearBuildingDefault']) assert.match(code, new RegExp(`action: '${a}'`));
   assert.doesNotMatch(code, /from\('contacts'\)|from\('buildings'\)|\.update\(|\.insert\(/, 'it never writes links or defaults straight to the database');
 });
 

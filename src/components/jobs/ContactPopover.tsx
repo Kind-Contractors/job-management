@@ -216,6 +216,7 @@ export default function ContactPopover({ clientId, clientName, onClose }: Contac
           <LinkXeroContactDialog
             localContactId={selected.id}
             localContactName={selected.name}
+            localContactEmail={selected.email}
             suggestedTerm={clientName}
             currentXeroContactId={selected.xeroContactId}
             onClose={() => setLinking(false)}

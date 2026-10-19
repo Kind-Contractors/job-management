@@ -124,7 +124,7 @@ test('the dialog opened this way is for that contact', () => {
   const qc = new QueryClient();
   const html = renderToStaticMarkup(
     <QueryClientProvider client={qc}>
-      <LinkXeroContactDialog localContactId="ct-mo" localContactName="Mo" suggestedTerm="Mo" currentXeroContactId={null} onClose={() => {}} onLinked={() => {}} />
+      <LinkXeroContactDialog localContactId="ct-mo" localContactName="Mo" localContactEmail={null} suggestedTerm="Mo" currentXeroContactId={null} onClose={() => {}} onLinked={() => {}} />
     </QueryClientProvider>,
   );
   assert.match(html, /Link to Xero contact/);

@@ -420,6 +420,7 @@ export default function InvoiceEditor({ invoiceId, onClose, clientContacts, buil
         <LinkXeroContactDialog
           localContactId={linkingContact.id}
           localContactName={linkingContact.name}
+          localContactEmail={linkingContact.email}
           suggestedTerm={linkingContact.name}
           currentXeroContactId={linkingContact.xeroContactId}
           onClose={() => setLinkingContact(null)}

@@ -2,7 +2,8 @@
 // POST only, body: { action, ... }. Every action first requires an active manager (see ../_shared/auth.ts): this is the
 // permission check, whatever the screen shows or hides.
 //
-//   search               { term }                                  read-only candidates, never linked or matched from
+//   findByEmail          { localContactId }                         read-only: Xero contacts whose email is EXACTLY the contact's
+//   search               { term }                                  read-only candidates by name or email text (the fallback)
 //   verify               { localContactId } | { buildingId }        is the stored link / default still good in Xero?
 //   link                 { localContactId, xeroContactId, expectedName, replace? }
 //   unlink               { localContactId }
@@ -24,7 +25,7 @@
 import { corsHeaders } from 'npm:@supabase/supabase-js@2/cors';
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import { assertManager, UnauthorizedError } from '../_shared/auth.ts';
-import { getContactById, getXeroAccessToken, isXeroId, searchContacts, XERO_SEARCH_TERM_MAX, XeroHttpError } from '../_shared/xeroClient.ts';
+import { boundedSearchTerm, getContactById, getXeroAccessToken, isXeroId, searchContacts, XERO_SEARCH_TERM_MAX, XeroHttpError } from '../_shared/xeroClient.ts';
 import {
   assertConnectedToExpectedOrganisation,
   assertExpectedOrganisationConfigured,
@@ -149,7 +150,49 @@ async function search(body: Record<string, unknown>) {
   const term = normaliseTerm(body.term);
   const { accessToken } = await connect();
   const found = await searchContacts(accessToken, term, 25);
-  return { ok: true, results: summariseAndFlag(found), mayBeIncomplete: found.length >= 25 };
+  let mayBeIncomplete = found.length >= 25;
+  const folded = withoutAccents(term);
+  if (folded !== term) {
+    const more = await searchContacts(accessToken, folded, 25);
+    mayBeIncomplete ||= more.length >= 25;
+    for (const c of more) if (!found.some((f) => same(f.ContactID, c.ContactID))) found.push(c);
+  }
+  return { ok: true, results: summariseAndFlag(found), mayBeIncomplete };
+}
+
+/** Name search fallback: a name typed with accents also finds a Xero contact saved without them ("José" finds "Jose"). */
+function withoutAccents(value: string): string {
+  return value.normalize('NFD').replace(/[̀-ͯ]/g, '').normalize('NFC');
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_PAGE = 25;
+
+/**
+ * Email-first lookup for one local contact: the Xero contacts whose OWN email address is exactly the local contact's email
+ * (trimmed, ignoring case). The email is read from the database, not taken from the request. Xero's search matches a term
+ * contained in a name or email and accepts at most 50 characters, so a long email is searched by its first 50 characters and
+ * every result is compared on its FULL email: a contained or shortened match is never treated as proof. Read-only; nothing is
+ * chosen or linked here (the manager still confirms), and blocked contacts are returned marked so they can be shown, not chosen.
+ */
+async function findByEmail(db: SupabaseClient, body: Record<string, unknown>) {
+  const localId = requireId(body.localContactId, 'The contact');
+  const { data, error } = await db.from('contacts').select('id, email').eq('id', localId).maybeSingle();
+  if (error) throw new Error(`Could not read the contact: ${error.message}`);
+  if (!data) throw new LinkError('CONTACT_NOT_FOUND', 'That contact could not be found.', 404);
+  const email = (typeof data.email === 'string' ? data.email : '').trim();
+  if (!email) return { ok: true, outcome: 'no_local_email', results: [], mayBeIncomplete: false };
+  if (!EMAIL_PATTERN.test(email) || /[\u0000-\u001f\u007f]/.test(email)) return { ok: true, outcome: 'invalid_local_email', results: [], mayBeIncomplete: false };
+
+  const { accessToken } = await connect();
+  const found = await searchContacts(accessToken, boundedSearchTerm(email), EMAIL_PAGE);
+  const exact = found.filter((c) => same(c.EmailAddress, email));
+  const results = summariseAndFlag(exact);
+  const eligible = results.filter((r) => r.blockedReason === null).length;
+  // A full page that held no exact match may have hidden one: say so instead of reporting "no match".
+  const mayBeIncomplete = found.length >= EMAIL_PAGE;
+  const outcome = eligible === 1 ? 'one' : eligible > 1 ? 'several' : results.length > 0 ? 'only_blocked' : 'none';
+  return { ok: true, outcome, results, mayBeIncomplete };
 }
 
 async function verify(db: SupabaseClient, body: Record<string, unknown>) {
@@ -343,6 +386,8 @@ Deno.serve(async (req: Request) => {
 
   try {
     switch (body.action) {
+      case 'findByEmail':
+        return json(await findByEmail(db, body), 200);
       case 'search':
         return json(await search(body), 200);
       case 'verify':

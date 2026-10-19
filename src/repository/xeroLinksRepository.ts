@@ -67,6 +67,21 @@ export async function searchXeroContacts(term: string): Promise<XeroSearchResult
   return invoke<XeroSearchResult>({ action: 'search', term });
 }
 
+/**
+ * What the email-first lookup found: `one` / `several` usable contacts with EXACTLY this contact's email, `only_blocked` (exact
+ * matches exist but are archived or merged), `none`, or no usable email on the local contact. Never a decision: the manager
+ * still chooses and confirms.
+ */
+export type XeroEmailMatchOutcome = 'one' | 'several' | 'only_blocked' | 'none' | 'no_local_email' | 'invalid_local_email';
+
+export interface XeroEmailMatchResult extends XeroSearchResult {
+  outcome: XeroEmailMatchOutcome;
+}
+
+export async function findXeroContactsByEmail(localContactId: string): Promise<XeroEmailMatchResult> {
+  return invoke<XeroEmailMatchResult>({ action: 'findByEmail', localContactId });
+}
+
 export async function verifyContactLink(localContactId: string): Promise<XeroLinkVerification> {
   return invoke<XeroLinkVerification>({ action: 'verify', localContactId });
 }

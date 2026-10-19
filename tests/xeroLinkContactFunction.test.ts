@@ -34,6 +34,8 @@ const world = {
   building: null as any,
   orgBody: null as unknown,
   searchResults: [] as any[],
+  realSearch: false,
+  searchFails: 0,
   xeroContacts: {} as Record<string, any>,
   xeroLog: [] as Req[],
   dbLog: [] as Req[],
@@ -59,6 +61,8 @@ function reset() {
   world.building = { id: B1, client_id: 'client-1', default_invoice_contact_id: null, default_invoice_xero_contact_id: null, default_invoice_xero_org_id: null };
   world.orgBody = null;
   world.searchResults = [];
+  world.realSearch = false;
+  world.searchFails = 0;
   world.xeroContacts = {
     [XC1]: { ContactID: XC1, Name: 'Oak Estates Ltd', EmailAddress: 'accounts@oak.test', ContactStatus: 'ACTIVE' },
     [XC2]: { ContactID: XC2, Name: 'Oak Estates Ltd', EmailAddress: 'accounts@oak.test', ContactStatus: 'ACTIVE' },
@@ -81,7 +85,11 @@ function xeroApi(r: Req): Response {
       world.violations.push(`overlong searchTerm (${term.length})`);
       return json(400, { Type: 'ValidationException', Message: 'SearchTerm has a maximum length of 50 characters' });
     }
-    return json(200, { Contacts: world.searchResults });
+    if (world.searchFails) return json(world.searchFails, { Type: 'Error', Message: 'Xero is unavailable' });
+    // realSearch: behave like Xero - case-insensitive "contains" on the name or email, no accent folding.
+    const t = term.toLowerCase();
+    const contains = (c: any) => [c.Name ?? '', c.EmailAddress ?? ''].some((v: string) => v.toLowerCase().includes(t));
+    return json(200, { Contacts: world.realSearch ? world.searchResults.filter(contains) : world.searchResults });
   }
   const m = p.match(/^\/Contacts\/([^/]+)$/);
   if (m) {
@@ -517,4 +525,155 @@ test('SEARCH: a 50-character term is sent; a 51-character one is refused with Xe
   assert.equal(out.code, 'TERM_TOO_LONG');
   assert.match(out.error, /Xero accepts 50 characters at most/);
   assert.equal(xeroGets().length, 0);
+});
+
+// ---- email-first lookup (findByEmail) and the name fallback ---------------------------------------------------------------------------
+const XA = 'a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1';
+const XB = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1';
+const XD = 'd1d1d1d1-d1d1-4d1d-8d1d-d1d1d1d1d1d1';
+const byEmail = (localEmail: string | null) => {
+  world.contacts[L1].email = localEmail;
+  return post({ action: 'findByEmail', localContactId: L1 });
+};
+const searchTermsSent = () => xeroGets().filter((r) => r.path === '/api.xro/2.0/Contacts').map((r) => new URLSearchParams(r.search).get('searchTerm'));
+
+test('EMAIL: finds the Xero contact by the local email when its Xero NAME differs (the reported bug), read-only, nothing linked', async () => {
+  world.realSearch = true;
+  world.searchResults = [{ ContactID: XA, Name: 'Da Silva Property Services Ltd', EmailAddress: 'amanda@dasilva.test', ContactStatus: 'ACTIVE' }];
+  // The old path: a name search for the local contact's name finds nothing in Xero.
+  assert.equal((await post({ action: 'search', term: 'Amanda Da Silva' })).out.results.length, 0);
+  world.xeroLog = [];
+  const { status, out } = await byEmail('amanda@dasilva.test');
+  assert.equal(status, 200);
+  assert.equal(out.outcome, 'one');
+  assert.deepEqual(out.results.map((r: any) => [r.contactId, r.name, r.blockedReason]), [[XA, 'Da Silva Property Services Ltd', null]]);
+  assert.deepEqual(searchTermsSent(), ['amanda@dasilva.test']);
+  assert.equal(out.results[0].emailHint, 'a***@dasilva.test', 'the Xero email is masked');
+  assert.doesNotMatch(JSON.stringify(out), /amanda@dasilva\.test/, 'no full email is returned');
+  assert.equal(localWrites().length, 0, 'nothing is linked by looking');
+  assert.equal(world.contacts[L1].xero_contact_id, null);
+});
+
+test('EMAIL: case and surrounding whitespace do not matter, on either side', async () => {
+  world.realSearch = true;
+  world.searchResults = [{ ContactID: XA, Name: 'A', EmailAddress: ' amanda@dasilva.test ', ContactStatus: 'ACTIVE' }];
+  const { out } = await byEmail('  Amanda@DaSilva.TEST ');
+  assert.equal(out.outcome, 'one');
+  assert.deepEqual(searchTermsSent(), ['Amanda@DaSilva.TEST'], 'the trimmed email is the search term');
+});
+
+test('EMAIL: a result that only CONTAINS the email, or has a longer one, is never a match', async () => {
+  world.searchResults = [
+    { ContactID: XA, Name: 'A', EmailAddress: 'xamanda@dasilva.test', ContactStatus: 'ACTIVE' },
+    { ContactID: XB, Name: 'B', EmailAddress: 'amanda@dasilva.test.uk', ContactStatus: 'ACTIVE' },
+    { ContactID: XD, Name: 'amanda@dasilva.test', EmailAddress: 'other@x.test', ContactStatus: 'ACTIVE' },
+  ];
+  const { out } = await byEmail('amanda@dasilva.test');
+  assert.equal(out.outcome, 'none');
+  assert.deepEqual(out.results, []);
+  assert.equal(out.mayBeIncomplete, false);
+});
+
+test('EMAIL: several active contacts with exactly the email are all returned for the manager to choose; none is picked', async () => {
+  world.searchResults = [
+    { ContactID: XA, Name: 'Da Silva Ltd', EmailAddress: 'amanda@dasilva.test', ContactStatus: 'ACTIVE' },
+    { ContactID: XB, Name: 'Amanda Da Silva', EmailAddress: 'AMANDA@dasilva.test', ContactStatus: 'ACTIVE' },
+  ];
+  const { out } = await byEmail('amanda@dasilva.test');
+  assert.equal(out.outcome, 'several');
+  assert.equal(out.results.length, 2);
+  assert.equal(out.results[0].sameEmailAsOthers, 1, 'flagged as possible duplicates');
+  assert.equal('selected' in out, false);
+  assert.equal(localWrites().length, 0);
+});
+
+test('EMAIL: archived or merged exact matches are shown but are not eligible', async () => {
+  world.searchResults = [
+    { ContactID: XA, Name: 'Old', EmailAddress: 'amanda@dasilva.test', ContactStatus: 'ARCHIVED' },
+    { ContactID: XB, Name: 'Merged', EmailAddress: 'amanda@dasilva.test', ContactStatus: 'ACTIVE', MergedToContactID: XD },
+  ];
+  let { out } = await byEmail('amanda@dasilva.test');
+  assert.equal(out.outcome, 'only_blocked');
+  assert.deepEqual(out.results.map((r: any) => r.blockedReason), ['ARCHIVED', 'MERGED']);
+  world.searchResults.push({ ContactID: XD, Name: 'Current', EmailAddress: 'amanda@dasilva.test', ContactStatus: 'ACTIVE' });
+  ({ out } = await byEmail('amanda@dasilva.test'));
+  assert.equal(out.outcome, 'one', 'exactly one ELIGIBLE match, shown beside the blocked ones');
+  assert.equal(out.results.length, 3);
+});
+
+test('EMAIL: no match says none; a full page without an exact match says the search may be incomplete', async () => {
+  assert.equal((await byEmail('nobody@x.test')).out.outcome, 'none');
+  world.searchResults = Array.from({ length: 25 }, (_, i) => ({ ContactID: `${String(i).padStart(8, '0')}-0000-4000-8000-000000000000`, Name: `N${i}`, ContactStatus: 'ACTIVE', EmailAddress: `x${i}nobody@x.test` }));
+  const { out } = await byEmail('nobody@x.test');
+  assert.equal(out.outcome, 'none');
+  assert.equal(out.mayBeIncomplete, true);
+});
+
+test('EMAIL: an email longer than 50 characters is searched by its first 50, and only the FULL email counts', async () => {
+  const long = `${'a'.repeat(40)}.long.name@very-long-domain.example.test`;
+  assert.ok(long.length > 50);
+  const sameStart = `${long.slice(0, 50)}DIFFERENT.test`;
+  world.realSearch = true;
+  world.searchResults = [
+    { ContactID: XA, Name: 'Right', EmailAddress: long, ContactStatus: 'ACTIVE' },
+    { ContactID: XB, Name: 'Same first 50', EmailAddress: sameStart, ContactStatus: 'ACTIVE' },
+  ];
+  const { status, out } = await byEmail(long);
+  assert.equal(status, 200);
+  assert.deepEqual(searchTermsSent(), [long.slice(0, 50)], 'never more than 50 characters are sent');
+  assert.equal(out.outcome, 'one');
+  assert.deepEqual(out.results.map((r: any) => r.contactId), [XA]);
+});
+
+test('EMAIL: a contact with no email, or an invalid one, is reported without asking Xero', async () => {
+  for (const [email, outcome] of [[null, 'no_local_email'], ['   ', 'no_local_email'], ['not-an-email', 'invalid_local_email'], ['a b@x.test', 'invalid_local_email']] as const) {
+    const { status, out } = await byEmail(email);
+    assert.equal(status, 200);
+    assert.equal(out.outcome, outcome, String(email));
+  }
+  assert.equal(xeroGets().length, 0);
+});
+
+test('EMAIL: a Xero error is reported (502) and nothing is written; an unknown contact is a 404; a bad id is a 400', async () => {
+  world.searchFails = 500;
+  const { status, out } = await byEmail('amanda@dasilva.test');
+  assert.equal(status, 502);
+  assert.equal(out.code, 'XERO_ERROR');
+  assert.doesNotMatch(JSON.stringify(out), /amanda@dasilva\.test/);
+  assert.equal(localWrites().length, 0);
+  assert.equal((await post({ action: 'findByEmail', localContactId: '10000000-0000-4000-8000-0000000000ff' })).status, 404);
+  assert.equal((await post({ action: 'findByEmail', localContactId: 'nope' })).status, 400);
+});
+
+test('EMAIL: only an active manager may look, and only in the expected organisation', async () => {
+  world.contacts[L1].email = 'amanda@dasilva.test';
+  world.role = 'technician';
+  assert.equal((await post({ action: 'findByEmail', localContactId: L1 })).status, 403);
+  assert.equal(xeroGets().length, 0);
+  reset();
+  world.contacts[L1].email = 'amanda@dasilva.test';
+  world.orgBody = { Organisations: [{ OrganisationID: OTHER_ORG }] };
+  const { status, out } = await post({ action: 'findByEmail', localContactId: L1 });
+  assert.equal(status, 503);
+  assert.equal(out.code, 'ORG_MISMATCH');
+  assert.equal(xeroGets().filter((r) => r.path.startsWith('/api.xro/2.0/Contacts')).length, 0, 'no contact was read');
+});
+
+test('NAME FALLBACK: case, extra spaces and accents still find the contact; a name match is listed, never linked', async () => {
+  world.realSearch = true;
+  world.searchResults = [{ ContactID: XA, Name: 'Jose Da Silva', EmailAddress: 'office@dasilva.test', ContactStatus: 'ACTIVE' }];
+  for (const term of ['JOSE DA SILVA', '  jose    da   silva ', 'José Da Silva']) {
+    world.xeroLog = [];
+    const { status, out } = await post({ action: 'search', term });
+    assert.equal(status, 200, term);
+    assert.deepEqual(out.results.map((r: any) => r.contactId), [XA], term);
+  }
+  assert.deepEqual(searchTermsSent(), ['José Da Silva', 'Jose Da Silva'], 'an accented term is also searched without accents');
+  assert.equal(localWrites().length, 0);
+});
+
+test('NAME FALLBACK: the two searches never list the same contact twice', async () => {
+  world.searchResults = [{ ContactID: XA, Name: 'José Da Silva', EmailAddress: 'j@x.test', ContactStatus: 'ACTIVE' }];
+  const { out } = await post({ action: 'search', term: 'José' });
+  assert.equal(out.results.length, 1);
 });
