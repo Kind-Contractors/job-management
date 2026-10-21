@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { listBuildingHistory, listBuildingPhotos, listBuildingRows } from '../repository/buildingsRepository';
-import { listJobRows } from '../repository/jobsRepository';
+import { listHistoricalJobRows, listJobRows } from '../repository/jobsRepository';
 import { listContactsForClient } from '../repository/contactsRepository';
 import { signReportPhotoUrls } from '../repository/reportsRepository';
 import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
@@ -10,6 +10,7 @@ import JobCreator from '../components/jobs/JobCreator';
 import BuildingEditor from '../components/jobs/BuildingEditor';
 import BuildingAccessEditor from '../components/jobs/BuildingAccessEditor';
 import BuildingDefaultRecipientPanel from '../components/jobs/BuildingDefaultRecipientPanel';
+import BuildingReportsPanel from '../components/buildings/BuildingReportsPanel';
 import { linkStatusLabel, localLinkStatus } from '../lib/xeroLinkStatus';
 import { HISTORY_EVENT_LABEL, historyEventDetail } from '../lib/historyEventLabels';
 
@@ -51,6 +52,8 @@ export default function BuildingFilePage() {
     isError: jobsError,
     error: jobsErrorObj,
   } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
+  // Completed, lost and cancelled jobs (same query and cache as Historical jobs): their reports stay downloadable here.
+  const historicalJobs = useQuery({ queryKey: ['historicalJobRows'], queryFn: listHistoricalJobRows });
   const clientId = buildings.find((b) => b.id === buildingId)?.clientId;
   const {
     data: contacts = [],
@@ -221,6 +224,15 @@ export default function BuildingFilePage() {
                 {building.siteInstructions || 'Not recorded.'}
               </div>
             </div>
+
+            {/* Site instructions, then this building's job reports, then its jobs. */}
+            <BuildingReportsPanel
+              buildingId={building.id}
+              jobLists={[jobRows, historicalJobs.data ?? []]}
+              historicalLoading={historicalJobs.isLoading}
+              historicalError={historicalJobs.isError}
+              onRetryHistorical={() => void historicalJobs.refetch()}
+            />
 
             <div className="border border-neutral-300 bg-white">
               <div className="border-b border-neutral-300 px-4 py-2.5 font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">

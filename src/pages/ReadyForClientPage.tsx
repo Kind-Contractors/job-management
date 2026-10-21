@@ -44,6 +44,8 @@ import {
   type PreparedReportPhotos,
 } from "../lib/clientReportPdf";
 import { prepareImageForPdf } from "../lib/pdfImage";
+import { reportPdfFileName, saveClientReportPdf } from "../lib/clientReportDownload";
+import SkippedPhotosDialog from "../components/reports/SkippedPhotosDialog";
 import {
   prepareClientReportVideos,
   type PreparedReportVideos,
@@ -239,58 +241,6 @@ export function SendConfirmDialog({
             onClick={onCancel}
             disabled={isSending}
             className="cursor-pointer border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-interface SkippedPhotosDialogProps {
-  count: number;
-  action: "download" | "send";
-  onCancel: () => void;
-  onContinue: () => void;
-}
-
-/** Shown before Download/Send when some photos couldn't be read — the report is never sent or downloaded until the manager explicitly chooses to continue without them. */
-function SkippedPhotosDialog({
-  count,
-  action,
-  onCancel,
-  onContinue,
-}: SkippedPhotosDialogProps) {
-  const noun = count === 1 ? "photo" : "photos";
-  return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/30"
-      onClick={onCancel}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-[420px] border border-missed bg-white p-4"
-      >
-        <div className="font-heading text-[10px] font-semibold tracking-[0.16em] text-missed-fg uppercase">
-          {count} {noun} can't be included
-        </div>
-        <div className="mt-2 text-[12.5px] text-ink">
-          {count} {noun} couldn't be read, so {count === 1 ? "it" : "they"} will
-          be missing from this report. You can{" "}
-          {action === "send" ? "send" : "download"} the report without{" "}
-          {count === 1 ? "it" : "them"}, or cancel and try again.
-        </div>
-        <div className="mt-3.5 flex gap-1.5">
-          <button
-            onClick={onContinue}
-            className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white"
-          >
-            {action === "send" ? "Send without them" : "Download without them"}
-          </button>
-          <button
-            onClick={onCancel}
-            className="cursor-pointer border border-neutral-300 px-3 py-1.5 text-xs text-neutral-600"
           >
             Cancel
           </button>
@@ -900,14 +850,8 @@ export default function ReadyForClientPage({
     preparedVideos: PreparedReportVideos,
   ) => {
     const blob = await generateClientReportPdf(m, prepared, preparedVideos);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${m.buildingName.replace(/[^a-z0-9]+/gi, "-")}-report.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    // Shared with the Building screen's report downloads (clientReportDownload.ts): same file name, same browser-only save.
+    saveClientReportPdf(blob, reportPdfFileName(m));
   };
 
   const runDownload = async (work: () => Promise<void>) => {
