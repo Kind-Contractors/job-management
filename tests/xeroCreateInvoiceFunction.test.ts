@@ -64,7 +64,7 @@ const world = {
   otherInvoicesQueryFails: false,
   emailStatus: 200,
   accounts: [{ AccountID: 'acc-1', Code: '200', Name: 'Sales', Type: 'REVENUE', Status: 'ACTIVE' }] as unknown[],
-  taxRates: [{ Name: '20% (VAT on Income)', TaxType: 'OUTPUT2', DisplayTaxRate: 20, Status: 'ACTIVE', CanApplyToRevenue: true }] as unknown[],
+  taxRates: [{ Name: '20% (VAT on Income)', TaxType: 'OUTPUT2', ReportTaxType: 'OUTPUT', DisplayTaxRate: 20, Status: 'ACTIVE', CanApplyToRevenue: true }] as unknown[],
   // logs
   xeroLog: [] as Req[],
   dbLog: [] as Req[],
@@ -136,7 +136,7 @@ function reset() {
   world.otherInvoicesQueryFails = false;
   world.emailStatus = 200;
   world.accounts = [{ AccountID: 'acc-1', Code: '200', Name: 'Sales', Type: 'REVENUE', Status: 'ACTIVE' }];
-  world.taxRates = [{ Name: '20% (VAT on Income)', TaxType: 'OUTPUT2', DisplayTaxRate: 20, Status: 'ACTIVE', CanApplyToRevenue: true }];
+  world.taxRates = [{ Name: '20% (VAT on Income)', TaxType: 'OUTPUT2', ReportTaxType: 'OUTPUT', DisplayTaxRate: 20, Status: 'ACTIVE', CanApplyToRevenue: true }];
   world.xeroLog = [];
   world.dbLog = [];
   world.events = [];
@@ -2402,4 +2402,33 @@ test('NO CATCH-UP: an in_xero_not_emailed invoice is never emailed later, even w
   assert.equal(emailCalls().length, 0);
   assert.equal(invoiceCreatesOrUpdates().length, 0);
   assert.equal(world.invoice.status, 'in_xero_not_emailed');
+});
+
+// ---- the 20% sales VAT rate (tax-rate matching; full rules in xeroSalesTaxRate.test.ts) ------------------------------------------
+const VAT_ON_EXPENSES = { Name: '20% (VAT on Expenses)', TaxType: 'INPUT2', ReportTaxType: 'INPUT', DisplayTaxRate: 20, Status: 'ACTIVE', CanApplyToRevenue: false };
+const JOBBER_VAT = { Name: 'JOBBER-1011369 VAT', TaxType: 'TAX001', ReportTaxType: 'OUTPUT', DisplayTaxRate: 20, Status: 'ACTIVE', CanApplyToRevenue: true };
+
+test("TAX 1: with Luke's rates (VAT on Expenses, VAT on Income, JOBBER-1011369 VAT) the invoice is created on VAT on Income", async () => {
+  world.taxRates = [VAT_ON_EXPENSES, ...world.taxRates, JOBBER_VAT];
+  const res = await call();
+  assert.equal(res.status, 200);
+  const lines = invoiceCreatesOrUpdates()[0].body.Invoices[0].LineItems;
+  assert.ok(lines.length > 0 && lines.every((li: any) => li.TaxType === 'OUTPUT2'), JSON.stringify(lines));
+});
+
+test('TAX 2: when the sales rate cannot be established (only custom rates) NOTHING is created or emailed; the error lists the rates, no secrets', async () => {
+  world.taxRates = [VAT_ON_EXPENSES, JOBBER_VAT, { ...JOBBER_VAT, Name: 'Other app VAT', TaxType: 'TAX002' }];
+  const res = await call();
+  const out = await res.json();
+  assert.notEqual(res.status, 200);
+  assert.equal(invoiceCreatesOrUpdates().length, 0, 'no invoice created or updated in Xero');
+  assert.equal(emailCalls().length, 0);
+  assert.equal(world.invoice.status, 'failed', 'recorded as failed, so it can be retried once Xero is fixed');
+  for (const text of [out.error, world.invoice.last_error]) {
+    assert.match(text, /The 20% sales VAT rate could not be chosen safely, so nothing was created or changed in Xero\./);
+    assert.match(text, /JOBBER-1011369 VAT \(TaxType TAX001, ReportTaxType OUTPUT, CanApplyToRevenue true\)/);
+    assert.match(text, /Other app VAT \(TaxType TAX002/);
+    assert.match(text, /20% \(VAT on Expenses\) \(TaxType INPUT2, ReportTaxType INPUT, CanApplyToRevenue false\)/);
+    assert.doesNotMatch(text, new RegExp(`${SECRET}|${ACCESS_TOKEN}|test-client-id`));
+  }
 });

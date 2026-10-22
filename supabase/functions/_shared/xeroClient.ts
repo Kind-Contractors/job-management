@@ -360,12 +360,22 @@ export interface XeroAccount {
   Class?: string;
 }
 
+/**
+ * A tax rate as GET /TaxRates returns it (Xero's OpenAPI TaxRate schema). The schema marks NO field as required, so every one is
+ * treated as possibly absent. Xero's own example: the built-in purchase rate is TaxType INPUT2 / ReportTaxType INPUT /
+ * CanApplyToRevenue false; the built-in sales rate is TaxType OUTPUT2 / ReportTaxType OUTPUT / CanApplyToRevenue true. Rates an
+ * organisation (or an app such as Jobber) adds get generated TaxTypes such as TAX001.
+ */
 export interface XeroTaxRate {
-  Name: string;
-  TaxType: string;
-  DisplayTaxRate: number;
-  Status: string;
+  Name?: string;
+  TaxType?: string;
+  /** Status codes: ACTIVE, DELETED, ARCHIVED, PENDING. */
+  Status?: string;
+  /** How the rate is reported (for the UK VAT return): OUTPUT for standard-rated sales, INPUT for purchases, and others. */
+  ReportTaxType?: string;
+  /** Whether the rate can be used on revenue (sales) accounts. Read-only in Xero. */
   CanApplyToRevenue?: boolean;
+  DisplayTaxRate?: number;
 }
 
 export interface XeroContact {
@@ -401,25 +411,102 @@ export function findSalesAccount(accounts: XeroAccount[]): ResolvedAccount {
   return { outcome: 'found', account: { accountId: a.AccountID, code: a.Code ?? null, name: a.Name, type: a.Type, status: a.Status } };
 }
 
+/** Xero's built-in UK "20% (VAT on Income)" rate. */
+export const BUILT_IN_UK_SALES_TAX_TYPE = 'OUTPUT2';
+/** ReportTaxTypes that confirm a standard-rated SALES rate. */
+const SALES_REPORT_TAX_TYPES = new Set(['OUTPUT', 'OUTPUT2']);
+
+export type TaxRateClassification = 'sales' | 'purchase' | 'unclassified';
+
+/** One active 20% rate as the matcher saw it: what the diagnostic lists. Names and codes only; nothing secret. */
+export interface TaxRateCandidate {
+  name: string;
+  taxType: string | null;
+  reportTaxType: string | null;
+  canApplyToRevenue: boolean | null;
+  classification: TaxRateClassification;
+}
+
 export type ResolvedTaxRate =
-  | { outcome: 'found'; taxRate: { taxType: string; name: string; displayTaxRate: number; status: string } }
-  | { outcome: 'not_found' }
-  | { outcome: 'multiple'; candidateCount: number };
+  | { outcome: 'found'; taxRate: { taxType: string; name: string; displayTaxRate: number; status: string }; candidates: TaxRateCandidate[] }
+  | { outcome: 'not_found'; candidates: TaxRateCandidate[] }
+  | { outcome: 'ambiguous'; reason: string; candidates: TaxRateCandidate[] };
+
+const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
 
 /**
- * Finds the 20% VAT-on-sales rate — matched by DisplayTaxRate = 20 AND
- * CanApplyToRevenue, never by a hardcoded TaxType string (e.g. NOT assumed
- * to be "OUTPUT2" — that's a common default in UK Xero organisations but is
- * genuinely configurable per org, so it must be resolved live). Excludes a
- * 20% rate that only applies to purchases (e.g. an "INPUT2" equivalent),
- * since this is specifically for sales invoices.
+ * Purchase: Xero says it cannot be used on revenue, or reports it as an input (purchase) type.
+ * Sales: Xero says it CAN be used on revenue AND reports it as standard-rated output. A missing value never counts as either.
+ */
+export function classifyTaxRate(t: XeroTaxRate): TaxRateClassification {
+  const report = text(t.ReportTaxType)?.toUpperCase() ?? null;
+  if (t.CanApplyToRevenue === false || (report !== null && report.includes('INPUT'))) return 'purchase';
+  if (t.CanApplyToRevenue === true && report !== null && SALES_REPORT_TAX_TYPES.has(report) && text(t.TaxType)) return 'sales';
+  return 'unclassified';
+}
+
+/** A rate an organisation or another app created: Xero gives these generated TaxTypes such as TAX001. */
+export function isCustomTaxType(taxType: string | null): boolean {
+  return taxType !== null && /^TAX\d+$/i.test(taxType);
+}
+
+/**
+ * Finds the 20% VAT rate for SALES invoice lines, or refuses with the reason. Never guesses:
+ *   1. Only ACTIVE rates whose DisplayTaxRate is 20 are considered.
+ *   2. Purchase rates are excluded (CanApplyToRevenue false, or an INPUT report type).
+ *   3. Xero's built-in UK sales rate (TaxType OUTPUT2) is chosen when it is the ONE rate with that TaxType and Xero classifies it
+ *      as sales (CanApplyToRevenue true, ReportTaxType OUTPUT) - even when other 20% rates exist (for example one added by Jobber).
+ *   4. Without it, a single sales-classified rate is accepted only if it is not a custom (TAXnnn) rate and nothing else is unclear.
+ *   5. Anything else - only custom rates, several possible rates, or rates Xero has not fully classified - is refused, and the
+ *      result lists every active 20% rate with its TaxType, ReportTaxType and CanApplyToRevenue for the diagnostic.
  */
 export function find20PercentSalesTaxRate(taxRates: XeroTaxRate[]): ResolvedTaxRate {
-  const matches = taxRates.filter(
-    (t) => t.Status === 'ACTIVE' && t.CanApplyToRevenue !== false && Math.abs(t.DisplayTaxRate - 20) < 0.001,
+  const active20 = taxRates.filter(
+    (t) => t.Status === 'ACTIVE' && typeof t.DisplayTaxRate === 'number' && Number.isFinite(t.DisplayTaxRate) && Math.abs(t.DisplayTaxRate - 20) < 0.001,
   );
-  if (matches.length === 0) return { outcome: 'not_found' };
-  if (matches.length > 1) return { outcome: 'multiple', candidateCount: matches.length };
-  const t = matches[0];
-  return { outcome: 'found', taxRate: { taxType: t.TaxType, name: t.Name, displayTaxRate: t.DisplayTaxRate, status: t.Status } };
+  const seen = active20.map((t) => ({ rate: t, classification: classifyTaxRate(t) }));
+  const candidates: TaxRateCandidate[] = seen.map(({ rate, classification }) => ({
+    name: text(rate.Name) ?? '(unnamed)',
+    taxType: text(rate.TaxType),
+    reportTaxType: text(rate.ReportTaxType),
+    canApplyToRevenue: typeof rate.CanApplyToRevenue === 'boolean' ? rate.CanApplyToRevenue : null,
+    classification,
+  }));
+  const found = (t: XeroTaxRate): ResolvedTaxRate => ({
+    outcome: 'found',
+    taxRate: { taxType: text(t.TaxType)!, name: text(t.Name) ?? text(t.TaxType)!, displayTaxRate: t.DisplayTaxRate!, status: t.Status! },
+    candidates,
+  });
+  const ambiguous = (reason: string): ResolvedTaxRate => ({ outcome: 'ambiguous', reason, candidates });
+
+  const sales = seen.filter((c) => c.classification === 'sales').map((c) => c.rate);
+  const unclassified = seen.filter((c) => c.classification === 'unclassified').map((c) => c.rate);
+  if (sales.length === 0 && unclassified.length === 0) return { outcome: 'not_found', candidates };
+
+  const isBuiltIn = (t: XeroTaxRate) => text(t.TaxType)?.toUpperCase() === BUILT_IN_UK_SALES_TAX_TYPE;
+  const builtInSales = sales.filter(isBuiltIn);
+  if (builtInSales.length === 1) return found(builtInSales[0]);
+  if (builtInSales.length > 1) return ambiguous(`Xero lists ${builtInSales.length} active rates with the built-in TaxType ${BUILT_IN_UK_SALES_TAX_TYPE}.`);
+  if (unclassified.some(isBuiltIn)) {
+    return ambiguous(`Xero's built-in 20% sales rate (${BUILT_IN_UK_SALES_TAX_TYPE}) did not come back classified as a sales rate (CanApplyToRevenue true and ReportTaxType OUTPUT).`);
+  }
+  if (sales.length === 1 && unclassified.length === 0 && !isCustomTaxType(text(sales[0].TaxType))) return found(sales[0]);
+  if (sales.length > 0 && sales.every((t) => isCustomTaxType(text(t.TaxType))) && unclassified.length === 0) {
+    return ambiguous(`Xero's built-in 20% sales rate (${BUILT_IN_UK_SALES_TAX_TYPE}) was not found, and a custom rate is never chosen automatically.`);
+  }
+  return ambiguous('More than one active 20% rate could apply to sales, or Xero did not say whether a rate is for sales or purchases.');
+}
+
+/** The message stored on the invoice when no rate can be chosen: what to fix, and the rates Xero returned (names and codes only). */
+export function describeTaxRateProblem(resolved: Exclude<ResolvedTaxRate, { outcome: 'found' }>): string {
+  const show = (v: string | boolean | null) => (v === null ? 'not provided' : String(v));
+  const listed = resolved.candidates
+    .slice(0, 12)
+    .map((c) => `${c.name} (TaxType ${show(c.taxType)}, ReportTaxType ${show(c.reportTaxType)}, CanApplyToRevenue ${show(c.canApplyToRevenue)})`)
+    .join('; ');
+  const rates = resolved.candidates.length === 0 ? ' Xero returned no active 20% rates.' : ` Active 20% rates in Xero: ${listed}${resolved.candidates.length > 12 ? '; …' : ''}.`;
+  if (resolved.outcome === 'not_found') {
+    return `No active 20% sales VAT rate found in this Xero organisation, so nothing was created or changed in Xero.${rates}`;
+  }
+  return `The 20% sales VAT rate could not be chosen safely, so nothing was created or changed in Xero. ${resolved.reason} Check the tax rates in Xero (Accounting settings, Tax rates).${rates}`;
 }

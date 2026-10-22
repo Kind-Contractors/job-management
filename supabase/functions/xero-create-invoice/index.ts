@@ -89,6 +89,7 @@ import { assertManager, UnauthorizedError } from '../_shared/auth.ts';
 import {
   createOrUpdateAuthorisedInvoice,
   emailInvoice,
+  describeTaxRateProblem,
   find20PercentSalesTaxRate,
   findSalesAccount,
   getXeroAccessToken,
@@ -437,11 +438,8 @@ Deno.serve(async (req: Request) => {
       );
     }
     if (resolvedTaxRate.outcome !== 'found') {
-      throw new Error(
-        resolvedTaxRate.outcome === 'multiple'
-          ? `${resolvedTaxRate.candidateCount} active 20% sales tax rates found in Xero — this needs to be resolved in Xero before invoicing.`
-          : 'No active 20% sales VAT rate found in this Xero organisation.',
-      );
+      // Refused before anything is created or updated in Xero; the message lists the rates Xero returned (names and codes only).
+      throw new Error(describeTaxRateProblem(resolvedTaxRate));
     }
 
     // Built from `row`, which was just fetched fresh from the database —
