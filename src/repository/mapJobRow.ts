@@ -33,7 +33,9 @@ import { describeScheduleShort, isDemandEndedForMonth, monthsDueInYear } from '.
 export const FREQUENCY_TYPE_LABEL: Record<FrequencyType, Frequency> = {
   weekly: 'Weekly',
   fortnightly: 'Fortnightly',
+  six_weekly: '6 weekly',
   monthly: 'Monthly',
+  bimonthly: 'Bi-monthly',
   quarterly: 'Quarterly',
   biannual: 'Biannual',
   annual: 'Annual',
@@ -41,11 +43,16 @@ export const FREQUENCY_TYPE_LABEL: Record<FrequencyType, Frequency> = {
   one_off: 'One-off',
 };
 
-/** Visits/year for the yearly-value computation — 0 means "never compute a total". */
-const VISITS_PER_YEAR_BY_TYPE: Record<FrequencyType, number> = {
+/**
+ * Visits/year for the yearly-value computation — 0 means "never compute a total". Week cadences count a 52-week year, the
+ * same convention as weekly (52) and fortnightly (26): every six weeks is 52 / 6 visits a year.
+ */
+export const VISITS_PER_YEAR_BY_TYPE: Record<FrequencyType, number> = {
   weekly: 52,
   fortnightly: 26,
+  six_weekly: 52 / 6,
   monthly: 12,
+  bimonthly: 6,
   quarterly: 4,
   biannual: 2,
   annual: 1,
@@ -83,7 +90,8 @@ export function computeDerivedPricing(
 
   if (!canCompute) return { yearlyValue: null, monthlyValue: null };
 
-  const yearlyValue = pricePerVisit! * VISITS_PER_YEAR_BY_TYPE[frequencyType!];
+  // Rounded to the penny: a whole-number visit count (every frequency but 6 weekly) leaves the value unchanged.
+  const yearlyValue = Math.round(pricePerVisit! * VISITS_PER_YEAR_BY_TYPE[frequencyType!] * 100) / 100;
   return { yearlyValue, monthlyValue: yearlyValue / 12 };
 }
 

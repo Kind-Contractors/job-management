@@ -345,13 +345,13 @@ export default function JobCreator({ buildingId, defaultFrequencyType, onCreated
           </div>
         )}
 
-        {/* Weekly/fortnightly have no whole-month step, so the Monthly Plan cannot place them (anchored or not).
+        {/* Weekly/fortnightly/6 weekly have no whole-month step, so the Monthly Plan cannot place them (anchored or not).
             Saying so is better than writing a schedule that would read "can't tell" - see
             docs/monthly-plan-weekly-occurrences.md. */}
         {weekBased && (
           <div className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg" data-testid="week-based-note">
             {FREQUENCY_TYPE_LABEL[form.frequencyType as FrequencyType]} work can’t be placed on the Monthly Plan yet — it
-            repeats within a month rather than once per month. Create the job, then book its visits from the Schedule.
+            repeats on a cycle of weeks, not calendar months. Create the job, then book its visits from the Schedule.
           </div>
         )}
 

@@ -8,7 +8,9 @@ export type Division = 'General' | 'Specialist';
 export type FrequencyType =
   | 'weekly'
   | 'fortnightly'
+  | 'six_weekly'
   | 'monthly'
+  | 'bimonthly'
   | 'quarterly'
   | 'biannual'
   | 'annual'
@@ -18,7 +20,9 @@ export type FrequencyType =
 export type Frequency =
   | 'Weekly'
   | 'Fortnightly'
+  | '6 weekly'
   | 'Monthly'
+  | 'Bi-monthly'
   | 'Quarterly'
   | 'Biannual'
   | 'Annual'

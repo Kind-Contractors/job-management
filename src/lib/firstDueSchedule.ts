@@ -15,7 +15,7 @@
 // builds a schedule only from the one they pick. The date supplies the cycle's PHASE (`anchor_date`) and, for
 // `fixed_date`/`fixed_weekday`, the day within the month; nothing else is invented.
 //
-// WEEKLY AND FORTNIGHTLY ARE DELIBERATELY ABSENT. A week-unit interval has no whole-month step, so
+// WEEKLY, FORTNIGHTLY AND 6 WEEKLY ARE DELIBERATELY ABSENT. A week-unit interval has no whole-month step, so
 // `isMonthInCycle` cannot answer for it and the Monthly Plan shows it as "can't tell" - anchored or not. Until
 // that is designed (see docs/monthly-plan-weekly-occurrences.md) this module refuses to build a schedule that
 // would land in that state, and the form says so instead of pretending.
@@ -30,13 +30,15 @@ export type FirstDuePattern = 'fixed_date' | 'fixed_weekday' | 'due_month';
  * The cadence each pricing frequency means, in the units `schedules` stores. A faithful restatement of the same
  * model `VISITS_PER_YEAR_BY_TYPE` already encodes (12/4/2/1 a year), not an inference.
  *
- * `weekly`/`fortnightly` map to week units, which `stepMonths` cannot convert to whole months - they are listed
+ * `weekly`/`fortnightly`/`six_weekly` map to week units, which `stepMonths` cannot convert to whole months - they are listed
  * here so `isWeekBasedFrequency` has one source, and `buildFirstDueSchedule` refuses them explicitly.
  */
 const INTERVAL_BY_FREQUENCY: Partial<Record<FrequencyType, { unit: ScheduleIntervalUnit; count: number }>> = {
   weekly: { unit: 'week', count: 1 },
   fortnightly: { unit: 'week', count: 2 },
+  six_weekly: { unit: 'week', count: 6 },
   monthly: { unit: 'month', count: 1 },
+  bimonthly: { unit: 'month', count: 2 },
   quarterly: { unit: 'quarter', count: 1 },
   biannual: { unit: 'month', count: 6 },
   annual: { unit: 'year', count: 1 },
@@ -48,7 +50,7 @@ export function isMonthBasedFrequency(f: FrequencyType | null): boolean {
   return interval != null && interval.unit !== 'week';
 }
 
-/** Weekly/fortnightly: genuinely recurring, but not expressible as a month cadence (see the file header). */
+/** Weekly/fortnightly/6 weekly: genuinely recurring, but not expressible as a month cadence (see the file header). */
 export function isWeekBasedFrequency(f: FrequencyType | null): boolean {
   const interval = f == null ? undefined : INTERVAL_BY_FREQUENCY[f];
   return interval != null && interval.unit === 'week';

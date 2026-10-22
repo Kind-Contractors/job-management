@@ -19,7 +19,9 @@ export type GridBlock =
 const FREQUENCY_ORDER: Frequency[] = [
   'Weekly',
   'Fortnightly',
+  '6 weekly',
   'Monthly',
+  'Bi-monthly',
   'Quarterly',
   'Biannual',
   'Annual',
@@ -31,7 +33,9 @@ const FREQUENCY_ORDER: Frequency[] = [
 const VISITS_PER_YEAR: Record<Frequency, number> = {
   Weekly: 52,
   Fortnightly: 26,
+  '6 weekly': 52 / 6,
   Monthly: 12,
+  'Bi-monthly': 6,
   Quarterly: 4,
   Biannual: 2,
   Annual: 1,
@@ -39,6 +43,12 @@ const VISITS_PER_YEAR: Record<Frequency, number> = {
   'One-off': 0,
   Unknown: 0,
 };
+
+/** "12 visits a year per job"; a fractional count (6 weekly: 52 / 6) reads "about 8.7 visits a year per job". */
+export function visitsPerYearLabel(n: number): string {
+  if (Number.isInteger(n)) return `${n} visit${n === 1 ? '' : 's'} a year per job`;
+  return `about ${n.toFixed(1)} visits a year per job`;
+}
 
 function money(n: number): string {
   return `£${n.toLocaleString('en-GB')}`;
@@ -90,7 +100,7 @@ export function buildGridBlocks(rows: JobRow[], groupBy: GroupBy): GridBlock[] {
         kind: 'band',
         id: `band-freq-${freq}`,
         title: freq,
-        subtitle: `${VISITS_PER_YEAR[freq]} visit${VISITS_PER_YEAR[freq] === 1 ? '' : 's'} a year per job`,
+        subtitle: visitsPerYearLabel(VISITS_PER_YEAR[freq]),
         rightLabel: `${set.length} job${set.length === 1 ? '' : 's'} · ${summarizeYearlyValue(set)}`,
         rowCount: set.length,
       });
