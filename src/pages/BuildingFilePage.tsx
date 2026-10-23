@@ -11,6 +11,8 @@ import BuildingEditor from '../components/jobs/BuildingEditor';
 import BuildingAccessEditor from '../components/jobs/BuildingAccessEditor';
 import BuildingDefaultRecipientPanel from '../components/jobs/BuildingDefaultRecipientPanel';
 import BuildingReportsPanel from '../components/buildings/BuildingReportsPanel';
+import ChangeBuildingClientPanel from '../components/buildings/ChangeBuildingClientPanel';
+import BuildingManagementHistory from '../components/buildings/BuildingManagementHistory';
 import { linkStatusLabel, localLinkStatus } from '../lib/xeroLinkStatus';
 import { HISTORY_EVENT_LABEL, historyEventDetail } from '../lib/historyEventLabels';
 
@@ -33,6 +35,8 @@ export default function BuildingFilePage() {
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [editingBuilding, setEditingBuilding] = useState(false);
+  const [changingClient, setChangingClient] = useState(false);
+  const [clientNotice, setClientNotice] = useState<string | null>(null);
   const [editingAccess, setEditingAccess] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [creatingJob, setCreatingJob] = useState(false);
@@ -175,7 +179,20 @@ export default function BuildingFilePage() {
         </div>
         <div className="flex gap-1.5">
           <button
-            onClick={() => setEditingBuilding((e) => !e)}
+            onClick={() => {
+              setChangingClient((c) => !c);
+              setEditingBuilding(false);
+              setClientNotice(null);
+            }}
+            className="cursor-pointer border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
+          >
+            {changingClient ? 'Close' : 'Change client'}
+          </button>
+          <button
+            onClick={() => {
+              setEditingBuilding((e) => !e);
+              setChangingClient(false);
+            }}
             className="cursor-pointer border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100"
           >
             {editingBuilding ? 'Close editor' : 'Edit'}
@@ -195,6 +212,25 @@ export default function BuildingFilePage() {
       {editingBuilding && (
         <div className="mb-4">
           <BuildingEditor building={building} onDone={() => setEditingBuilding(false)} />
+        </div>
+      )}
+
+      {changingClient && (
+        <div className="mb-4">
+          <ChangeBuildingClientPanel
+            building={building}
+            buildingJobs={[...buildingJobs, ...(historicalJobs.data ?? []).filter((j) => j.buildingId === building.id)]}
+            onDone={(message) => {
+              setChangingClient(false);
+              setClientNotice(message);
+            }}
+            onCancel={() => setChangingClient(false)}
+          />
+        </div>
+      )}
+      {clientNotice && (
+        <div role="status" className="mb-4 max-w-[640px] border border-teal-700/40 bg-teal-100 p-2 text-[12.5px] text-teal-700">
+          {clientNotice}
         </div>
       )}
 
@@ -274,6 +310,8 @@ export default function BuildingFilePage() {
                 <Fact label="Per year" value={yearlyTotal ? money(yearlyTotal) : '—'} />
               </div>
             </div>
+
+            <BuildingManagementHistory buildingId={building.id} currentClientName={building.clientName} />
 
             <div className="border border-neutral-300 bg-white">
               <div className="border-b border-neutral-300 px-4 py-2.5 font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">

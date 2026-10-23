@@ -6,6 +6,7 @@
 export const HISTORY_EVENT_LABEL: Record<string, string> = {
   building_created: 'Building created',
   building_details_updated: 'Building details updated',
+  building_client_changed: 'Client changed',
   site_instructions_updated: 'Site instructions updated',
   access_info_updated: 'Access details updated',
   contact_added: 'Contact added',
