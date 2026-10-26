@@ -13,6 +13,7 @@ import BuildingDefaultRecipientPanel from '../components/jobs/BuildingDefaultRec
 import BuildingReportsPanel from '../components/buildings/BuildingReportsPanel';
 import ChangeBuildingClientPanel from '../components/buildings/ChangeBuildingClientPanel';
 import BuildingManagementHistory from '../components/buildings/BuildingManagementHistory';
+import BuildingAddContactForm from '../components/buildings/BuildingAddContactForm';
 import { linkStatusLabel, localLinkStatus } from '../lib/xeroLinkStatus';
 import { HISTORY_EVENT_LABEL, historyEventDetail } from '../lib/historyEventLabels';
 
@@ -37,6 +38,8 @@ export default function BuildingFilePage() {
   const [editingBuilding, setEditingBuilding] = useState(false);
   const [changingClient, setChangingClient] = useState(false);
   const [clientNotice, setClientNotice] = useState<string | null>(null);
+  const [addingContact, setAddingContact] = useState(false);
+  const [contactNotice, setContactNotice] = useState<string | null>(null);
   const [editingAccess, setEditingAccess] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [creatingJob, setCreatingJob] = useState(false);
@@ -313,10 +316,28 @@ export default function BuildingFilePage() {
 
             <BuildingManagementHistory buildingId={building.id} currentClientName={building.clientName} />
 
-            <div className="border border-neutral-300 bg-white">
-              <div className="border-b border-neutral-300 px-4 py-2.5 font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
-                Contacts ({contacts.length})
+            <div data-testid="building-contacts" className="border border-neutral-300 bg-white">
+              <div className="flex items-center gap-2 border-b border-neutral-300 px-4 py-2.5">
+                <span className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">Contacts ({contacts.length})</span>
+                {!addingContact && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddingContact(true);
+                      setContactNotice(null);
+                    }}
+                    disabled={contactsLoading || contactsError}
+                    className="ml-auto cursor-pointer text-[11.5px] text-teal-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
+                  >
+                    + Add contact
+                  </button>
+                )}
               </div>
+              {contactNotice && (
+                <div role="status" className="border-b border-divider bg-teal-100 px-4 py-2 text-[12px] text-teal-700">
+                  {contactNotice}
+                </div>
+              )}
               {contactsLoading ? (
                 <div className="px-4 py-3 text-[12.5px] text-neutral-500">Loading contacts…</div>
               ) : contactsError ? (
@@ -324,7 +345,8 @@ export default function BuildingFilePage() {
               ) : contacts.length === 0 ? (
                 <div className="px-4 py-3 text-[12.5px] text-neutral-500">No contacts recorded for this client.</div>
               ) : (
-                contacts.map((c) => (
+                <div className="max-h-[320px] overflow-y-auto">
+                {contacts.map((c) => (
                   <div key={c.id} className="flex justify-between gap-3 border-b border-divider px-4 py-2 text-[12.5px] last:border-b-0">
                     <span>
                       {c.name}
@@ -345,7 +367,21 @@ export default function BuildingFilePage() {
                       <span className={`block text-[11px] ${localLinkStatus(c) === 'linked' ? 'text-teal-700' : 'text-due-fg'}`}>{linkStatusLabel(c)}</span>
                     </span>
                   </div>
-                ))
+                ))}
+                </div>
+              )}
+              {addingContact && !contactsLoading && !contactsError && (
+                <BuildingAddContactForm
+                  clientId={building.clientId}
+                  clientName={building.clientName}
+                  buildingId={building.id}
+                  contacts={contacts}
+                  onClose={() => setAddingContact(false)}
+                  onCreated={(name) => {
+                    setAddingContact(false);
+                    setContactNotice(`Contact added: ${name}.`);
+                  }}
+                />
               )}
             </div>
 

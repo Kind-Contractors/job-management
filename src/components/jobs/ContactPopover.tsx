@@ -4,6 +4,7 @@ import type { JobContactSummary } from '../../domain/types';
 import { listJobRows } from '../../repository/jobsRepository';
 import { createContactForClient, updateContact, type ContactFieldsInput } from '../../repository/contactsRepository';
 import { resolveDisplayContact } from '../../lib/contactDisplay';
+import { checkContactForm } from '../../lib/contactForm';
 import { linkStatusLabel, localLinkStatus, VERIFY_STATE_TEXT } from '../../lib/xeroLinkStatus';
 import { unlinkContact, verifyContactLink, type XeroLinkVerification } from '../../repository/xeroLinksRepository';
 import LinkXeroContactDialog from './LinkXeroContactDialog';
@@ -274,16 +275,13 @@ export default function ContactPopover({ clientId, clientName, onClose }: Contac
             <div className="flex gap-1.5">
               <button
                 onClick={() => {
-                  if (!form.name.trim()) {
-                    setError('Enter a name.');
+                  // The same checks as the Building File's Add contact (lib/contactForm.ts).
+                  const checked = checkContactForm(form, contacts, adding ? null : selectedId);
+                  if (!checked.ok) {
+                    setError(checked.error);
                     return;
                   }
-                  const input: ContactFieldsInput = {
-                    name: form.name.trim(),
-                    email: form.email.trim() || null,
-                    phoneNumber: form.phoneNumber.trim() || null,
-                    isPrimary: form.isPrimary,
-                  };
+                  const input: ContactFieldsInput = checked.input;
                   if (adding) createMutation.mutate(input);
                   else updateMutation.mutate(input);
                 }}
