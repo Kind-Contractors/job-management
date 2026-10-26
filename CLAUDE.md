@@ -454,3 +454,13 @@ Do not build yet:
 - Never fabricate permanent "production" mock data — mock data must be
   clearly fictional/isolated, matching the existing `mockJobRoster.ts` /
   `mockReports.ts` convention of a header comment stating it's fictional.
+
+## 17. Git branching
+
+- Work directly on the `dev` branch in the main folder
+  (`F:\Kind Contractors\job_management_system`). Check out `dev` before
+  starting work.
+- Do **not** create feature branches (or new worktrees) unless the user has
+  explicitly confirmed it for that piece of work.
+- `main` is updated by fast-forwarding it to the tested `dev` commit, only
+  when the user asks — no merge commits, no force-pushes.
