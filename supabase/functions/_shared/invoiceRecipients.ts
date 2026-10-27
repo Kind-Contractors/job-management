@@ -1,13 +1,14 @@
 // Who an invoice goes to, decided on the server and never guessed.
 //
 // FIRST SEND (no Xero invoice yet): the recipient is
-//   - the local contact the manager explicitly chose for this invoice, if one was sent (when it is not linked to Xero
-//     yet, it is linked to an existing Xero contact with its email or a new one is created - see ./autoXeroContact.ts); otherwise
+//   - the local contact the manager explicitly chose for this invoice, if one was sent; otherwise
 //   - the building's saved default recipient; otherwise
 //   - nothing: the send is refused with an explanation. A default is never guessed (not the primary contact, not the
 //     only contact, not a name or email match).
 //   Either way the contact must belong to the invoice's client, be linked to a Xero contact, that link must be recorded
-//   for the CONNECTED Xero organisation, and the Xero contact must still be active and have an email.
+//   for the CONNECTED Xero organisation, and the Xero contact must still be active and have an email. A contact that is not
+//   linked is refused (NOT_LINKED): nothing is searched for, matched by email or created in Xero. The manager links it to the
+//   right EXISTING Xero contact first (xero-link-contact), so several Xero contacts sharing one email are never guessed between.
 //
 // ONCE XERO HOLDS THE INVOICE the recipient is locked: a retry can only ever go to the Xero contact the invoice was created
 // for. A request that names a different contact is refused (this is enforced here, so it holds for a direct call to the Edge
@@ -17,7 +18,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import type { XeroInvoiceSummary } from './xeroClient.ts';
 import { requireLinkInOrganisation, requireVerifiedContactLink, XeroSafeguardError } from './xeroSafeguards.ts';
 
-export type RecipientSource = 'selected' | 'building_default' | 'locked' | 'auto_linked' | 'auto_created';
+export type RecipientSource = 'selected' | 'building_default' | 'locked';
 
 export interface ResolvedRecipient {
   xeroContactId: string;
@@ -58,9 +59,6 @@ interface ResolveContext {
   clientId: string;
 }
 
-/** Links (or creates) the Xero contact for an UNLINKED local contact the manager explicitly chose. See ./autoXeroContact.ts. */
-export type AutoLinkContact = (contact: RecipientContactRow) => Promise<{ xeroContactId: string; outcome: 'reused' | 'created' }>;
-
 async function verifiedLinkOf(ctx: ResolveContext, contact: RecipientContactRow): Promise<{ xeroContactId: string; xeroContactName: string | null; xeroContactEmail: string | null }> {
   requireLinkInOrganisation(contact, ctx.connectedOrgId);
   const verified = await requireVerifiedContactLink(ctx.accessToken, contact);
@@ -73,17 +71,11 @@ function detailsOf(c: { Name?: string; EmailAddress?: string }): { xeroContactNa
 
 /** The recipient of an invoice Xero does not hold yet: the manager's explicit choice, else the building's saved default, else a refusal. */
 export async function resolveFirstSendRecipient(
-  ctx: ResolveContext & { buildingId: string; requestedContactId: string | undefined; autoLink?: AutoLinkContact },
+  ctx: ResolveContext & { buildingId: string; requestedContactId: string | undefined },
 ): Promise<ResolvedRecipient> {
   if (ctx.requestedContactId) {
+    // Used only through its own link: an unlinked contact is refused (NOT_LINKED) and an unusable link is refused, never replaced.
     const contact = await loadContactForClient(ctx.db, ctx.requestedContactId, ctx.clientId);
-    // Only a contact with NO link at all (NULL) is linked automatically. A link that exists (even a blank one, one without an
-    // organisation recorded, or one from another organisation) is never replaced here: it is verified, and refused if unusable.
-    if (contact.xero_contact_id === null && ctx.autoLink) {
-      const auto = await ctx.autoLink(contact);
-      const linked = { ...contact, xero_contact_id: auto.xeroContactId, xero_org_id: ctx.connectedOrgId };
-      return { ...(await verifiedLinkOf(ctx, linked)), source: auto.outcome === 'created' ? 'auto_created' : 'auto_linked' };
-    }
     return { ...(await verifiedLinkOf(ctx, contact)), source: 'selected' };
   }
 

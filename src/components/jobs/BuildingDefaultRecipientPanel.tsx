@@ -122,7 +122,7 @@ export default function BuildingDefaultRecipientPanel({ building, contacts }: { 
           </select>
         </label>
         {linkable.length === 0 && (
-          <div className="text-[11px] text-neutral-500">Link a contact to its Xero contact first (open the contact from the jobs list).</div>
+          <div className="text-[11px] text-neutral-500">Link a contact to its Xero contact first (&ldquo;Link to Xero&rdquo; in Contacts, above).</div>
         )}
         <div>
           <button

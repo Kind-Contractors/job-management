@@ -1,7 +1,7 @@
 // Server-side safeguards for anything that writes to Xero. Each one FAILS CLOSED: a missing setting, a failed lookup or
 // an unexpected answer stops the operation before a single Xero write is attempted.
 //
-//   XERO_CREATION_ENABLED     may the app CREATE (or update) contacts and invoices in Xero? Only the exact string "true".
+//   XERO_CREATION_ENABLED     may the app CREATE (or update) invoices in Xero? Only the exact string "true".
 //   XERO_SENDING_ENABLED      may the app EMAIL invoices from Xero? Only the exact string "true". Emailing needs an
 //                             invoice, so this also permits creation (an environment that already sends keeps working).
 //   XERO_EXPECTED_ORG_ID      the Xero organisation id this environment is allowed to write to
@@ -40,12 +40,6 @@ export type SafeguardCode =
   | 'DEFAULT_WRONG_ORGANISATION'
   | 'RECIPIENT_LOCKED'
   | 'INVOICE_ORG_MISMATCH'
-  | 'CONTACT_DETAILS_MISSING'
-  | 'CONTACT_AMBIGUOUS'
-  | 'CONTACT_MATCH_NOT_ACTIVE'
-  | 'CONTACT_NAME_TAKEN'
-  | 'CONTACT_SEARCH_INCOMPLETE'
-  | 'CONTACT_LINK_CONFLICT'
   | 'XERO_INVOICE_ALREADY_RECORDED';
 
 export class XeroSafeguardError extends Error {
@@ -63,7 +57,7 @@ export function isSendingEnabled(): boolean {
 }
 
 /**
- * May the app CREATE contacts and invoices in Xero? XERO_CREATION_ENABLED exactly "true", or emailing enabled (which needs
+ * May the app CREATE invoices in Xero? XERO_CREATION_ENABLED exactly "true", or emailing enabled (which needs
  * an invoice to exist). Anything else - unset, empty, "TRUE", "1" - means no: nothing at all is written to Xero.
  */
 export function isCreationEnabled(): boolean {

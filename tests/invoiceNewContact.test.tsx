@@ -1,7 +1,7 @@
 // "+ Add another email address" on the invoice screen (Ready for accounts): the shared new-contact form, for the job's client,
-// with a REQUIRED valid email (it is what Xero emails and how the server finds or creates the Xero contact on the first send). A
-// new contact is saved on its own, becomes the chosen recipient once the recipient list has reloaded, and nothing is saved,
-// created in Xero or emailed until the manager presses the main button. Also exercised in a real browser against DEV.
+// with a REQUIRED valid email. A new contact is saved on its own (in the app only), becomes the chosen recipient once the
+// recipient list has reloaded, and cannot be invoiced until the manager links it to its existing Xero contact - which the notice
+// offers straight away. Nothing is saved, created in Xero or emailed until the manager presses the main button.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -19,15 +19,16 @@ const CONTACTS = [{ id: 'c1', name: 'Sam Client', email: 'sam@atlas.test', isPri
 test('CHECKS: an invoice recipient needs a valid email; name still required; duplicates still refused', () => {
   const check = (over: Partial<typeof BLANK_CONTACT_FORM>) => checkContactForm({ ...BLANK_CONTACT_FORM, ...over }, CONTACTS, null, { requireEmail: true });
   assert.deepEqual(check({ name: '' }), { ok: false, error: 'Enter a name.' });
-  assert.deepEqual(check({ name: 'Alex' }), { ok: false, error: 'Enter an email address: the invoice is emailed to it, and its Xero contact is found by it.' });
+  assert.deepEqual(check({ name: 'Alex' }), { ok: false, error: 'Enter an email address.' });
   assert.deepEqual(check({ name: 'Alex', email: 'not-an-email' }), { ok: false, error: 'Enter a valid email address.' });
   assert.match((check({ name: 'Sam 2', email: ' SAM@atlas.test ' }) as { error: string }).error, /Sam Client already has this email address/);
   const ok = check({ name: ' Alex ', email: ' alex@contour.test ', phoneNumber: '0207' });
   assert.deepEqual(ok, { ok: true, input: { name: 'Alex', email: 'alex@contour.test', phoneNumber: '0207', isPrimary: false } });
 });
 
-test('a contact created this way is a valid recipient straight away: unlinked, with a valid email -> matched or created in Xero on send', () => {
-  assert.equal(canSendInvoiceTo({ xeroContactId: null, xeroOrgId: null, email: 'alex@contour.test' }), true);
+test('a contact created this way is NOT a valid recipient until it is linked: it is never matched or created in Xero on send', () => {
+  assert.equal(canSendInvoiceTo({ xeroContactId: null, xeroOrgId: null }), false);
+  assert.equal(canSendInvoiceTo({ xeroContactId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', xeroOrgId: 'org-1' }), true, 'once linked');
 });
 
 test('FORM: the invoice variant marks the email required and carries its note; Create and Cancel', () => {
@@ -59,7 +60,9 @@ test('SAVE: the contact is created, the recipient lists reload, THEN it is chose
   assert.match(block, /setSelectedContactId\(contact\.id\);/);
   assert.match(block, /The invoice has not been saved, created in Xero or emailed\./);
   assert.doesNotMatch(block, /sendMutation|sendInvoice|persistCurrentDraft|updateInvoiceDraft/, 'adding a contact never saves or sends the invoice');
-  assert.match(block, /This invoice is not saved, created in Xero or emailed until you press “\{mode\.label\}”/);
+  assert.match(block, /This invoice is not saved, created in Xero or emailed until you press\s+“\{mode\.label\}”/);
+  assert.match(block, /nothing is created or linked in Xero\. Before this invoice can be submitted, link the\s+contact to its existing Xero contact \(offered next\)/);
+  assert.match(block, /setJustAdded\(contact\);/, 'the notice then offers the link for this contact');
 });
 
 test('the invoice screen passes the job\'s client and its name; the editor keeps its own unsaved edits (it stays open)', () => {

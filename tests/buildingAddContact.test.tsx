@@ -31,9 +31,9 @@ test('CHECKS: a name is required; everything else is optional and tidied', () =>
   });
 });
 
-test('DUPLICATES: an email another contact of this client already has is refused (any case or spacing) - edit that contact instead', () => {
+test('DUPLICATES: an email another contact of this client already has is refused (any case or spacing) unless confirmed - and names that contact', () => {
   const r = checkContactForm({ ...BLANK_CONTACT_FORM, name: 'Sam Again', email: '  sam@ATLAS.test ' }, CONTACTS);
-  assert.deepEqual(r, { ok: false, error: 'Sam Client already has this email address. Edit that contact instead of adding another.' });
+  assert.deepEqual(r, { ok: false, error: 'Sam Client already has this email address. Edit that contact instead of adding another.', duplicateOf: { id: 'c1', name: 'Sam Client' } });
   assert.equal(checkContactForm({ ...BLANK_CONTACT_FORM, name: 'Pat Ops' }, CONTACTS).ok, true, 'the same name without a shared email is allowed (two people can share a name)');
   assert.equal(checkContactForm({ ...BLANK_CONTACT_FORM, name: 'Sam Client', email: 'sam@atlas.test' }, CONTACTS, 'c1').ok, true, 'editing a contact may keep its own email');
   assert.equal(checkContactForm({ ...BLANK_CONTACT_FORM, name: 'X', email: 'other@atlas.test' }, CONTACTS).ok, true);
@@ -70,7 +70,8 @@ test("SAVE: the building's client id, the shared form (shared checks, the existi
   assert.doesNotMatch(wrapper, /requireEmail/, 'an email stays optional on the Building File, as in All Live Jobs');
   const shared = src('src', 'components', 'contacts', 'NewContactForm.tsx');
   assert.match(shared, /const created = await createContactForClient\(clientId, input\);/);
-  assert.match(shared, /const checked = checkContactForm\(form, contacts, null, \{ requireEmail \}\);\s+if \(!checked\.ok\) \{\s+setError\(checked\.error\);\s+return;/);
+  assert.match(shared, /const checked = checkContactForm\(form, contacts, null, \{ requireEmail, allowDuplicateEmail \}\);\s+if \(!checked\.ok\) \{/);
+  assert.match(shared, /setDuplicate\(null\);\s+setError\(checked\.error\);\s+\}\s+return;/, 'any other refusal is shown and nothing is saved');
   assert.match(shared, /await Promise\.all\(refreshKeys\.map\(\(queryKey\) => queryClient\.invalidateQueries\(\{ queryKey \}\)\)\);/);
   assert.match(shared, /onError: \(err\) => setError\(err instanceof Error \? err\.message : 'Failed to create contact\.'\)/, 'a refused save shows the reason');
   for (const code of [wrapper, shared]) assert.doesNotMatch(code, /xeroLinks|linkContact|xero-link-contact|xero-create|sendInvoice/i, 'no Xero call, nothing sent');
@@ -81,7 +82,7 @@ test('PAGE: "+ Add contact" on the Contacts panel opens the form for the buildin
   assert.match(page, />\s*\+ Add contact\s*<\/button>/);
   assert.match(page, /disabled=\{contactsLoading \|\| contactsError\}/, 'not offered until the contacts have loaded');
   assert.match(page, /<BuildingAddContactForm\s+clientId=\{building\.clientId\}\s+clientName=\{building\.clientName\}\s+buildingId=\{building\.id\}\s+contacts=\{contacts\}\s+onClose=\{\(\) => setAddingContact\(false\)\}/);
-  assert.match(page, /setContactNotice\(`Contact added: \$\{name\}\.`\)/);
+  assert.match(page, /setContactNotice\(`Contact added: \$\{contact\.name\}\.`\);\s+setJustAddedContactId\(contact\.id\);/);
   assert.match(page, /<div className="max-h-\[320px\] overflow-y-auto">/);
   assert.match(page, /No contacts recorded for this client\./, 'the empty state is kept');
   assert.match(page, /Couldn't load contacts\./, 'the error state is kept');

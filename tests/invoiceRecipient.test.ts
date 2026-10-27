@@ -39,7 +39,8 @@ test('with nothing chosen there is nothing to send to', () => {
 test('sending never creates a contact: the send has no contact creation in it, and the editor has no contact inputs of its own', () => {
   const mutation = code.slice(code.indexOf('const sendMutation'), code.indexOf('const anyMutationPending'));
   assert.doesNotMatch(mutation, /createContactForClient|NewContactForm/);
-  assert.doesNotMatch(code, /createContactForClient|newContactName|newContactEmail|isValidEmail/, 'only the shared form creates contacts');
+  assert.doesNotMatch(code, /createContactForClient|newContactName|newContactEmail/, 'only the shared form creates contacts');
+  assert.deepEqual(code.match(/isValidEmail\([^)]*\)/g), ['isValidEmail(selectedContact.email)'], 'email validity is only read, to explain a contact without one');
 });
 
 test('the refusal happens FIRST in the send: before the draft is saved and before anything is sent', () => {
@@ -52,8 +53,8 @@ test('the refusal happens FIRST in the send: before the draft is saved and befor
 });
 
 test('Send is disabled while the "add" option is selected, and the shared new-contact form is shown (email required)', () => {
-  assert.match(code, /const recipientValid =\s+recipientLocked \|\| \(!addingNewContact && !recipientUnavailable && /);
-  assert.match(code, /disabled=\{anyMutationPending \|\| lines\.length === 0 \|\| !recipientValid\}/);
+  assert.match(code, /const recipientChosen = recipientLocked \|\| \(!addingNewContact && !recipientUnavailable && /);
+  assert.match(code, /disabled=\{anyMutationPending \|\| lines\.length === 0 \|\| !recipientChosen\}/);
   assert.match(code, /\{editable && !recipientLocked && addingNewContact && \(\s*<NewRecipientDialog clientName=\{clientName\} onClose=\{\(\) => setSelectedContactId\(''\)\}>\s*<NewContactForm\s+clientId=\{clientId\}/);
   assert.match(code, /requireEmail\s+refreshKeys=\{\[\['jobRows'\], \['historicalJobRows'\], \['contacts', clientId\]\]\}/);
 });

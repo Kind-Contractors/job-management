@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listBuildingHistory, listBuildingPhotos, listBuildingRows } from '../repository/buildingsRepository';
 import { listHistoricalJobRows, listJobRows } from '../repository/jobsRepository';
 import { listContactsForClient } from '../repository/contactsRepository';
@@ -14,7 +14,10 @@ import BuildingReportsPanel from '../components/buildings/BuildingReportsPanel';
 import ChangeBuildingClientPanel from '../components/buildings/ChangeBuildingClientPanel';
 import BuildingManagementHistory from '../components/buildings/BuildingManagementHistory';
 import BuildingAddContactForm from '../components/buildings/BuildingAddContactForm';
-import { linkStatusLabel, localLinkStatus } from '../lib/xeroLinkStatus';
+import LinkXeroContactDialog from '../components/jobs/LinkXeroContactDialog';
+import { refreshAfterXeroLink } from '../components/jobs/UnlinkedRecipientsList';
+import type { Contact } from '../domain/types';
+import { isUsableRecipient, linkStatusLabel, localLinkStatus } from '../lib/xeroLinkStatus';
 import { HISTORY_EVENT_LABEL, historyEventDetail } from '../lib/historyEventLabels';
 
 type Tab = 'site' | 'history';
@@ -40,6 +43,11 @@ export default function BuildingFilePage() {
   const [clientNotice, setClientNotice] = useState<string | null>(null);
   const [addingContact, setAddingContact] = useState(false);
   const [contactNotice, setContactNotice] = useState<string | null>(null);
+  // The contact just added here: the notice offers to link it to its existing Xero contact straight away (optional).
+  const [justAddedContactId, setJustAddedContactId] = useState<string | null>(null);
+  // The contact whose "Link to Xero" was pressed: opens the shared LinkXeroContactDialog for exactly that contact.
+  const [linkingContact, setLinkingContact] = useState<Contact | null>(null);
+  const queryClient = useQueryClient();
   const [editingAccess, setEditingAccess] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [creatingJob, setCreatingJob] = useState(false);
@@ -325,6 +333,7 @@ export default function BuildingFilePage() {
                     onClick={() => {
                       setAddingContact(true);
                       setContactNotice(null);
+                      setJustAddedContactId(null);
                     }}
                     disabled={contactsLoading || contactsError}
                     className="ml-auto cursor-pointer text-[11.5px] text-teal-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
@@ -336,6 +345,22 @@ export default function BuildingFilePage() {
               {contactNotice && (
                 <div role="status" className="border-b border-divider bg-teal-100 px-4 py-2 text-[12px] text-teal-700">
                   {contactNotice}
+                  {(() => {
+                    // Offered, never done for the manager: the new contact is linked only if they choose and confirm a Xero contact.
+                    const added = justAddedContactId ? contacts.find((c) => c.id === justAddedContactId) : undefined;
+                    if (!added) return null;
+                    return isUsableRecipient(added) ? (
+                      <> {linkStatusLabel(added)}.</>
+                    ) : (
+                      <>
+                        {' '}
+                        To invoice it, link it to its existing Xero contact.{' '}
+                        <button type="button" onClick={() => setLinkingContact(added)} className="cursor-pointer font-semibold underline">
+                          Link to Xero contact now
+                        </button>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
               {contactsLoading ? (
@@ -365,6 +390,14 @@ export default function BuildingFilePage() {
                     <span className="text-right text-neutral-600">
                       {c.email ?? c.phoneNumber ?? '—'}
                       <span className={`block text-[11px] ${localLinkStatus(c) === 'linked' ? 'text-teal-700' : 'text-due-fg'}`}>{linkStatusLabel(c)}</span>
+                      <button
+                        type="button"
+                        onClick={() => setLinkingContact(c)}
+                        aria-label={`${localLinkStatus(c) === 'not_linked' ? 'Link' : 'Change the Xero link of'} ${c.name}`}
+                        className="mt-0.5 cursor-pointer text-[11px] text-teal-700 underline"
+                      >
+                        {localLinkStatus(c) === 'linked' ? 'Change Xero link' : 'Link to Xero'}
+                      </button>
                     </span>
                   </div>
                 ))}
@@ -377,13 +410,30 @@ export default function BuildingFilePage() {
                   buildingId={building.id}
                   contacts={contacts}
                   onClose={() => setAddingContact(false)}
-                  onCreated={(name) => {
+                  onCreated={(contact) => {
                     setAddingContact(false);
-                    setContactNotice(`Contact added: ${name}.`);
+                    setContactNotice(`Contact added: ${contact.name}.`);
+                    setJustAddedContactId(contact.id);
                   }}
                 />
               )}
             </div>
+
+            {linkingContact && (
+              // The shared link dialog: the email lookup lists every Xero contact with this contact's email and picks none; the name
+              // search is pre-filled with this building's name (Xero often has one contact per building). Nothing is linked until the
+              // manager chooses and confirms; replacing a link needs its own confirmation, and a contact that is any building's
+              // default recipient cannot be re-linked (the server refuses until that default is cleared).
+              <LinkXeroContactDialog
+                localContactId={linkingContact.id}
+                localContactName={linkingContact.name}
+                localContactEmail={linkingContact.email}
+                suggestedTerm={building.name || building.buildingName || linkingContact.name}
+                currentXeroContactId={linkingContact.xeroContactId}
+                onClose={() => setLinkingContact(null)}
+                onLinked={() => refreshAfterXeroLink(queryClient)}
+              />
+            )}
 
             {!contactsLoading && !contactsError && <BuildingDefaultRecipientPanel building={building} contacts={contacts} />}
 

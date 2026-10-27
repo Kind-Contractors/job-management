@@ -1,8 +1,14 @@
 // Who an invoice may be sent to. Kept free of React and the data layer so the rule can be tested directly.
 //
-// An invoice goes to a contact that is linked to a Xero contact, or to an unlinked contact with a valid email: on the first send
-// the server matches that one to its Xero contact by email, or creates it (autoXeroContact.ts). A NEW contact is first saved on
-// its own ("+ Add another email address" opens the contact form); it is never created as part of sending.
+// Any contact of the client can be CHOSEN as the recipient, linked to Xero or not (a new contact may not be in Xero yet). An
+// invoice is only SENT to a contact that the manager has explicitly linked to an existing Xero contact (or to the building's saved
+// default, which is such a contact): pressing the button with an unlinked contact saves and sends nothing, and the editor explains
+// and offers "Link to Xero contact" (sendAttemptOutcome). An unlinked contact is never matched to a Xero contact by its email or
+// created in Xero, and the server refuses it too (NOT_LINKED). A NEW contact is first saved on its own ("+ Add another email
+// address" opens the contact form); it is never created as part of sending.
+
+import type { JobContactSummary } from '../domain/types';
+import { canSendInvoiceTo } from './xeroLinkStatus';
 
 export const UNLINKED_NEW_CONTACT_MESSAGE =
   'Save the new contact first (Create contact), then send. Nothing was saved or sent. Or choose an existing recipient.';
@@ -10,7 +16,7 @@ export const UNLINKED_NEW_CONTACT_MESSAGE =
 export const NO_USABLE_DEFAULT_MESSAGE =
   "No recipient is chosen for this invoice, and this building has no usable default recipient. Choose a contact that is linked to Xero, or set the building's default recipient on the building page.";
 export const NOT_LINKED_RECIPIENT_MESSAGE =
-  'That contact is not linked to a Xero contact, so an invoice cannot be sent to it. Link it first (Contacts), or choose a linked contact.';
+  'That contact is not linked to a Xero contact, so an invoice cannot be sent to it. Link it to its existing Xero contact first ("Link to Xero contact"), or choose a linked contact. Nothing was saved or sent.';
 export const RECIPIENT_UNAVAILABLE_MESSAGE =
   'The recipient list could not be refreshed, so the contact you chose is not in it yet. Nothing has been saved or sent. Reload the recipients and try again.';
 export const LOCKED_RECIPIENT_MESSAGE =
@@ -35,6 +41,19 @@ export interface RecipientChoice {
 }
 
 export type RecipientSelectionState = 'default' | 'adding' | 'available' | 'missing';
+
+/**
+ * What pressing the invoice's main button does: 'send' (the editor is saved, then the server is called), or 'needs_xero_link' -
+ * the chosen contact is not linked to a Xero contact, so NOTHING is saved or sent and the editor explains and offers the link. An
+ * invoice Xero already holds always goes on to the server: its recipient is the locked one, whatever is chosen locally.
+ */
+export function sendAttemptOutcome(choice: {
+  recipientLocked: boolean;
+  selectedContact: Pick<JobContactSummary, 'xeroContactId' | 'xeroOrgId'> | null;
+}): 'send' | 'needs_xero_link' {
+  if (choice.recipientLocked || !choice.selectedContact) return 'send';
+  return canSendInvoiceTo(choice.selectedContact) ? 'send' : 'needs_xero_link';
+}
 
 /**
  * What the recipient selection currently is: nothing chosen (the building default, if any, applies), the new-contact form, a

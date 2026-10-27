@@ -9,7 +9,8 @@ interface BuildingAddContactFormProps {
   /** The client's current contacts (for the duplicate-email check and the primary-contact note). */
   contacts: Pick<Contact, 'id' | 'name' | 'email' | 'isPrimary'>[];
   onClose: () => void;
-  onCreated: (name: string) => void;
+  /** The saved contact (unlinked: the Building File then offers to link it to its Xero contact). */
+  onCreated: (contact: Contact) => void;
 }
 
 /**
@@ -27,7 +28,7 @@ export default function BuildingAddContactForm({ clientId, clientName, buildingI
         // and report pickers) and on this building's History (a "Contact added" entry).
         refreshKeys={[['contacts', clientId], ['jobRows'], ['historicalJobRows'], ['buildingHistory', buildingId]]}
         onCancel={onClose}
-        onCreated={(contact) => onCreated(contact.name)}
+        onCreated={onCreated}
       />
     </div>
   );

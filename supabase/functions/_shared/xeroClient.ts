@@ -128,8 +128,8 @@ export async function xeroPost<T>(
   return (responseText ? JSON.parse(responseText) : {}) as T;
 }
 
-// Contacts: read by id, a read-only search, and ONE create (createContact, used only by ../_shared/autoXeroContact.ts after
-// it has ruled out an existing match). There is no update and no name-only lookup: a contact is never matched by name alone.
+// Contacts: read by id and a read-only search, nothing else. There is no create and no update: the app never creates or changes a
+// Xero contact. A manager links each local contact to an EXISTING Xero contact explicitly (xero-link-contact).
 
 const XERO_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -193,22 +193,6 @@ export async function searchContacts(accessToken: string, term: string, pageSize
   const params = new URLSearchParams({ searchTerm: term, includeArchived: 'true', page: '1', pageSize: String(pageSize) });
   const result = await xeroGet<{ Contacts?: XeroContact[] }>(accessToken, `/Contacts?${params.toString()}`);
   return result.Contacts ?? [];
-}
-
-/**
- * Creates ONE contact (POST /Contacts) with only a name and an email address. The Idempotency-Key makes a retried or timed-out
- * request return the contact the first request created instead of a second one. Never updates an existing contact.
- */
-export async function createContact(accessToken: string, input: { Name: string; EmailAddress: string }, idempotencyKey: string): Promise<XeroContact> {
-  const result = await xeroPost<{ Contacts?: XeroContact[] }>(
-    accessToken,
-    '/Contacts',
-    { Contacts: [{ Name: input.Name, EmailAddress: input.EmailAddress }] },
-    idempotencyKey,
-  );
-  const contact = result.Contacts?.[0];
-  if (!contact || !isXeroId(contact.ContactID)) throw new Error('Xero did not return the created contact.');
-  return contact;
 }
 
 export interface XeroInvoiceSummary {

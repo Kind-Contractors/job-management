@@ -29,7 +29,7 @@
 //
 // SAFEGUARDS (see ../_shared/xeroSafeguards.ts), all fail-closed:
 //   1. Two switches, both off unless exactly "true" (see ../_shared/xeroSafeguards.ts):
-//      - XERO_CREATION_ENABLED (or XERO_SENDING_ENABLED): may contacts and invoices be created in Xero at all? Checked
+//      - XERO_CREATION_ENABLED (or XERO_SENDING_ENABLED): may invoices be created in Xero at all? Checked
 //        BEFORE the invoice is claimed, so a blocked request leaves the invoice row exactly as it was.
 //      - XERO_SENDING_ENABLED: may invoices be EMAILED at all here? Checked again immediately before the email step, together
 //        with the manager's Automatic Invoice Emails toggle (safeguard 7): both must allow it. When either does not
@@ -41,9 +41,10 @@
 //      so a wrong organisation leaves the invoice row untouched (the atomic claim remains the concurrency guard).
 //   3. A linked recipient (contacts.xero_contact_id) is re-read by id in the connected organisation (it must exist there,
 //      be ACTIVE and have an email) before any invoice is created, updated or authorised; an id from another organisation
-//      does not exist here and is refused. A recipient the manager chose that is NOT linked yet is, on a first send only,
-//      linked to its one existing Xero contact with the same email, or created in Xero (../_shared/autoXeroContact.ts):
-//      after the organisation check, never by name alone, refused when ambiguous, idempotent across retries.
+//      does not exist here and is refused. A recipient the manager chose that is NOT linked is refused (NOT_LINKED) -
+//      before the invoice is claimed, so a draft stays a draft. Nothing is searched for, matched by email or created in Xero:
+//      the manager links the contact to the right EXISTING Xero contact first (xero-link-contact). This function cannot create
+//      a Xero contact at all (the Xero client has no contact create).
 //   4. An invoice that already has a Xero invoice id must still exist in the connected organisation before it is updated.
 //   5. The recipient is never guessed (see ../_shared/invoiceRecipients.ts). On a first send it is the contact the manager
 //      explicitly chose, else the BUILDING'S SAVED DEFAULT, else the send is refused. The contact's link must be recorded
@@ -99,8 +100,7 @@ import {
   type XeroTaxRate,
 } from '../_shared/xeroClient.ts';
 import { InvoiceRelationshipError, loadAndValidateInvoice, type ValidatedInvoice } from '../_shared/invoiceRelationships.ts';
-import { resolveFirstSendRecipient, resolveLockedRecipient, type ResolvedRecipient } from '../_shared/invoiceRecipients.ts';
-import { linkOrCreateXeroContact } from '../_shared/autoXeroContact.ts';
+import { loadContactForClient, resolveFirstSendRecipient, resolveLockedRecipient, type ResolvedRecipient } from '../_shared/invoiceRecipients.ts';
 import { decideAutoInvoiceEmail } from '../_shared/invoiceEmailSetting.ts';
 import {
   assertConnectedToExpectedOrganisation,
@@ -308,6 +308,29 @@ Deno.serve(async (req: Request) => {
     return json({ status: 'blocked', error: errorMessage(err) }, 500);
   }
 
+  // A chosen recipient that is not linked to a Xero contact can never be invoiced: refuse it now, with a database read only, so
+  // the invoice is not claimed (a draft stays a draft, a failed invoice keeps its error) and Xero is not called. An unlinked
+  // contact can never be the locked recipient of an invoice Xero already holds either. Any other problem with the chosen
+  // contact (not found, another client's) is reported by the full check after the claim, exactly as before.
+  if (contactId) {
+    let chosen: Awaited<ReturnType<typeof loadContactForClient>> | null = null;
+    try {
+      chosen = await loadContactForClient(callerClient, contactId, validated.clientId);
+    } catch {
+      chosen = null;
+    }
+    if (chosen && !chosen.xero_contact_id?.trim()) {
+      return json(
+        {
+          status: 'blocked',
+          code: 'NOT_LINKED',
+          error: `${chosen.name} is not linked to a Xero contact, so this invoice cannot be created for them. Use "Link to Xero" to choose their existing Xero contact, then try again. The app never matches or creates a Xero contact by itself. Nothing was sent to Xero.`,
+        },
+        409,
+      );
+    }
+  }
+
   // Authenticate with Xero and verify the connected organisation BEFORE the invoice is claimed. Both steps are
   // read-only, so a wrong organisation, a failed lookup or a failed login leaves the invoice row exactly as it was
   // (never 'sending', never 'failed'). The claim below is still the concurrency guard: two simultaneous requests
@@ -389,20 +412,6 @@ Deno.serve(async (req: Request) => {
           ...recipientContext,
           buildingId: recheck.buildingId,
           requestedContactId: contactId,
-          // An explicitly chosen contact that is not linked yet is linked to its existing Xero contact (by email) or created
-          // in Xero - in the connected organisation verified above, never by name alone, never on a retry of an invoice
-          // Xero already holds (that recipient is locked).
-          autoLink: async (contact) => {
-            const { data: who } = await callerClient.auth.getUser();
-            return linkOrCreateXeroContact({
-              db: callerClient,
-              accessToken,
-              connectedOrgId,
-              clientName: client.company_name,
-              contact,
-              linkedBy: `auto (invoice send): ${who.user?.email ?? 'unknown'}`,
-            });
-          },
         });
     const xeroContactId = recipient.xeroContactId;
 

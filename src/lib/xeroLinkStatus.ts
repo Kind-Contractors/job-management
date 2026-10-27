@@ -18,18 +18,15 @@ export const isUsableRecipient = (c: Pick<JobContactSummary, 'xeroContactId' | '
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/**
- * A contact with NO Xero link at all but a valid email: on a first send the server links it to its one existing Xero contact
- * with that email, or creates it in Xero (supabase/functions/_shared/autoXeroContact.ts), and refuses when that is ambiguous.
- */
-export const canLinkAutomatically = (c: Pick<JobContactSummary, 'xeroContactId' | 'email'>): boolean =>
-  // `== null`: no link at all, whether the field is null or missing (a contact cached before the field existed). A blank or
-  // whitespace link is NOT treated as unlinked: the server refuses it rather than replacing it.
-  c.xeroContactId == null && EMAIL_PATTERN.test((c.email ?? '').trim());
+/** A plausible email address (one address, no spaces). */
+export const isValidEmail = (email: string | null | undefined): boolean => EMAIL_PATTERN.test((email ?? '').trim());
 
-/** Can an invoice be sent to this contact (the server still verifies everything)? Linked, or linkable automatically. */
-export const canSendInvoiceTo = (c: Pick<JobContactSummary, 'xeroContactId' | 'xeroOrgId' | 'email'>): boolean =>
-  isUsableRecipient(c) || canLinkAutomatically(c);
+/**
+ * Can an invoice be sent to this contact (the server still verifies everything)? Only when it is explicitly linked to a Xero
+ * contact, with the link's organisation recorded. An unlinked contact is never matched to a Xero contact by its email or
+ * created in Xero: the manager links it first ("Link to Xero"), and the server refuses it (NOT_LINKED) otherwise.
+ */
+export const canSendInvoiceTo = (c: Pick<JobContactSummary, 'xeroContactId' | 'xeroOrgId'>): boolean => isUsableRecipient(c);
 
 export function linkStatusLabel(c: Pick<JobContactSummary, 'xeroContactId' | 'xeroOrgId' | 'xeroContactName'>): string {
   switch (localLinkStatus(c)) {

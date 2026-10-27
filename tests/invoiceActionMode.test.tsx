@@ -115,7 +115,7 @@ test('EDITOR toggle OFF, NO usable default: a Xero-contact picker (not "Send inv
   assert.equal(hasSendTo(html), false);
   assert.match(html, /Xero contact for this invoice<select/);
   assert.match(html, /Xero needs a contact on every invoice, and this building has no usable default invoice contact, so choose which contact this invoice is for\. It will not be emailed\./);
-  assert.match(html, /Choose the Xero contact this invoice is for\. A contact/);
+  assert.match(html, /Choose the Xero contact this invoice is for\. A contact that is not linked to Xero yet can be chosen; it must be linked to its existing Xero\s+contact before the invoice can be sent\./);
   assert.equal(mainButton(html)[2], 'Create in Xero');
   assert.match(html, /<option value="" disabled="" selected="">Choose a recipient…<\/option>/, 'nothing is preselected: not the first, primary or only contact');
 });

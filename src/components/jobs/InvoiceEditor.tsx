@@ -9,8 +9,8 @@ import {
   updateInvoiceDraft,
   updateInvoiceLineItem,
 } from '../../repository/invoicesRepository';
-import { LOCKED_RECIPIENT_MESSAGE, RECIPIENT_UNAVAILABLE_MESSAGE, recipientSelectionState, resolveSendRecipientId } from '../../lib/invoiceRecipient';
-import { canLinkAutomatically, canSendInvoiceTo, defaultRecipientProblem, isUsableRecipient, linkStatusLabel } from '../../lib/xeroLinkStatus';
+import { LOCKED_RECIPIENT_MESSAGE, RECIPIENT_UNAVAILABLE_MESSAGE, recipientSelectionState, resolveSendRecipientId, sendAttemptOutcome } from '../../lib/invoiceRecipient';
+import { canSendInvoiceTo, defaultRecipientProblem, isUsableRecipient, isValidEmail, linkStatusLabel } from '../../lib/xeroLinkStatus';
 import LinkXeroContactDialog from './LinkXeroContactDialog';
 import { getAutoInvoiceEmailSetting } from '../../repository/appSettingsRepository';
 import { deliveryLine, sendResultMessage } from '../../lib/invoiceDelivery';
@@ -68,6 +68,11 @@ export default function InvoiceEditor({ invoiceId, onClose, clientId, clientName
   const [sendResult, setSendResult] = useState<{ ok: boolean; message: string } | null>(null);
   // Set after a contact is added from the recipient list: says it was chosen, and that nothing else happened.
   const [contactNotice, setContactNotice] = useState<string | null>(null);
+  // The contact just added here: the notice offers to link it to its Xero contact straight away (it cannot be invoiced until it is).
+  const [justAdded, setJustAdded] = useState<JobContactSummary | null>(null);
+  // The contact the main button was pressed for while it was not linked to Xero: nothing was saved or sent, and the "not linked"
+  // explanation is shown as an alert until the choice changes or the contact is linked.
+  const [xeroLinkNeededFor, setXeroLinkNeededFor] = useState<string | null>(null);
 
   // '' = the building's default recipient (or nothing, when there is no usable default); ADD_NEW_CONTACT_VALUE = the
   // "+ Add another email address" option, which opens the new-contact form (nothing can be sent while it is open);
@@ -94,6 +99,8 @@ export default function InvoiceEditor({ invoiceId, onClose, clientId, clientName
     setSelectedContactId('');
     setChooseOtherContact(false);
     setContactNotice(null);
+    setJustAdded(null);
+    setXeroLinkNeededFor(null);
   }, [invoiceId]);
 
   const invalidate = () => {
@@ -149,9 +156,10 @@ export default function InvoiceEditor({ invoiceId, onClose, clientId, clientName
   // A chosen contact must be in the list shown: one just added may not be there yet if the list failed to reload. Then nothing
   // can be submitted - never the building default or anyone else in its place - until the list is reloaded.
   const recipientUnavailable = !recipientLocked && recipientSelectionState(effectiveContactId, addingNewContact, clientContacts) === 'missing';
-  // While the new-contact form is open nothing can be submitted: the contact is saved on its own first.
-  const recipientValid =
-    recipientLocked || (!addingNewContact && !recipientUnavailable && (selectedContact ? canSendInvoiceTo(selectedContact) : !!usableDefaultContactId));
+  // A recipient is CHOSEN (the button can be pressed) when it is locked, a listed contact - linked to Xero or not - or the usable
+  // building default. While the new-contact form is open nothing can be submitted: the contact is saved on its own first. An
+  // unlinked choice is stopped on press (sendAttemptOutcome), before anything is saved or sent.
+  const recipientChosen = recipientLocked || (!addingNewContact && !recipientUnavailable && (selectedContact ? true : !!usableDefaultContactId));
 
   const sendMutation = useMutation({
     mutationFn: async () => {
@@ -392,6 +400,8 @@ export default function InvoiceEditor({ invoiceId, onClose, clientId, clientName
                 onChange={(e) => {
                   setSelectedContactId(e.target.value);
                   setContactNotice(null);
+                  setJustAdded(null);
+                  setXeroLinkNeededFor(null);
                 }}
                 disabled={anyMutationPending || recipientLocked}
                 className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-100 disabled:text-neutral-500"
@@ -411,16 +421,14 @@ export default function InvoiceEditor({ invoiceId, onClose, clientId, clientName
                   </option>
                 )}
                 {clientContacts.map((c) => (
-                  <option key={c.id} value={c.id} disabled={!canSendInvoiceTo(c)}>
+                  <option key={c.id} value={c.id}>
                     {c.name}
                     {c.email ? ` — ${c.email}` : ''}
                     {isUsableRecipient(c)
                       ? c.xeroContactName
                         ? ` · Xero: ${c.xeroContactName}`
                         : ' · linked to Xero'
-                      : canLinkAutomatically(c)
-                        ? ' · not linked: matched or created in Xero on send'
-                        : ' · not linked to Xero'}
+                      : ' · not linked to Xero yet'}
                   </option>
                 ))}
                 <option value={ADD_NEW_CONTACT_VALUE}>+ Add another email address</option>
@@ -449,28 +457,71 @@ export default function InvoiceEditor({ invoiceId, onClose, clientId, clientName
             {!recipientLocked && !effectiveContactId && !usableDefaultContactId && !defaultProblem && (
               clientContacts.some(canSendInvoiceTo) ? (
                 <div className="border border-neutral-300 bg-neutral-100 p-2 text-[11.5px] text-neutral-700">
-                  Choose {choosePhrase}. A contact that is not in Xero yet can be chosen: it is matched to its Xero contact
-                  by email, or created in Xero, when you submit the invoice.
+                  Choose {choosePhrase}. A contact that is not linked to Xero yet can be chosen; it must be linked to its existing Xero
+                  contact before the invoice can be sent.
                 </div>
               ) : (
                 <div className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg">
-                  None of this client's contacts can receive an invoice yet: add an email address to a contact, or link one to its Xero
-                  contact.
+                  None of this client&apos;s contacts is linked to a Xero contact yet. You can choose any of them, but it must be linked to
+                  its existing Xero contact (Link, below) before the invoice can be sent. The app never matches or creates a Xero contact
+                  by itself.
                 </div>
               )
             )}
-            {!recipientLocked && selectedContact && !isUsableRecipient(selectedContact) && canLinkAutomatically(selectedContact) && (
-              <div className="border border-neutral-300 bg-neutral-100 p-2 text-[11.5px] text-neutral-700">
-                Not linked to Xero yet. On send, the app uses the one Xero contact with this email address, or creates one if there is
-                none. If several match, it stops and asks you to link the right one.
-              </div>
-            )}
             {!recipientLocked && selectedContact && !canSendInvoiceTo(selectedContact) && (
-              <div className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg">{linkStatusLabel(selectedContact)}.</div>
+              // Shown as soon as an unlinked contact is chosen; after a press of the main button it becomes an alert that says
+              // nothing was saved or sent. Linking stays the explicit, confirmed choice in the shared dialog.
+              <div
+                data-testid="recipient-not-linked"
+                role={xeroLinkNeededFor === selectedContact.id ? 'alert' : undefined}
+                className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg"
+              >
+                {xeroLinkNeededFor === selectedContact.id && <div className="font-semibold">Not sent: a Xero contact is needed.</div>}
+                {linkStatusLabel(selectedContact)}. {selectedContact.name} must be linked to their existing Xero contact before this invoice
+                can be sent: link them, then press &ldquo;{mode.label}&rdquo; again.
+                {xeroLinkNeededFor === selectedContact.id && ' Nothing has been saved or sent.'}
+                {!isValidEmail(selectedContact.email) && (
+                  <div data-testid="recipient-no-email" className="mt-1">
+                    {selectedContact.name} has no email address in the app. The invoice uses the email address held on the Xero contact
+                    you link, so choose the Xero contact that has the right invoicing email.
+                  </div>
+                )}
+                <div className="mt-1">
+                  <button
+                    type="button"
+                    onClick={() => setLinkingContact(selectedContact)}
+                    disabled={anyMutationPending}
+                    className="cursor-pointer font-semibold underline disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Link to Xero contact
+                  </button>
+                </div>
+              </div>
             )}
             {!addingNewContact && contactNotice && (
               <div role="status" className="border border-teal-700/40 bg-teal-100 p-2 text-[11.5px] text-teal-700">
                 {contactNotice}
+                {justAdded &&
+                  (() => {
+                    // The contact as the reloaded list now holds it: once linked, the notice says so instead of offering the link.
+                    const current = clientContacts.find((c) => c.id === justAdded.id) ?? justAdded;
+                    return isUsableRecipient(current) ? (
+                      <> {linkStatusLabel(current)}.</>
+                    ) : (
+                      <>
+                        {' '}
+                        It must be linked to its existing Xero contact before the invoice can be submitted.{' '}
+                        <button
+                          type="button"
+                          onClick={() => setLinkingContact(current)}
+                          disabled={anyMutationPending}
+                          className="cursor-pointer font-semibold underline disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Link to Xero contact now
+                        </button>
+                      </>
+                    );
+                  })()}
               </div>
             )}
             <div
@@ -502,9 +553,14 @@ export default function InvoiceEditor({ invoiceId, onClose, clientId, clientName
               <button
                 onClick={() => {
                   setSendResult(null);
+                  // An unlinked recipient: nothing is saved or sent; the explanation and the Link action are shown instead.
+                  if (sendAttemptOutcome({ recipientLocked, selectedContact }) === 'needs_xero_link') {
+                    setXeroLinkNeededFor(selectedContact?.id ?? null);
+                    return;
+                  }
                   sendMutation.mutate();
                 }}
-                disabled={anyMutationPending || lines.length === 0 || !recipientValid}
+                disabled={anyMutationPending || lines.length === 0 || !recipientChosen}
                 className="cursor-pointer bg-teal px-2.5 py-1 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {sendMutation.isPending ? mode.pendingLabel : mode.label}
@@ -524,8 +580,9 @@ export default function InvoiceEditor({ invoiceId, onClose, clientId, clientName
 
       {editable && !recipientLocked && addingNewContact && (
         // "+ Add another email address": the shared new-contact form in a dialog over the invoice. A new recipient is saved on its
-        // own, as an app contact only, then becomes the chosen recipient; the invoice is created in Xero (where the contact is
-        // matched by email or created) only when the manager presses the main button. Closing it goes back to the recipient list.
+        // own, as an app contact only, then becomes the chosen recipient. It cannot be invoiced until it is linked to its existing
+        // Xero contact: the notice offers that next (the shared link dialog). Nothing is created in Xero, and the invoice is not
+        // saved or submitted, by adding or linking a contact. Closing the form goes back to the recipient list.
         <NewRecipientDialog clientName={clientName} onClose={() => setSelectedContactId('')}>
           <NewContactForm
             clientId={clientId}
@@ -535,14 +592,18 @@ export default function InvoiceEditor({ invoiceId, onClose, clientId, clientName
             refreshKeys={[['jobRows'], ['historicalJobRows'], ['contacts', clientId]]}
             note={
               <div className="text-[11px] text-neutral-600">
-                Saves the contact in the app only. This invoice is not saved, created in Xero or emailed until you press “{mode.label}”;
-                then the contact is matched to its Xero contact by email, or created in Xero.
+                Saves the contact in the app only: nothing is created or linked in Xero. Before this invoice can be submitted, link the
+                contact to its existing Xero contact (offered next). This invoice is not saved, created in Xero or emailed until you press
+                “{mode.label}”.
               </div>
             }
             onCancel={() => setSelectedContactId('')}
             onCreated={(contact) => {
               setSelectedContactId(contact.id);
-              setContactNotice(`${contact.name} was added and chosen as the recipient. The invoice has not been saved, created in Xero or emailed.`);
+              setJustAdded(contact);
+              setContactNotice(
+                `${contact.name} was added and chosen as the recipient. The invoice has not been saved, created in Xero or emailed.`,
+              );
             }}
           />
         </NewRecipientDialog>
