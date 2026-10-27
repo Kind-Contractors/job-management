@@ -14,6 +14,7 @@ import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 // ---- fake Deno runtime ------------------------------------------------------------------------------------------
 const ENV: Record<string, string | undefined> = {};
@@ -58,6 +59,9 @@ const world = {
   createStatus: 200,
   /** Xero's idempotency: a create repeated with the same Idempotency-Key gets the ORIGINAL response back, nothing is created. */
   invoicesByIdempotencyKey: {} as Record<string, { InvoiceID: string; InvoiceNumber: string; Contact: { ContactID: string } }>,
+  /** Every Idempotency-Key seen on an invoice write, with the request (path + body) it was first used with. As real Xero does
+   * (seen live on DEV), the same key reused for a DIFFERENT request is refused with HTTP 400, even if the first one failed. */
+  keyRequests: {} as Record<string, string>,
   /** When set, every invoice create is answered with this existing Xero invoice (a replayed or confused response). */
   forceCreateResponse: null as null | { InvoiceID: string; InvoiceNumber: string; Contact: { ContactID: string } },
   /** OTHER local invoices (id + their recorded Xero invoice id), for the "already recorded elsewhere?" check. */
@@ -134,6 +138,7 @@ function reset() {
   world.xeroInvoices = {};
   world.createStatus = 200;
   world.invoicesByIdempotencyKey = {};
+  world.keyRequests = {};
   world.forceCreateResponse = null;
   world.otherInvoices = [];
   world.otherInvoicesQueryFails = false;
@@ -210,6 +215,16 @@ function xeroApi(r: Req): Response {
   if (r.method === 'GET' && m) {
     const i = world.xeroInvoices[m[1]];
     return i ? json(200, { Invoices: [i] }) : json(404, { Type: 'NotFound', Message: 'invoice not found' });
+  }
+  if (r.method === 'POST' && /^\/Invoices(\/[^/]+)?$/.test(p)) {
+    const key = r.headers.get('idempotency-key') ?? '';
+    if (key) {
+      const request = `${p} ${JSON.stringify(r.body)}`;
+      if (world.keyRequests[key] !== undefined && world.keyRequests[key] !== request) {
+        return json(400, { Type: null, Title: 'BadRequest', Status: 400, Detail: `Idempotency Key: ${key} is used with a different request.` });
+      }
+      world.keyRequests[key] ??= request;
+    }
   }
   if (r.method === 'GET' && p === '/Accounts') return json(200, { Accounts: world.accounts });
   if (r.method === 'GET' && p === '/TaxRates') return json(200, { TaxRates: world.taxRates });
@@ -625,7 +640,7 @@ test('a malformed stored Xero invoice id never reaches Xero', async () => {
 });
 
 // ---- retries, duplicates, failures ---------------------------------------------------------------------------------------------
-test('RETRY after the email step failed: the SAME Xero invoice is updated (never a second), with the same recipient and idempotency key', async () => {
+test('RETRY after the email step failed: the SAME Xero invoice is updated (never a second), with the same recipient, under the update\'s own key', async () => {
   world.emailStatus = 500;
   const first = await call();
   assert.equal(first.status, 502);
@@ -641,7 +656,7 @@ test('RETRY after the email step failed: the SAME Xero invoice is updated (never
   assert.equal(all.length, 2);
   assert.equal(all[1].path, `/api.xro/2.0/Invoices/${XERO_INVOICE}`, 'the retry updates through the ID-scoped path, not the collection endpoint');
   assert.equal(all[1].body.Invoices[0].Contact.ContactID, CONTACT);
-  assert.equal(all[1].headers.get('idempotency-key'), firstCreate.headers.get('idempotency-key'), 'unchanged payload => identical key');
+  assert.notEqual(all[1].headers.get('idempotency-key'), firstCreate.headers.get('idempotency-key'), 'the update has its own key: Xero refuses the create\'s key on a different request');
   assert.equal(world.invoice.status, 'sent');
 });
 
@@ -768,7 +783,7 @@ test('FIRST creation is unchanged: the recipient is recorded BEFORE the create, 
   assert.ok(recorded >= 0 && recorded < created, 'recorded before the Xero create attempt');
 });
 
-test('a retry with an UNCHANGED recipient keeps the same idempotency key as before the failed update', async () => {
+test('a retry with an UNCHANGED recipient repeats the failed UPDATE under the same key (and never the create\'s key)', async () => {
   world.emailStatus = 500;
   await call();
   const firstKey = invoiceCreatesOrUpdates()[0].headers.get('idempotency-key');
@@ -778,7 +793,10 @@ test('a retry with an UNCHANGED recipient keeps the same idempotency key as befo
   world.emailStatus = 200;
   await call();
   const keys = invoiceCreatesOrUpdates().map((r) => r.headers.get('idempotency-key'));
-  assert.ok(keys.every((k) => k === firstKey), 'recipient handling never alters the payload hash');
+  assert.equal(keys.length, 3, 'create, failed update, update');
+  assert.equal(keys[0], firstKey);
+  assert.equal(keys[1], keys[2], 'the two update attempts are the same request: same key');
+  assert.notEqual(keys[1], firstKey, 'an update never reuses the create\'s key');
   assert.equal(world.invoiceCounter, 1);
   assert.equal(world.invoice.status, 'sent');
 });
@@ -1039,7 +1057,7 @@ test('COMBINED 1: a valid invoice with SEVERAL visits of the same job is sent as
   assert.equal(emailCalls().length, 1);
 });
 
-test('COMBINED 2: a multi-line invoice retried after a failed email updates the SAME Xero invoice with the same lines and idempotency key', async () => {
+test('COMBINED 2: a multi-line invoice retried after a failed email updates the SAME Xero invoice with the same lines, under the update\'s own key', async () => {
   setLines(lineFor(1), lineFor(2));
   world.emailStatus = 500;
   assert.equal((await call()).status, 502);
@@ -1050,7 +1068,7 @@ test('COMBINED 2: a multi-line invoice retried after a failed email updates the 
   assert.equal(writes[1].path, `/api.xro/2.0/Invoices/${XERO_INVOICE}`);
   assert.equal(writes[0].body.Invoices[0].LineItems.length, 2);
   assert.equal(writes[1].body.Invoices[0].LineItems.length, 2);
-  assert.equal(writes[0].headers.get('idempotency-key'), writes[1].headers.get('idempotency-key'));
+  assert.notEqual(writes[0].headers.get('idempotency-key'), writes[1].headers.get('idempotency-key'));
 });
 
 test('COMBINED 3: relationships returned as ARRAYS (as the database may shape them) are accepted exactly like objects', async () => {
@@ -1880,6 +1898,64 @@ test('IDEMPOTENCY 6: the key is scoped to the local invoice id in the Xero clien
   const b = await xeroClient.computeInvoiceIdempotencyKey({ ...base, localInvoiceId: 'inv-b' });
   assert.equal(a1, a2);
   assert.notEqual(a1, b);
+});
+
+test('IDEMPOTENCY 7: the fake Xero, like real Xero, REFUSES a key reused for a different request (create path, then update path)', async () => {
+  const headers = { Authorization: `Bearer ${ACCESS_TOKEN}`, 'Idempotency-Key': 'k-reused', 'Content-Type': 'application/json' };
+  const body = { Invoices: [{ Type: 'ACCREC', Contact: { ContactID: CONTACT }, LineItems: [], Status: 'AUTHORISED', DueDate: '2026-11-15' }] };
+  const created = await fetch('https://api.xero.com/api.xro/2.0/Invoices', { method: 'POST', headers, body: JSON.stringify(body) });
+  assert.equal(created.status, 200);
+  const updated = await fetch(`https://api.xero.com/api.xro/2.0/Invoices/${XERO_INVOICE}`, { method: 'POST', headers, body: JSON.stringify({ Invoices: [{ ...body.Invoices[0], InvoiceID: XERO_INVOICE }] }) });
+  assert.equal(updated.status, 400);
+  assert.match(((await updated.json()) as any).Detail, /Idempotency Key: k-reused is used with a different request\./);
+});
+
+test('IDEMPOTENCY 8 (DEV INV-0030 regression): an invoice already in Xero is retried UNCHANGED - the same Xero invoice is updated, no 400, no second invoice', async () => {
+  creationOnly();
+  world.appSettings = { auto_invoice_emails_enabled: false };
+  const first = await (await call()).json();
+  assert.equal(first.status, 'in_xero_not_emailed');
+  // As on DEV: the invoice is back in a retryable state with nothing changed (for example its email step failed).
+  Object.assign(world.invoice, { status: 'failed', last_error: 'simulated email-step failure' });
+  const res = await call({ invoiceId: 'inv-1' });
+  const out = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(out));
+  assert.equal(out.recipientSource, 'locked');
+  assert.equal(world.invoiceCounter, 1, 'still ONE Xero invoice');
+  const writes = invoiceCreatesOrUpdates();
+  assert.deepEqual(writes.map((w) => w.path), ['/api.xro/2.0/Invoices', `/api.xro/2.0/Invoices/${XERO_INVOICE}`]);
+  assert.notEqual(writes[0].headers.get('idempotency-key'), writes[1].headers.get('idempotency-key'));
+  assert.equal(world.invoice.xero_invoice_id, XERO_INVOICE);
+  assert.equal(world.invoice.status, 'in_xero_not_emailed');
+  assert.equal(emailCalls().length, 0);
+});
+
+test('IDEMPOTENCY 9: the key - a CREATE hashes exactly as before; an UPDATE has its own stable key, scoped to that Xero invoice', async () => {
+  const request = { localInvoiceId: 'inv-a', contactId: CONTACT, reference: 'PO-7', dueDate: '2026-11-17', lineItems: [{ Description: 'Clean', Quantity: 1, UnitAmount: 700, AccountCode: '200', TaxType: 'OUTPUT2' }] };
+  const legacy = createHash('sha256').update(JSON.stringify(request)).digest('hex');
+  const create = await xeroClient.computeInvoiceIdempotencyKey(request);
+  assert.equal(create, legacy, 'unchanged for creates: a create retried across the deploy still gets its original invoice back');
+  const update1 = await xeroClient.computeInvoiceIdempotencyKey(request, XERO_INVOICE);
+  const update2 = await xeroClient.computeInvoiceIdempotencyKey(request, XERO_INVOICE);
+  const otherInvoice = await xeroClient.computeInvoiceIdempotencyKey(request, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee');
+  assert.notEqual(update1, create, 'an update never shares the create\'s key');
+  assert.equal(update1, update2, 'repeating the same update reuses its key (Xero answers it once)');
+  assert.notEqual(update1, otherInvoice);
+  const changed = await xeroClient.computeInvoiceIdempotencyKey({ ...request, reference: 'PO-8' }, XERO_INVOICE);
+  assert.notEqual(changed, update1, 'a changed update is a new request with a new key');
+});
+
+test('IDEMPOTENCY 10: a lost CREATE response is still answered with the original invoice after the fix (duplicate protection kept)', async () => {
+  world.emailStatus = 500;
+  await call();
+  Object.assign(world.invoice, { status: 'failed', xero_invoice_id: null, xero_invoice_number: null });
+  world.emailStatus = 200;
+  const out = await (await call()).json();
+  const writes = invoiceCreatesOrUpdates();
+  assert.deepEqual(writes.map((w) => w.path), ['/api.xro/2.0/Invoices', '/api.xro/2.0/Invoices'], 'both are creates');
+  assert.equal(writes[0].headers.get('idempotency-key'), writes[1].headers.get('idempotency-key'));
+  assert.equal(out.xeroInvoiceNumber, 'INV-001');
+  assert.equal(world.invoiceCounter, 1, 'no duplicate');
 });
 
 // ---- automatic invoice emails (app_settings.auto_invoice_emails_enabled) ------------------------------------------------------------

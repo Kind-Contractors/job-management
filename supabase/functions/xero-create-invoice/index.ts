@@ -25,7 +25,8 @@
 // request (so a retry after a timeout returns Xero's original result
 // instead of creating a duplicate), but different whenever the request
 // genuinely changes (e.g. a field is fixed after a 400), since Xero
-// rejects reusing a key against a different body.
+// rejects reusing a key against a different body. An UPDATE of the Xero
+// invoice is a different request from its CREATE, so it has its own key.
 //
 // SAFEGUARDS (see ../_shared/xeroSafeguards.ts), all fail-closed:
 //   1. Two switches, both off unless exactly "true" (see ../_shared/xeroSafeguards.ts):

@@ -254,9 +254,19 @@ export interface XeroInvoiceRequest {
  * the original result instead of creating a duplicate; a CHANGED request
  * (the actual fix-and-retry case) hashes to a different key, so Xero
  * correctly treats it as new rather than rejecting it.
+ *
+ * The CREATE and a later UPDATE of the same invoice are different requests
+ * (POST /Invoices vs POST /Invoices/{InvoiceID}, whose body also names the
+ * invoice), so they must never share a key: with identical content they
+ * used to, and Xero refused the update ("Idempotency Key ... is used with a
+ * different request" - seen live on DEV, INV-0030). `existingInvoiceId`
+ * (given for an update) therefore goes into the key. A create's key is
+ * exactly what it always was, so a create retried after a lost response
+ * still gets Xero's original invoice back instead of a duplicate; repeated
+ * updates of the same invoice with the same content share their own key.
  */
-export async function computeInvoiceIdempotencyKey(request: XeroInvoiceRequest): Promise<string> {
-  const canonical = JSON.stringify({
+export async function computeInvoiceIdempotencyKey(request: XeroInvoiceRequest, existingInvoiceId?: string): Promise<string> {
+  const content = {
     localInvoiceId: request.localInvoiceId,
     contactId: request.contactId,
     reference: request.reference,
@@ -268,7 +278,9 @@ export async function computeInvoiceIdempotencyKey(request: XeroInvoiceRequest):
       AccountCode: li.AccountCode,
       TaxType: li.TaxType,
     })),
-  });
+  };
+  // Appended (not mixed in) so a create hashes byte-for-byte as before.
+  const canonical = JSON.stringify(existingInvoiceId ? { ...content, operation: 'update', xeroInvoiceId: existingInvoiceId } : content);
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, '0'))
@@ -305,7 +317,7 @@ export async function createOrUpdateAuthorisedInvoice(
   input: XeroInvoiceRequest,
   existingInvoiceId?: string,
 ): Promise<XeroCreatedInvoice> {
-  const idempotencyKey = await computeInvoiceIdempotencyKey(input);
+  const idempotencyKey = await computeInvoiceIdempotencyKey(input, existingInvoiceId);
   const path = existingInvoiceId ? `/Invoices/${existingInvoiceId}` : '/Invoices';
   const result = await xeroPost<{ Invoices: XeroCreatedInvoice[] }>(
     accessToken,
