@@ -150,8 +150,10 @@ const renderPanel = (jobLists: any[][], opts: { loading?: boolean; error?: boole
 
 test('PANEL: lists each available report with its job, visit, sent/completed facts and a Download PDF button', () => {
   const html = renderPanel([[job('j1', 'b1', [visit('v1', { scheduledDate: '2026-09-15', sentToClientAt: SENT, reportCompletedAt: DONE }), visit('v2')])]]);
-  assert.match(html, /Job reports \(1\)/);
-  assert.match(html, /Job j1<span[^>]*> · Visit 15\/09\/2026<\/span>/);
+  assert.match(html, /Job reports · 1 ready/);
+  assert.match(html, />Job j1<\/span><span[^>]*>Visit 15\/09\/2026<\/span>/);
+  assert.match(html, />Sent to client<\/span>/, 'status chip: sent to client');
+  assert.match(html, />15<\/div><div[^>]*>Sept?<\/div>/, 'date block: day and month of the visit');
   assert.match(html, /Sent to client [^<]+ · Completed /);
   assert.equal((html.match(/>Download PDF<\/button>/g) ?? []).length, 1);
   assert.match(html, /1 more report is not available yet: still in review, or not yet marked\s+Completed or sent to the client\./);
@@ -282,9 +284,9 @@ test('VIEW: failures show under the row (nothing opens); unreadable photos ask f
 });
 
 // ---- layout ---------------------------------------------------------------------------------------------------------------------------
-test('LAYOUT: Site file order is Site instructions, then Job reports, then Jobs at this building', () => {
+test('LAYOUT: Site file order is Site instructions, then Jobs at this building, then Job reports', () => {
   const page = src('pages', 'BuildingFilePage.tsx');
-  const order = ['Site instructions', '<BuildingReportsPanel', 'Jobs at this building ('].map((s) => page.indexOf(s));
+  const order = ['Site instructions', 'Jobs at this building ·', '<BuildingReportsPanel'].map((s) => page.indexOf(s));
   assert.ok(order.every((i) => i > 0), String(order));
   assert.ok(order[0] < order[1] && order[1] < order[2], String(order));
   assert.equal((page.match(/<BuildingReportsPanel/g) ?? []).length, 1, 'shown once, not also on History');

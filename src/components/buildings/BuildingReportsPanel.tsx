@@ -111,7 +111,7 @@ export default function BuildingReportsPanel({
   return (
     <div data-testid="building-reports" className="border border-neutral-300 bg-white">
       <div className="border-b border-neutral-300 px-4 py-2.5 font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
-        Job reports ({available.length})
+        Job reports · {available.length} ready
       </div>
       {historicalError && (
         <div className="border-b border-divider px-4 py-2 text-[12px] text-missed-fg">
@@ -132,12 +132,18 @@ export default function BuildingReportsPanel({
           const busy = busyReportId === entry.reportId;
           const error = errors[entry.reportId];
           return (
-            <div key={entry.reportId} className="border-b border-divider px-4 py-2 text-[12.5px] last:border-b-0">
+            <div key={entry.reportId} className="border-b border-divider px-4 py-2.5 text-[12.5px] last:border-b-0">
               <div className="flex items-center gap-3">
+                <VisitDateBlock date={entry.visit.scheduledDate} />
                 <div className="min-w-0 flex-1">
-                  <div>
-                    {entry.job.jobSummary}
-                    <span className="text-neutral-500"> · {visitLabel(entry)}</span>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span className="font-semibold text-ink">{entry.job.jobSummary}</span>
+                    <span className="text-neutral-500">{visitLabel(entry)}</span>
+                    {entry.sentToClientAt ? (
+                      <span className="bg-teal px-1 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.06em] text-white uppercase">Sent to client</span>
+                    ) : (
+                      <span className="border border-teal-700 px-1 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.06em] text-teal-700 uppercase">Completed</span>
+                    )}
                   </div>
                   <div className="text-[11px] text-neutral-500">
                     {[
@@ -194,6 +200,21 @@ export default function BuildingReportsPanel({
       {viewed && (
         <ReportViewerDialog title={viewed.title} blob={viewed.blob} onDownload={() => deps.save(viewed.blob, viewed.fileName)} onClose={closeViewer} />
       )}
+    </div>
+  );
+}
+
+const DAY = new Intl.DateTimeFormat('en-GB', { day: 'numeric' });
+const MONTH = new Intl.DateTimeFormat('en-GB', { month: 'short' });
+
+/** The visit's day and month at a glance (the full date is in the row's text). Blank when the visit has no date. */
+function VisitDateBlock({ date }: { date: string | null }) {
+  const d = date ? new Date(date) : null;
+  const valid = d !== null && !Number.isNaN(d.getTime());
+  return (
+    <div aria-hidden="true" className="w-11 flex-none border border-neutral-300 py-0.5 text-center">
+      <div className="font-heading text-base leading-tight font-semibold text-ink tabular-nums">{valid ? DAY.format(d) : '—'}</div>
+      <div className="font-heading text-[9.5px] font-semibold tracking-[0.08em] text-neutral-600 uppercase">{valid ? MONTH.format(d) : ''}</div>
     </div>
   );
 }

@@ -66,16 +66,45 @@ export default function BuildingEditor({ building, onDone }: BuildingEditorProps
 
   const input = toInput(form);
 
-  return (
-    <div className="max-w-[640px] border border-neutral-300 bg-white p-3">
-      <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">Edit building</div>
+  // Closing discards unsaved changes, so it is done only deliberately (Cancel, the close button or Escape) - never by a click
+  // outside the dialog - and not while a save is in flight.
+  const close = () => {
+    if (!saveMutation.isPending) onDone();
+  };
 
-      <div className="mt-2 flex flex-col gap-2">
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30" data-testid="building-editor-dialog"
+      // A click on the backdrop does nothing - and keeps focus in the dialog, so Escape still closes it afterwards.
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) e.preventDefault();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Edit building: ${building.buildingName}`}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') close();
+        }}
+        className="flex max-h-[90vh] w-[min(640px,95vw)] flex-col border border-neutral-300 bg-white"
+      >
+      <div className="flex flex-none items-center gap-2 border-b border-divider px-4 py-2.5">
+        <div className="min-w-0 flex-1">
+          <div className="font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">Edit building</div>
+          <div className="truncate text-[13px] font-semibold text-ink">{building.buildingName}</div>
+        </div>
+        <button onClick={close} aria-label="Close" className="flex-none cursor-pointer px-2 py-1 text-[15px] leading-none text-neutral-600 hover:bg-neutral-100">
+          ×
+        </button>
+      </div>
+
+      <div className="flex min-h-0 flex-col gap-2 overflow-y-auto p-4">
         {/* Side by side — both are short fields; stacked full-width (in a form with no width cap) left a lot of empty space to the right of each one. */}
         <div className="flex gap-2">
           <label className="flex flex-[2] flex-col gap-1 text-[11px] text-neutral-600">
             Building name (optional)
             <input
+              autoFocus
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               placeholder="Falls back to the address if left blank"
@@ -106,7 +135,7 @@ export default function BuildingEditor({ building, onDone }: BuildingEditorProps
           <textarea
             value={form.invoiceDetails}
             onChange={(e) => setForm({ ...form, invoiceDetails: e.target.value })}
-            rows={2}
+            rows={3}
             className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
           />
         </label>
@@ -116,14 +145,14 @@ export default function BuildingEditor({ building, onDone }: BuildingEditorProps
           <textarea
             value={form.siteInstructions}
             onChange={(e) => setForm({ ...form, siteInstructions: e.target.value })}
-            rows={2}
+            rows={4}
             className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
           />
         </label>
 
         {error && <div className="text-[11.5px] text-missed-fg">{error}</div>}
 
-        <div className="flex gap-1.5">
+        <div className="mt-1 flex gap-1.5">
           <button
             onClick={() => input && saveMutation.mutate(input)}
             disabled={!input || saveMutation.isPending}
@@ -131,10 +160,15 @@ export default function BuildingEditor({ building, onDone }: BuildingEditorProps
           >
             {saveMutation.isPending ? 'Saving…' : 'Save'}
           </button>
-          <button onClick={onDone} className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-600">
+          <button
+            onClick={close}
+            disabled={saveMutation.isPending}
+            className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
             Cancel
           </button>
         </div>
+      </div>
       </div>
     </div>
   );

@@ -77,13 +77,13 @@ test("SAVE: the building's client id, the shared form (shared checks, the existi
   for (const code of [wrapper, shared]) assert.doesNotMatch(code, /xeroLinks|linkContact|xero-link-contact|xero-create|sendInvoice/i, 'no Xero call, nothing sent');
 });
 
-test('PAGE: "+ Add contact" on the Contacts panel opens the form for the building\'s client; Cancel closes it; success says so; the list scrolls', () => {
+test('PAGE: "+ Add contact" on the Contacts panel opens the form for the building\'s client; Cancel closes it; success says so; the list is shown in full', () => {
   const page = src('src', 'pages', 'BuildingFilePage.tsx');
   assert.match(page, />\s*\+ Add contact\s*<\/button>/);
   assert.match(page, /disabled=\{contactsLoading \|\| contactsError\}/, 'not offered until the contacts have loaded');
   assert.match(page, /<BuildingAddContactForm\s+clientId=\{building\.clientId\}\s+clientName=\{building\.clientName\}\s+buildingId=\{building\.id\}\s+contacts=\{contacts\}\s+onClose=\{\(\) => setAddingContact\(false\)\}/);
   assert.match(page, /setContactNotice\(`Contact added: \$\{contact\.name\}\.`\);\s+setJustAddedContactId\(contact\.id\);/);
-  assert.match(page, /<div className="max-h-\[320px\] overflow-y-auto">/);
+  assert.doesNotMatch(page, /max-h-\[320px\]/, 'the compact list is shown in full, without an inner scroll box');
   assert.match(page, /No contacts recorded for this client\./, 'the empty state is kept');
   assert.match(page, /Couldn't load contacts\./, 'the error state is kept');
 });
