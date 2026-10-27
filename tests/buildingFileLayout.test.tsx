@@ -86,9 +86,9 @@ test('INVOICING: Change opens the picker with Save default and Cancel; saving cl
 });
 
 // ---- the page -----------------------------------------------------------------------------------------------------------------------
-test('PAGE: header - back to Buildings, "Managed by" the client, Edit building / Change client / Add job', () => {
+test('PAGE: header - breadcrumbs back to Buildings, "Managed by" the client, Edit building / Change client / Add job', () => {
   const p = page();
-  assert.match(p, /onClick=\{\(\) => navigate\('\/buildings'\)\}[\s\S]*?Buildings\s+<\/button>/);
+  assert.match(p, /<Breadcrumbs\s+items=\{\[\{ label: 'Buildings', to: '\/buildings' \}, \{ label: building\.clientName \?\? '' \}, \{ label: building\.buildingName \|\| 'Building' \}\]\}/);
   assert.match(p, /Managed by <span className="font-semibold text-ink">\{building\.clientName \|\| '—'\}<\/span>/);
   assert.match(p, /setEditingBuilding\(true\);\s+setChangingClient\(false\);\s+\}\}[^>]*>\s+Edit building\s+<\/button>/);
   assert.match(p, /\{changingClient \? 'Close' : 'Change client'\}/);

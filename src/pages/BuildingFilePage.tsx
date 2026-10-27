@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listBuildingHistory, listBuildingPhotos, listBuildingRows } from '../repository/buildingsRepository';
 import { listHistoricalJobRows, listJobRows } from '../repository/jobsRepository';
@@ -20,6 +20,7 @@ import type { Contact } from '../domain/types';
 import { isUsableRecipient, linkStatusLabel, localLinkStatus } from '../lib/xeroLinkStatus';
 import { contactInitials } from '../lib/contactDisplay';
 import { buildingReports } from '../lib/buildingReports';
+import Breadcrumbs from '../components/shell/Breadcrumbs';
 import { HISTORY_EVENT_LABEL, historyEventDetail } from '../lib/historyEventLabels';
 
 type Tab = 'site' | 'history';
@@ -33,7 +34,6 @@ const PHOTO_PHASE_LABEL = { before: 'Before', during: 'During', after: 'After' }
 
 export default function BuildingFilePage() {
   const { buildingId } = useParams<{ buildingId: string }>();
-  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('site');
   // Collapsed by default — the activity log can get long over time, and
   // Work Photos (always shown in full below it) shouldn't require
@@ -120,8 +120,9 @@ export default function BuildingFilePage() {
 
   if (buildingsLoading || jobsLoading) {
     return (
-      <div className="p-5 font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">
-        Loading building…
+      <div className="p-5">
+        <Breadcrumbs items={[{ label: 'Buildings', to: '/buildings' }, { label: '…' }]} />
+        <div className="mt-3 font-heading text-[11px] font-semibold tracking-[0.16em] text-neutral-500 uppercase">Loading building…</div>
       </div>
     );
   }
@@ -130,9 +131,7 @@ export default function BuildingFilePage() {
     const errorObj = buildingsError ? buildingsErrorObj : jobsErrorObj;
     return (
       <div className="p-5">
-        <button onClick={() => navigate('/buildings')} className="cursor-pointer text-xs text-teal-700 hover:underline">
-          ← Back to Buildings
-        </button>
+        <Breadcrumbs items={[{ label: 'Buildings', to: '/buildings' }, { label: "Couldn't load" }]} />
         <div className="mt-4 border border-missed bg-missed/10 p-4">
           <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-missed-fg uppercase">
             Couldn't load this building
@@ -150,10 +149,8 @@ export default function BuildingFilePage() {
   if (!building) {
     return (
       <div className="p-5">
-        <button onClick={() => navigate('/buildings')} className="cursor-pointer text-xs text-teal-700 hover:underline">
-          ← Back to Buildings
-        </button>
-        <div className="mt-4 text-sm text-neutral-600">Building not found.</div>
+        <Breadcrumbs items={[{ label: 'Buildings', to: '/buildings' }, { label: 'Building not found' }]} />
+        <div className="mt-4 text-sm text-neutral-600">Building not found. It may have been removed, or the link is wrong.</div>
       </div>
     );
   }
@@ -181,13 +178,12 @@ export default function BuildingFilePage() {
   return (
     <div className="flex min-h-0 flex-1">
     <div className="flex min-w-0 flex-1 flex-col overflow-y-auto p-5">
-      <button
-        onClick={() => navigate('/buildings')}
-        className="mb-3 flex w-fit cursor-pointer items-center gap-1 text-xs font-semibold text-teal-700 hover:underline"
-      >
-        <Icon paths={['M15 6l-6 6 6 6']} />
-        Buildings
-      </button>
+      {/* Buildings › client (plain text: there is no client page yet) › this building. The client level is left out when unknown. */}
+      <div className="mb-3">
+        <Breadcrumbs
+          items={[{ label: 'Buildings', to: '/buildings' }, { label: building.clientName ?? '' }, { label: building.buildingName || 'Building' }]}
+        />
+      </div>
 
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
