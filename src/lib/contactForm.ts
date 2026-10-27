@@ -11,9 +11,15 @@ export interface ContactFormFields {
   email: string;
   phoneNumber: string;
   isPrimary: boolean;
+  /** Accounts-only (invoices; not chosen automatically for job reports). Always an explicit choice: unchecked for a new contact. */
+  isAccountsContact: boolean;
 }
 
-export const BLANK_CONTACT_FORM: ContactFormFields = { name: '', email: '', phoneNumber: '', isPrimary: false };
+/** The accounts-only checkbox, worded the same wherever a contact is created or edited. */
+export const ACCOUNTS_ONLY_LABEL = 'Accounts only';
+export const ACCOUNTS_ONLY_HINT = 'For invoices. Never chosen automatically as the recipient of a job report.';
+
+export const BLANK_CONTACT_FORM: ContactFormFields = { name: '', email: '', phoneNumber: '', isPrimary: false, isAccountsContact: false };
 
 export const normalEmail = (email: string | null | undefined) => (email ?? '').trim().toLowerCase();
 
@@ -58,5 +64,8 @@ export function checkContactForm(
       };
     }
   }
-  return { ok: true, input: { name, email: email || null, phoneNumber: form.phoneNumber.trim() || null, isPrimary: form.isPrimary } };
+  return {
+    ok: true,
+    input: { name, email: email || null, phoneNumber: form.phoneNumber.trim() || null, isPrimary: form.isPrimary, isAccountsContact: form.isAccountsContact },
+  };
 }

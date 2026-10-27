@@ -383,7 +383,7 @@ export default function BuildingFilePage() {
                       )}
                       {c.isAccountsContact && (
                         <span className="ml-1.5 border border-teal-700 bg-teal-100 px-1 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.06em] text-teal-700 uppercase">
-                          Accounts
+                          Accounts only
                         </span>
                       )}
                     </span>

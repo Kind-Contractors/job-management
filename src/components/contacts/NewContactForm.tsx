@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient, type QueryKey } from '@tanstack/react-query';
 import type { Contact } from '../../domain/types';
 import { createContactForClient } from '../../repository/contactsRepository';
-import { BLANK_CONTACT_FORM, checkContactForm, duplicateEmailWarning, normalEmail, type ContactFormFields } from '../../lib/contactForm';
+import { ACCOUNTS_ONLY_HINT, ACCOUNTS_ONLY_LABEL, BLANK_CONTACT_FORM, checkContactForm, duplicateEmailWarning, normalEmail, type ContactFormFields } from '../../lib/contactForm';
 
 export interface NewContactFormProps {
   /** The client the contact is created for (contacts are client-level, shared by all its buildings and jobs). */
@@ -101,6 +101,19 @@ export default function NewContactForm({ clientId, title, contacts, requireEmail
       <label className="flex items-center gap-1.5 text-[11.5px] text-neutral-700">
         <input type="checkbox" checked={form.isPrimary} onChange={(e) => setForm({ ...form, isPrimary: e.target.checked })} />
         Set as this client&apos;s primary contact
+      </label>
+      {/* Unchecked for every new contact: being accounts-only is always Luke's explicit choice, never inferred. */}
+      <label className="flex items-start gap-1.5 text-[11.5px] text-neutral-700">
+        <input
+          type="checkbox"
+          checked={form.isAccountsContact}
+          onChange={(e) => setForm({ ...form, isAccountsContact: e.target.checked })}
+          className="mt-0.5"
+        />
+        <span>
+          {ACCOUNTS_ONLY_LABEL}
+          <span className="block text-[11px] text-neutral-500">{ACCOUNTS_ONLY_HINT}</span>
+        </span>
       </label>
       {form.isPrimary && contacts.some((c) => c.isPrimary) && (
         <div className="text-[11px] text-due-fg">This will replace the client&apos;s current primary contact.</div>

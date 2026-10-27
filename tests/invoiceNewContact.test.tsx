@@ -23,7 +23,7 @@ test('CHECKS: an invoice recipient needs a valid email; name still required; dup
   assert.deepEqual(check({ name: 'Alex', email: 'not-an-email' }), { ok: false, error: 'Enter a valid email address.' });
   assert.match((check({ name: 'Sam 2', email: ' SAM@atlas.test ' }) as { error: string }).error, /Sam Client already has this email address/);
   const ok = check({ name: ' Alex ', email: ' alex@contour.test ', phoneNumber: '0207' });
-  assert.deepEqual(ok, { ok: true, input: { name: 'Alex', email: 'alex@contour.test', phoneNumber: '0207', isPrimary: false } });
+  assert.deepEqual(ok, { ok: true, input: { name: 'Alex', email: 'alex@contour.test', phoneNumber: '0207', isPrimary: false, isAccountsContact: false } });
 });
 
 test('a contact created this way is NOT a valid recipient until it is linked: it is never matched or created in Xero on send', () => {

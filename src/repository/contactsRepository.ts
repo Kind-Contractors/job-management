@@ -41,6 +41,11 @@ export interface ContactFieldsInput {
   phoneNumber: string | null;
   /** Explicit only — never inferred/defaulted. See unsetOtherPrimaryContacts() below for why setting this true is a two-step operation. */
   isPrimary: boolean;
+  /**
+   * Accounts-only (invoices; never chosen automatically for job reports). Explicit only — never inferred from the name or email.
+   * Omitted = not written: a new contact keeps the database default (false) and an edit leaves the saved value as it is.
+   */
+  isAccountsContact?: boolean;
 }
 
 /**
@@ -98,13 +103,15 @@ export async function createContactForClient(clientId: string, input: ContactFie
       email: input.email,
       phone_number: input.phoneNumber,
       is_primary: input.isPrimary,
+      // Only when the caller says so; otherwise the column default (false) applies.
+      ...(input.isAccountsContact !== undefined ? { is_accounts_contact: input.isAccountsContact } : {}),
     })
     .select(CONTACT_SELECT)
     .single();
 
   if (error) throw new Error(`Failed to create contact: ${error.message}`);
 
-  await logContactActivity(clientId, 'contact_added', `Contact added: ${data.name}`);
+  await logContactActivity(clientId, 'contact_added', `Contact added: ${data.name}${data.is_accounts_contact ? ' (accounts only)' : ''}`);
 
   return {
     id: data.id,
@@ -138,7 +145,7 @@ export async function updateContact(
 ): Promise<void> {
   const { data: before } = await supabase
     .from('contacts')
-    .select('name, email, phone_number, is_primary')
+    .select('name, email, phone_number, is_primary, is_accounts_contact')
     .eq('id', contactId)
     .maybeSingle();
 
@@ -149,6 +156,8 @@ export async function updateContact(
   if (patch.email !== undefined) dbPatch.email = patch.email;
   if (patch.phoneNumber !== undefined) dbPatch.phone_number = patch.phoneNumber;
   if (patch.isPrimary !== undefined) dbPatch.is_primary = patch.isPrimary;
+  // Written only when the caller supplies it: an edit that does not mention it never changes the saved classification.
+  if (patch.isAccountsContact !== undefined) dbPatch.is_accounts_contact = patch.isAccountsContact;
 
   const { error } = await supabase.from('contacts').update(dbPatch).eq('id', contactId);
   if (error) throw new Error(`Failed to update contact: ${error.message}`);
@@ -158,10 +167,17 @@ export async function updateContact(
     ((patch.name !== undefined && patch.name !== before.name) ||
       (patch.email !== undefined && patch.email !== before.email) ||
       (patch.phoneNumber !== undefined && patch.phoneNumber !== before.phone_number) ||
-      (patch.isPrimary !== undefined && patch.isPrimary !== before.is_primary));
+      (patch.isPrimary !== undefined && patch.isPrimary !== before.is_primary) ||
+      (patch.isAccountsContact !== undefined && patch.isAccountsContact !== before.is_accounts_contact));
 
   if (changed) {
     const name = patch.name ?? before!.name;
-    await logContactActivity(clientId, 'contact_updated', `Contact updated: ${name}`);
+    const classification =
+      patch.isAccountsContact !== undefined && patch.isAccountsContact !== before!.is_accounts_contact
+        ? patch.isAccountsContact
+          ? ' (marked accounts only)'
+          : ' (no longer accounts only)'
+        : '';
+    await logContactActivity(clientId, 'contact_updated', `Contact updated: ${name}${classification}`);
   }
 }

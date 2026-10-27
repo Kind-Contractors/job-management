@@ -31,7 +31,7 @@ import {
   formatWhen,
   type QueueView,
 } from "../components/reports/ReportCompletionControls";
-import { resolveDisplayContact } from "../lib/contactDisplay";
+import { resolveReportRecipientDefault } from "../lib/contactDisplay";
 import {
   buildClientReportModel,
   type ClientReportModel,
@@ -689,7 +689,8 @@ export default function ReadyForClientPage({
       setSelectedContactId(null);
       return;
     }
-    const resolved = resolveDisplayContact(selected.job.clientContacts);
+    // Job reports: the only / primary ORDINARY contact - an accounts-only contact is never chosen automatically.
+    const resolved = resolveReportRecipientDefault(selected.job.clientContacts);
     setSelectedContactId(
       resolved.kind === "single" || resolved.kind === "primary"
         ? resolved.contact.id
@@ -1370,18 +1371,46 @@ export default function ReadyForClientPage({
                           <option key={c.id} value={c.id}>
                             {c.name}
                             {c.email ? ` · ${c.email}` : " · no email on file"}
+                            {c.isAccountsContact ? " · Accounts only" : ""}
                           </option>
                         ))}
                       </select>
                       {selectedContact ? (
-                        <div className="mt-1.5 text-[12.5px] text-ink">
-                          Sending to{" "}
-                          <span className="font-semibold">
-                            {selectedContact.name}
-                          </span>
-                          {selectedContact.email
-                            ? ` (${selectedContact.email})`
-                            : " — no email on file for this contact."}
+                        <>
+                          <div className="mt-1.5 text-[12.5px] text-ink">
+                            Sending to{" "}
+                            <span className="font-semibold">
+                              {selectedContact.name}
+                            </span>
+                            {selectedContact.email
+                              ? ` (${selectedContact.email})`
+                              : " — no email on file for this contact."}
+                          </div>
+                          {selectedContact.isAccountsContact && (
+                            // A deliberate choice is allowed: this explains, it does not block sending.
+                            <div
+                              data-testid="report-recipient-accounts-only"
+                              className="mt-1.5 border border-due bg-due/10 p-2 text-[11.5px] text-due-fg"
+                            >
+                              {selectedContact.name} is marked accounts only.
+                              Job reports normally go to an operational contact;
+                              this report will be sent to {selectedContact.name}{" "}
+                              because you chose them.
+                            </div>
+                          )}
+                        </>
+                      ) : resolveReportRecipientDefault(
+                          selected.job.clientContacts,
+                        ).kind === "none_eligible" ? (
+                        <div
+                          data-testid="report-recipient-none-eligible"
+                          className="mt-1.5 text-[11.5px] text-due-fg"
+                        >
+                          No contact of this client is set up for job reports:
+                          every contact is marked accounts only, so nobody has
+                          been chosen. Choose a recipient deliberately, or add an
+                          operational contact (All Live Jobs&apos; Contact
+                          column).
                         </div>
                       ) : (
                         <div className="mt-1.5 text-[11.5px] text-due-fg">

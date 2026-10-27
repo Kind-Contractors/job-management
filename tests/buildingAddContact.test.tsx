@@ -21,13 +21,13 @@ const CONTACTS = [
 // ---- the shared checks ------------------------------------------------------------------------------------------------------------------
 test('CHECKS: a name is required; everything else is optional and tidied', () => {
   assert.deepEqual(checkContactForm({ ...BLANK_CONTACT_FORM, name: '   ' }, CONTACTS), { ok: false, error: 'Enter a name.' });
-  assert.deepEqual(checkContactForm({ name: ' Alex New ', email: ' alex@contour.test ', phoneNumber: ' 0207 ', isPrimary: false }, CONTACTS), {
+  assert.deepEqual(checkContactForm({ name: ' Alex New ', email: ' alex@contour.test ', phoneNumber: ' 0207 ', isPrimary: false, isAccountsContact: false }, CONTACTS), {
     ok: true,
-    input: { name: 'Alex New', email: 'alex@contour.test', phoneNumber: '0207', isPrimary: false },
+    input: { name: 'Alex New', email: 'alex@contour.test', phoneNumber: '0207', isPrimary: false, isAccountsContact: false },
   });
-  assert.deepEqual(checkContactForm({ name: 'Alex', email: '', phoneNumber: '', isPrimary: true }, CONTACTS), {
+  assert.deepEqual(checkContactForm({ name: 'Alex', email: '', phoneNumber: '', isPrimary: true, isAccountsContact: false }, CONTACTS), {
     ok: true,
-    input: { name: 'Alex', email: null, phoneNumber: null, isPrimary: true },
+    input: { name: 'Alex', email: null, phoneNumber: null, isPrimary: true, isAccountsContact: false },
   });
 });
 

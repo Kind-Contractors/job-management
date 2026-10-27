@@ -4,7 +4,7 @@ import type { JobContactSummary } from '../../domain/types';
 import { listJobRows } from '../../repository/jobsRepository';
 import { createContactForClient, updateContact, type ContactFieldsInput } from '../../repository/contactsRepository';
 import { resolveDisplayContact } from '../../lib/contactDisplay';
-import { checkContactForm } from '../../lib/contactForm';
+import { ACCOUNTS_ONLY_HINT, ACCOUNTS_ONLY_LABEL, checkContactForm } from '../../lib/contactForm';
 import { linkStatusLabel, localLinkStatus, VERIFY_STATE_TEXT } from '../../lib/xeroLinkStatus';
 import { unlinkContact, verifyContactLink, type XeroLinkVerification } from '../../repository/xeroLinksRepository';
 import LinkXeroContactDialog from './LinkXeroContactDialog';
@@ -20,13 +20,15 @@ interface ContactFormState {
   email: string;
   phoneNumber: string;
   isPrimary: boolean;
+  isAccountsContact: boolean;
 }
 
+// The edit form starts from the SAVED values - including the accounts-only flag - so saving other fields never changes it.
 function toFormState(c: JobContactSummary): ContactFormState {
-  return { name: c.name, email: c.email ?? '', phoneNumber: c.phoneNumber ?? '', isPrimary: c.isPrimary };
+  return { name: c.name, email: c.email ?? '', phoneNumber: c.phoneNumber ?? '', isPrimary: c.isPrimary, isAccountsContact: c.isAccountsContact === true };
 }
 
-const BLANK_FORM: ContactFormState = { name: '', email: '', phoneNumber: '', isPrimary: false };
+const BLANK_FORM: ContactFormState = { name: '', email: '', phoneNumber: '', isPrimary: false, isAccountsContact: false };
 
 /**
  * A small modal overlay (not an AG Grid cell editor) — contact selection/
@@ -157,6 +159,11 @@ export default function ContactPopover({ clientId, clientName, onClose }: Contac
                       Primary
                     </span>
                   )}
+                  {c.isAccountsContact && (
+                    <span className="border border-teal-700 bg-teal-100 px-1 text-[9.5px] font-semibold tracking-[0.08em] text-teal-700 uppercase">
+                      Accounts only
+                    </span>
+                  )}
                 </div>
                 <div className="text-neutral-600">{[c.email, c.phoneNumber].filter(Boolean).join(' · ') || 'No email or phone on file'}</div>
                 <div className={localLinkStatus(c) === 'linked' ? 'text-[11px] text-teal-700' : 'text-[11px] text-due-fg'}>{linkStatusLabel(c)}</div>
@@ -265,6 +272,18 @@ export default function ContactPopover({ clientId, clientName, onClose }: Contac
                 onChange={(e) => setForm({ ...form, isPrimary: e.target.checked })}
               />
               Set as this client's primary contact
+            </label>
+            <label className="flex items-start gap-1.5 text-[11.5px] text-neutral-700">
+              <input
+                type="checkbox"
+                checked={form.isAccountsContact}
+                onChange={(e) => setForm({ ...form, isAccountsContact: e.target.checked })}
+                className="mt-0.5"
+              />
+              <span>
+                {ACCOUNTS_ONLY_LABEL}
+                <span className="block text-[11px] text-neutral-500">{ACCOUNTS_ONLY_HINT}</span>
+              </span>
             </label>
             {form.isPrimary && contacts.some((c) => c.isPrimary && c.id !== selectedId) && (
               <div className="text-[11px] text-due-fg">This will replace the client's current primary contact.</div>

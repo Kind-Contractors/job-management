@@ -31,7 +31,7 @@ test('DUPLICATE 1: an email another contact of the client has is refused without
 
 test('DUPLICATE 2: with the explicit confirmation the same email is accepted, exactly as typed (trimmed) - the other fields unchanged', () => {
   const r = checkContactForm({ ...BLANK_CONTACT_FORM, name: ' Accounts - Geller House ', email: ' accounts@agent.test ', phoneNumber: ' 0207 ' }, CONTACTS, null, { allowDuplicateEmail: true });
-  assert.deepEqual(r, { ok: true, input: { name: 'Accounts - Geller House', email: 'accounts@agent.test', phoneNumber: '0207', isPrimary: false } });
+  assert.deepEqual(r, { ok: true, input: { name: 'Accounts - Geller House', email: 'accounts@agent.test', phoneNumber: '0207', isPrimary: false, isAccountsContact: false } });
 });
 
 test('DUPLICATE 3: the confirmation lifts ONLY the duplicate rule - a name is still required and a malformed email still refused', () => {
