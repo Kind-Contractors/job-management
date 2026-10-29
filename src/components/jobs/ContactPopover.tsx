@@ -8,6 +8,7 @@ import { ACCOUNTS_ONLY_HINT, ACCOUNTS_ONLY_LABEL, checkContactForm } from '../..
 import { linkStatusLabel, localLinkStatus, VERIFY_STATE_TEXT } from '../../lib/xeroLinkStatus';
 import { unlinkContact, verifyContactLink, type XeroLinkVerification } from '../../repository/xeroLinksRepository';
 import LinkXeroContactDialog from './LinkXeroContactDialog';
+import { backdropDismiss } from '../../lib/dialogHooks';
 
 interface ContactPopoverProps {
   clientId: string;
@@ -41,6 +42,8 @@ const BLANK_FORM: ContactFormState = { name: '', email: '', phoneNumber: '', isP
  * touches an unrelated contact.
  */
 export default function ContactPopover({ clientId, clientName, onClose }: ContactPopoverProps) {
+  // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
+  const backdrop = backdropDismiss(onClose);
   const queryClient = useQueryClient();
   const { data: jobRows = [] } = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
   // Any job at this client carries the exact same clientContacts list
@@ -125,7 +128,7 @@ export default function ContactPopover({ clientId, clientName, onClose }: Contac
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30" {...backdrop}>
       <div
         onClick={(e) => e.stopPropagation()}
         className="max-h-[80vh] w-[420px] overflow-y-auto border border-neutral-300 bg-white p-4"

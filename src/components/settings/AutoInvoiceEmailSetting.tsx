@@ -1,5 +1,6 @@
 import { useReducer } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { backdropDismiss } from '../../lib/dialogHooks';
 import {
   getAutoInvoiceEmailSetting,
   setAutoInvoiceEmailSetting,
@@ -28,6 +29,8 @@ export interface AutoInvoiceEmailSettingViewProps {
 
 /** Presentational: the switch, its status, the explanation, and the confirmation dialog. All decisions are the caller's. */
 export function AutoInvoiceEmailSettingView({ enabled, loading, loadError, state, onRequest, onCancel, onConfirm, onRetry }: AutoInvoiceEmailSettingViewProps) {
+  // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
+  const backdrop = backdropDismiss(state.saving ? undefined : onCancel);
   const known = enabled !== undefined && !loading && !loadError;
   const copy = state.pending === null ? null : confirmationFor(state.pending);
 
@@ -83,7 +86,7 @@ export function AutoInvoiceEmailSettingView({ enabled, loading, loadError, state
       )}
 
       {copy && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/30 px-4" onClick={state.saving ? undefined : onCancel}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/30 px-4" {...backdrop}>
           <div
             role="dialog"
             aria-modal="true"

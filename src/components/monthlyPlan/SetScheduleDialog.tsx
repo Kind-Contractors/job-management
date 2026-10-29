@@ -14,6 +14,7 @@
 import type { JobRow } from '../../domain/types';
 import ScheduleEditor from '../jobs/ScheduleEditor';
 import { describeSchedule } from '../../lib/scheduleFormat';
+import { backdropDismiss } from '../../lib/dialogHooks';
 
 export interface SetScheduleDialogProps {
   job: JobRow;
@@ -21,10 +22,12 @@ export interface SetScheduleDialogProps {
 }
 
 export default function SetScheduleDialog({ job, onClose }: SetScheduleDialogProps) {
+  // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
+  const backdrop = backdropDismiss(onClose);
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30"
-      onClick={onClose}
+      {...backdrop}
       data-testid="set-schedule-dialog"
     >
       <div

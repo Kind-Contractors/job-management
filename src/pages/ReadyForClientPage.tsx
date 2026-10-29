@@ -75,6 +75,7 @@ import {
 } from "../../supabase/functions/_shared/reportEmail";
 import kindContractorsLogo from "../assets/kind_Contractors_logo.png";
 import kindLeaf from "../assets/kind_leaf.png";
+import { backdropDismiss } from '../lib/dialogHooks';
 
 /** Strips the `data:...;base64,` prefix a data URL carries — the email provider wants raw base64 content, not a data URL. */
 function blobToBase64(blob: Blob): Promise<string> {
@@ -115,6 +116,8 @@ export function SendConfirmDialog({
   onCancel,
   onConfirm,
 }: SendConfirmDialogProps) {
+  // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
+  const backdrop = backdropDismiss(onCancel);
   // The same rules the server enforces (shared module), so the button is only enabled for a message that will be accepted.
   const messageCheck = checkEmailMessage(message);
   const messageLength = emailMessageLength(message);
@@ -133,7 +136,7 @@ export function SendConfirmDialog({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30"
-      onClick={onCancel}
+      {...backdrop}
     >
       <div
         onClick={(e) => e.stopPropagation()}

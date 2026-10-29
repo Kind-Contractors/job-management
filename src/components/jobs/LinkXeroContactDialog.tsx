@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
+import { backdropDismiss, useDebouncedValue } from '../../lib/dialogHooks';
+import { XERO_AUTOSEARCH_DELAY_MS } from './FindXeroContactPanel';
 import {
   findXeroContactsByEmail,
   linkContact,
@@ -68,6 +70,8 @@ export default function LinkXeroContactDialog({
   onClose,
   onLinked,
 }: LinkXeroContactDialogProps) {
+  // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
+  const backdrop = backdropDismiss(onClose);
   // Xero accepts a search term of at most 50 characters (the server refuses longer ones too).
   const [term, setTerm] = useState(suggestedTerm.replace(/\s+/g, ' ').trim().slice(0, SEARCH_TERM_MAX));
   const [chosen, setChosen] = useState<XeroContactCandidate | null>(null);
@@ -85,13 +89,23 @@ export default function LinkXeroContactDialog({
     gcTime: 0,
   });
 
-  const searchMutation = useMutation({
-    mutationFn: (t: string) => searchXeroContacts(t),
-    onMutate: () => {
-      setChosen(null);
-      setError(null);
-    },
-    onError: (err) => setError(err instanceof Error ? err.message : 'The search failed.'),
+  // The name search runs as the manager types (once typing pauses, at least 2 characters), or at once with Enter / Search. The
+  // pre-filled suggestion is NOT searched until the manager acts (types, or presses Search). Same read-only search and cache as
+  // "Find a contact in Xero"; results are never written to the browser's saved cache.
+  const [typed, setTyped] = useState(false);
+  const [submitted, setSubmitted] = useState<string | null>(null);
+  // Only typed text is debounced: until the manager types, it stays '' - so the suggestion is never searched in the pause after
+  // the first keystroke either.
+  const debounced = useDebouncedValue(typed ? term.trim() : '', XERO_AUTOSEARCH_DELAY_MS);
+  const searchTerm = submitted ?? debounced;
+  const search = useQuery({
+    queryKey: ['xeroContactSearch', searchTerm],
+    queryFn: () => searchXeroContacts(searchTerm),
+    enabled: searchTerm.length >= 2 && searchTerm.length <= SEARCH_TERM_MAX,
+    placeholderData: keepPreviousData,
+    retry: false,
+    staleTime: 60_000,
+    meta: { persist: false },
   });
 
   const linkMutation = useMutation({
@@ -104,8 +118,9 @@ export default function LinkXeroContactDialog({
     onError: (err) => setError(err instanceof Error ? err.message : 'The link could not be saved.'),
   });
 
-  const results = searchMutation.data?.results ?? null;
-  const searchedTerm = searchMutation.variables ?? term.trim();
+  const results = searchTerm.length >= 2 ? (search.data?.results ?? null) : null;
+  const searchedTerm = searchTerm;
+  const searchError = search.isError ? (search.error instanceof Error ? search.error.message : 'The search failed.') : null;
   const replacing = chosen !== null && currentXeroContactId !== null && currentXeroContactId.toLowerCase() !== chosen.contactId.toLowerCase();
 
   const renderCandidate = (c: XeroContactCandidate) => {
@@ -147,7 +162,7 @@ export default function LinkXeroContactDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/30" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/30" {...backdrop}>
       <div onClick={(e) => e.stopPropagation()} className="max-h-[85vh] w-[480px] overflow-y-auto border border-neutral-300 bg-white p-4">
         <div className="flex items-center gap-2 border-b border-divider pb-2.5">
           <div>
@@ -188,12 +203,22 @@ export default function LinkXeroContactDialog({
           className="mt-1 flex gap-1.5"
           onSubmit={(e) => {
             e.preventDefault();
-            if (term.trim().length >= 2) searchMutation.mutate(term.trim());
+            if (term.trim().length >= 2) {
+              setSubmitted(term.trim());
+              setChosen(null);
+              setError(null);
+            }
           }}
         >
           <input
             value={term}
-            onChange={(e) => setTerm(e.target.value)}
+            onChange={(e) => {
+              setTerm(e.target.value);
+              setTyped(true);
+              setSubmitted(null);
+              setChosen(null);
+              setError(null);
+            }}
             maxLength={SEARCH_TERM_MAX}
             placeholder="Search Xero contacts by name or email"
             aria-label="Search Xero contacts"
@@ -201,14 +226,14 @@ export default function LinkXeroContactDialog({
           />
           <button
             type="submit"
-            disabled={searchMutation.isPending || term.trim().length < 2}
+            disabled={search.isFetching || term.trim().length < 2}
             className="cursor-pointer bg-teal px-3 py-1 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {searchMutation.isPending ? 'Searching…' : 'Search'}
+            {search.isFetching ? 'Searching…' : 'Search'}
           </button>
         </form>
 
-        {error && <div className="mt-2 text-[11.5px] text-missed-fg">{error}</div>}
+        {(error ?? searchError) && <div className="mt-2 text-[11.5px] text-missed-fg">{error ?? searchError}</div>}
 
         {results !== null && results.length === 0 && (
           <div className="mt-2.5 border border-neutral-300 bg-neutral-100 px-2.5 py-2 text-[12px] text-neutral-700">
@@ -222,7 +247,7 @@ export default function LinkXeroContactDialog({
             <div className="text-[11px] text-neutral-600">
               Found by name: the email in Xero may differ from this contact&apos;s. Nothing is linked unless you choose one and confirm.
             </div>
-            {searchMutation.data?.mayBeIncomplete && (
+            {search.data?.mayBeIncomplete && (
               <div className="text-[11px] text-due-fg">There may be more matches than shown. Refine the search to narrow them down.</div>
             )}
             {results.map(renderCandidate)}

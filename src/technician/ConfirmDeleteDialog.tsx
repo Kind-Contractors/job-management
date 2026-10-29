@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { backdropDismiss } from '../lib/dialogHooks';
 
 interface ConfirmDeleteDialogProps {
   /** For screen readers, e.g. "Delete before photo". */
@@ -19,12 +20,12 @@ interface ConfirmDeleteDialogProps {
  * rendering in the tests) it is rendered in place instead, so its markup can still be checked.
  */
 export default function ConfirmDeleteDialog({ ariaLabel, message, busy, onCancel, onConfirm }: ConfirmDeleteDialogProps) {
+  // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
+  const backdrop = backdropDismiss(busy ? undefined : onCancel);
   const dialog = (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-near-black/50 p-4"
-      onClick={() => {
-        if (!busy) onCancel();
-      }}
+      {...backdrop}
       onKeyDown={(e) => {
         if (e.key === 'Escape' && !busy) onCancel();
       }}

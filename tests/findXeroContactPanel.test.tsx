@@ -120,14 +120,28 @@ test('CARD: look-alikes are flagged; the chosen one is marked', () => {
 const panel = () => noComments(src('src', 'components', 'jobs', 'FindXeroContactPanel.tsx'));
 const editor = () => noComments(src('src', 'components', 'jobs', 'InvoiceEditor.tsx'));
 
-test('SEARCH: only on submit (at least 2 characters, at most 50), through the existing read-only search; a new search clears the choice', () => {
+test('SEARCH: as you type (once typing pauses, 2-50 characters) or at once with Enter, through the existing read-only search; a new term clears the choice', () => {
   const p = panel();
-  assert.match(p, /if \(term\.trim\(\)\.length >= 2\) searchMutation\.mutate\(term\.trim\(\)\);/);
-  assert.match(p, /mutationFn: \(t: string\) => searchXeroContacts\(t\)/);
+  assert.match(p, /export const XERO_AUTOSEARCH_DELAY_MS = 450;/);
+  assert.match(p, /const debounced = useDebouncedValue\(term\.trim\(\), XERO_AUTOSEARCH_DELAY_MS\);/);
+  assert.match(p, /const searchTerm = submitted \?\? debounced;/);
+  assert.match(p, /if \(term\.trim\(\)\.length >= 2\) setSubmitted\(term\.trim\(\)\);/, 'Enter / Search: at once');
+  assert.match(p, /queryKey: \['xeroContactSearch', searchTerm\],\s+queryFn: \(\) => searchXeroContacts\(searchTerm\),\s+enabled: searchTerm\.length >= 2 && searchTerm\.length <= SEARCH_TERM_MAX,/);
+  assert.match(p, /meta: \{ persist: false \}/, 'Xero results are never written to the saved browser cache');
   assert.match(p, /maxLength=\{SEARCH_TERM_MAX\}/);
   assert.match(p, /const SEARCH_TERM_MAX = 50;/);
-  assert.match(p, /onMutate: \(\) => \{\s+setChosen\(null\);\s+setLocalId\(''\);\s+setReplace\(false\);/);
-  assert.doesNotMatch(p, /onChange=\{\(e\) => \{?\s*setTerm\(e\.target\.value\);?\s*searchMutation/, 'not on every keystroke');
+  assert.match(p, /const changeTerm = \(value: string\) => \{\s+setTerm\(value\);\s+setSubmitted\(null\);\s+setChosen\(null\);\s+setLocalId\(''\);\s+setReplace\(false\);/);
+  assert.match(p, /onChange=\{\(e\) => changeTerm\(e\.target\.value\)\}/);
+  assert.doesNotMatch(p, /searchMutation/, 'a query keyed by the term: an older answer can never replace a newer one');
+});
+
+test('LINK DIALOG: the name search also runs as you type - but the pre-filled suggestion is searched only when the manager acts', () => {
+  const d = noComments(src('src', 'components', 'jobs', 'LinkXeroContactDialog.tsx'));
+  assert.match(d, /const debounced = useDebouncedValue\(typed \? term\.trim\(\) : '', XERO_AUTOSEARCH_DELAY_MS\);\s+const searchTerm = submitted \?\? debounced;/, 'only typed text is ever searched automatically');
+  assert.match(d, /setTerm\(e\.target\.value\);\s+setTyped\(true\);\s+setSubmitted\(null\);\s+setChosen\(null\);/);
+  assert.match(d, /queryKey: \['xeroContactSearch', searchTerm\]/, 'the same search and cache as Find a contact in Xero');
+  assert.match(d, /meta: \{ persist: false \}/);
+  assert.match(d, /onSubmit=/, 'Enter / Search still searches at once');
 });
 
 test('NO AUTO-CHOICE: a Xero contact is chosen only by its own Choose button; nothing is chosen from the results by the app', () => {

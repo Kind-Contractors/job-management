@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
+import { useDebouncedValue } from '../../lib/dialogHooks';
 import type { JobContactSummary } from '../../domain/types';
 import { isUsableRecipient } from '../../lib/xeroLinkStatus';
 import { xeroPanelLinkState } from '../../lib/xeroPanelLink';
@@ -7,6 +8,8 @@ import { linkContact, searchXeroContacts, type XeroBlockedReason, type XeroConta
 
 /** Xero's limit for a contact search term (the server refuses longer ones too). */
 const SEARCH_TERM_MAX = 50;
+/** Search-as-you-type: how long typing must pause before Xero is searched (Enter / Search searches at once). */
+export const XERO_AUTOSEARCH_DELAY_MS = 450;
 
 const BLOCKED_TEXT: Record<XeroBlockedReason, string> = {
   ARCHIVED: 'Archived in Xero',
@@ -58,16 +61,30 @@ export default function FindXeroContactPanel({
   const [replace, setReplace] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const searchMutation = useMutation({
-    mutationFn: (t: string) => searchXeroContacts(t),
-    onMutate: () => {
-      setChosen(null);
-      setLocalId('');
-      setReplace(false);
-      setError(null);
-    },
-    onError: (err) => setError(err instanceof Error ? err.message : 'The search failed.'),
+  // Searched as the manager types (once typing pauses, at least 2 characters), or at once with Enter / Search. A query keyed by the
+  // term: an older, slower answer can never replace a newer one, and a term already searched is answered from memory. Read-only;
+  // results are never written to the browser's saved cache (persist: false).
+  const [submitted, setSubmitted] = useState<string | null>(null);
+  const debounced = useDebouncedValue(term.trim(), XERO_AUTOSEARCH_DELAY_MS);
+  const searchTerm = submitted ?? debounced;
+  const search = useQuery({
+    queryKey: ['xeroContactSearch', searchTerm],
+    queryFn: () => searchXeroContacts(searchTerm),
+    enabled: searchTerm.length >= 2 && searchTerm.length <= SEARCH_TERM_MAX,
+    placeholderData: keepPreviousData,
+    retry: false,
+    staleTime: 60_000,
+    meta: { persist: false },
   });
+  const changeTerm = (value: string) => {
+    setTerm(value);
+    setSubmitted(null);
+    // A different search: nothing stays chosen from the previous results.
+    setChosen(null);
+    setLocalId('');
+    setReplace(false);
+    setError(null);
+  };
 
   const linkMutation = useMutation({
     mutationFn: ({ local, xero }: { local: JobContactSummary; xero: XeroContactCandidate }) =>
@@ -82,8 +99,9 @@ export default function FindXeroContactPanel({
     onError: (err) => setError(err instanceof Error ? err.message : 'The link could not be saved.'),
   });
 
-  const results = searchMutation.data?.results ?? null;
-  const searchedTerm = searchMutation.variables ?? term.trim();
+  const results = searchTerm.length >= 2 ? (search.data?.results ?? null) : null;
+  const searchedTerm = searchTerm;
+  const searchError = search.isError ? (search.error instanceof Error ? search.error.message : 'The search failed.') : null;
   const busy = disabled || linkMutation.isPending;
 
   // The app contact (what the manager picked, or - only when they added one from here - that contact) and the confirm rules.
@@ -109,19 +127,19 @@ export default function FindXeroContactPanel({
     <div data-testid="find-xero-contact" className="flex flex-col gap-1.5 border border-neutral-300 bg-neutral-100 p-2">
       <div className="font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-600 uppercase">Find a contact in Xero</div>
       <div className="text-[11px] text-neutral-600">
-        Search the contacts that already exist in Xero, choose one, then say which contact in the app it belongs to. Nothing is created
-        in Xero, and nothing is linked until you confirm.
+        Search the contacts that already exist in Xero (results appear as you type), choose one, then say which contact in the app it
+        belongs to. Nothing is created in Xero, and nothing is linked until you confirm.
       </div>
       <form
         className="flex gap-1.5"
         onSubmit={(e) => {
           e.preventDefault();
-          if (term.trim().length >= 2) searchMutation.mutate(term.trim());
+          if (term.trim().length >= 2) setSubmitted(term.trim());
         }}
       >
         <input
           value={term}
-          onChange={(e) => setTerm(e.target.value)}
+          onChange={(e) => changeTerm(e.target.value)}
           maxLength={SEARCH_TERM_MAX}
           disabled={busy}
           placeholder="Name or email, e.g. Dome Assets"
@@ -130,10 +148,10 @@ export default function FindXeroContactPanel({
         />
         <button
           type="submit"
-          disabled={busy || searchMutation.isPending || term.trim().length < 2}
+          disabled={busy || search.isFetching || term.trim().length < 2}
           className="cursor-pointer bg-teal px-3 py-1 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {searchMutation.isPending ? 'Searching…' : 'Search'}
+          {search.isFetching ? 'Searching…' : 'Search'}
         </button>
       </form>
 
@@ -145,7 +163,7 @@ export default function FindXeroContactPanel({
       )}
       {results !== null && results.length > 0 && (
         <div data-testid="xero-search-results" className="flex max-h-[40vh] flex-col gap-1 overflow-y-auto">
-          {searchMutation.data?.mayBeIncomplete && (
+          {search.data?.mayBeIncomplete && (
             <div className="text-[11px] text-due-fg">There may be more matches than shown. Refine the search to narrow them down.</div>
           )}
           {results.map((c) => (
@@ -252,9 +270,9 @@ export default function FindXeroContactPanel({
           </div>
         </div>
       )}
-      {error && (
+      {(error ?? searchError) && (
         <div role="alert" className="text-[11.5px] text-missed-fg">
-          {error}
+          {error ?? searchError}
         </div>
       )}
     </div>

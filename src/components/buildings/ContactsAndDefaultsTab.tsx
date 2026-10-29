@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { BuildingRow, Contact } from '../../domain/types';
 import { contactInitials } from '../../lib/contactDisplay';
@@ -58,6 +58,8 @@ export default function ContactsAndDefaultsTab({ building, contacts, contactsLoa
   const shown = q ? contacts.filter((c) => `${c.name} ${c.email ?? ''} ${c.phoneNumber ?? ''}`.toLowerCase().includes(q)) : contacts;
   const linkedCount = contacts.filter(isUsableRecipient).length;
   const justAdded = justAddedId ? contacts.find((c) => c.id === justAddedId) : undefined;
+  // The contact being edited, as the (refreshed) list holds it; the dialog closes if it is no longer there.
+  const editingContact = editingId ? (contacts.find((c) => c.id === editingId) ?? null) : null;
 
   if (contactsLoading) return <div className="border border-neutral-300 bg-white px-4 py-3 text-[12.5px] text-neutral-500">Loading contacts…</div>;
   if (contactsError) return <div className="border border-missed bg-missed/10 px-4 py-3 text-[12.5px] text-missed-fg">Couldn&apos;t load contacts.</div>;
@@ -172,16 +174,15 @@ export default function ContactsAndDefaultsTab({ building, contacts, contactsLoa
                           type="button"
                           onClick={() => {
                             // A new edit clears the last save's notice, so a confirmation always belongs to the latest save.
-                            if (editingId !== c.id) {
-                              setNotice(null);
-                              setJustAddedId(null);
-                            }
-                            setEditingId(editingId === c.id ? null : c.id);
+                            // A new edit clears the last save's notice, so a confirmation always belongs to the latest save.
+                            setNotice(null);
+                            setJustAddedId(null);
+                            setEditingId(c.id);
                           }}
                           aria-label={`Edit ${c.name}`}
                           className="cursor-pointer border border-neutral-300 px-2 py-1 text-[11px] text-neutral-700 hover:bg-neutral-100"
                         >
-                          {editingId === c.id ? 'Close' : 'Edit'}
+                          Edit
                         </button>
                         <button
                           type="button"
@@ -209,24 +210,6 @@ export default function ContactsAndDefaultsTab({ building, contacts, contactsLoa
                         )}
                       </div>
                     </div>
-                    {editingId === c.id && (
-                      <div className="mt-2 border border-neutral-300 bg-neutral-100 p-2.5">
-                        <EditContactForm
-                          clientId={building.clientId}
-                          clientName={building.clientName}
-                          contact={c}
-                          contacts={contacts}
-                          buildingCount={buildingCount}
-                          refreshKeys={refreshKeys}
-                          onCancel={() => setEditingId(null)}
-                          onSaved={(saved, changed) => {
-                            setEditingId(null);
-                            setJustAddedId(null);
-                            setNotice(changed ? `${saved.name} was updated.` : `No changes to ${saved.name}.`);
-                          }}
-                        />
-                      </div>
-                    )}
                   </div>
                 );
               })
@@ -264,6 +247,25 @@ export default function ContactsAndDefaultsTab({ building, contacts, contactsLoa
           <BuildingDefaultRecipientPanel building={building} contacts={contacts} />
         </div>
       </div>
+
+      {editingContact && (
+        <EditContactDialog name={editingContact.name} onClose={() => setEditingId(null)}>
+          <EditContactForm
+            clientId={building.clientId}
+            clientName={building.clientName}
+            contact={editingContact}
+            contacts={contacts}
+            buildingCount={buildingCount}
+            refreshKeys={refreshKeys}
+            onCancel={() => setEditingId(null)}
+            onSaved={(saved, changed) => {
+              setEditingId(null);
+              setJustAddedId(null);
+              setNotice(changed ? `${saved.name} was updated.` : `No changes to ${saved.name}.`);
+            }}
+          />
+        </EditContactDialog>
+      )}
 
       {addingContact && (
         <BuildingAddContactForm
@@ -311,6 +313,46 @@ export default function ContactsAndDefaultsTab({ building, contacts, contactsLoa
           }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * The dialog around the edit-contact form, like "+ Add contact": closed only deliberately (Cancel, the close button or Escape) -
+ * never by a click on the backdrop, so nothing typed is lost - and a click on the backdrop keeps focus in the dialog.
+ */
+function EditContactDialog({ name, onClose, children }: { name: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) e.preventDefault();
+      }}
+    >
+      <div
+        data-testid="edit-contact-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Edit contact: ${name}`}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') onClose();
+        }}
+        className="relative max-h-[90vh] w-[min(480px,95vw)] overflow-y-auto border border-neutral-300 bg-white p-4 outline-none"
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute top-2 right-2 cursor-pointer px-2 py-1 text-[15px] leading-none text-neutral-600 hover:bg-neutral-100"
+        >
+          ×
+        </button>
+        <div className="mb-2.5 border-b border-divider pb-2.5">
+          <div className="font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">Edit contact</div>
+          <h2 className="font-heading text-lg leading-tight font-semibold">{name}</h2>
+        </div>
+        {children}
+      </div>
     </div>
   );
 }
