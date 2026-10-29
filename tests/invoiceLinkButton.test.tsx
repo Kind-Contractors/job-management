@@ -6,9 +6,11 @@
 // which the contact is offered as a selectable recipient; and nothing on this path can send an invoice.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { recipientOptionsAsHtml } from './helpers/recipientOptions';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 
@@ -37,11 +39,11 @@ function invoice(over: Partial<InvoiceDetail> = {}): InvoiceDetail {
 function renderEditor(contacts: JobContactSummary[], inv: InvoiceDetail = invoice()) {
   const qc = new QueryClient();
   qc.setQueryData(['invoice', inv.id], inv);
-  return renderToStaticMarkup(
+  return recipientOptionsAsHtml(renderToStaticMarkup(
     <QueryClientProvider client={qc}>
       <InvoiceEditor invoiceId={inv.id} onClose={() => {}} clientId="client-1" clientContacts={contacts} buildingDefault={null} />
     </QueryClientProvider>,
-  );
+  ));
 }
 
 /** Every <button> element in a rendered element tree (function components are not expanded: the list renders plain elements). */
@@ -58,7 +60,7 @@ function buttonsIn(node: ReactNode): ReactElement<any>[] {
   return out;
 }
 
-const src = (...p: string[]) => readFileSync(join(process.cwd(), 'src', ...p), 'utf8').replace(/\r\n/g, '\n');
+const src = (...p: string[]) => readSourceFile('src', ...p);
 const code = (...p: string[]) => src(...p).replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
 
 // ---- the list ---------------------------------------------------------------------------------------------------------------------------
@@ -86,15 +88,15 @@ test('the invoice editor has no search panel and no per-contact Link list (both 
   const html = renderEditor([LINKED, MO]);
   assert.doesNotMatch(html, /data-testid="find-xero-contact"|Find a contact in Xero/);
   assert.doesNotMatch(html, /aria-label="Link Mo to a Xero contact"|data-testid="unlinked-list"/, 'the per-contact Link list is gone');
-  assert.match(html, /<option value="ct-linked">Linked Person — ct-linked@example\.test · Xero: Oak Estates Ltd<\/option>/, 'linked: selectable');
-  assert.match(html, /<option value="ct-mo">Mo — ct-mo@example\.test · not linked to Xero yet<\/option>/, 'unlinked: selectable; it must be linked before the invoice is sent');
+  assert.match(html, /<option value="ct-linked"(?: class="[^"]*")?>Linked Person — ct-linked@example\.test · Xero: Oak Estates Ltd<\/option>/, 'linked: selectable');
+  assert.match(html, /<option value="ct-mo"(?: class="[^"]*")?>Mo — ct-mo@example\.test · not linked to Xero yet<\/option>/, 'unlinked: selectable; it must be linked before the invoice is sent');
 });
 
 test('after a link, the refreshed contacts show the contact as linked and selectable, and its Link button is gone', () => {
   const after = renderEditor([LINKED, { ...MO, xeroContactId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', xeroOrgId: ORG, xeroContactName: 'Mo Ltd' }]);
   assert.doesNotMatch(after, /Link Mo to a Xero contact/);
   assert.doesNotMatch(after, /Not linked to Xero/);
-  assert.match(after, /<option value="ct-mo">Mo — ct-mo@example\.test · Xero: Mo Ltd<\/option>/);
+  assert.match(after, /<option value="ct-mo"(?: class="[^"]*")?>Mo — ct-mo@example\.test · Xero: Mo Ltd<\/option>/);
 });
 
 test('a successful link refreshes the queries the recipient list is read from', () => {
@@ -123,12 +125,12 @@ test('the dialog opened this way is for that contact', () => {
   const qc = new QueryClient();
   const html = renderToStaticMarkup(
     <QueryClientProvider client={qc}>
-      <LinkXeroContactDialog localContactId="ct-mo" localContactName="Mo" localContactEmail={null} suggestedTerm="Mo" currentXeroContactId={null} onClose={() => {}} onLinked={() => {}} />
+      <LinkXeroContactDialog localContactId="ct-mo" localContactName="Mo" localContactEmail={null} currentXeroContactId={null} onClose={() => {}} onLinked={() => {}} />
     </QueryClientProvider>,
   );
   assert.match(html, /Link to Xero contact/);
   assert.match(html, />Mo<\/h2>/);
-  assert.match(html, /value="Mo"/, 'the search starts from the contact name (editable, nothing searched yet)');
+  assert.match(html, /<input (?![^>]*value="[^"])[^>]*aria-label="Search Xero contacts"/, 'the name search starts EMPTY: the manager types it');
 });
 
 test('nothing on the Link path can send an invoice', () => {
@@ -139,5 +141,5 @@ test('nothing on the Link path can send an invoice', () => {
 
 test('a contact with no email shows just its name in the selector', () => {
   const html = renderEditor([{ ...MO, email: null }]);
-  assert.match(html, /<option value="ct-mo">Mo · not linked to Xero yet<\/option>/, 'unlinked, no email: still selectable');
+  assert.match(html, /<option value="ct-mo"(?: class="[^"]*")?>Mo · not linked to Xero yet<\/option>/, 'unlinked, no email: still selectable');
 });

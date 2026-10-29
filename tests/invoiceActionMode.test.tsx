@@ -10,10 +10,12 @@
 // Real components rendered to static markup with the query cache seeded (there is no DOM library in this repo).
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { recipientOptionsAsHtml } from './helpers/recipientOptions';
 
 import InvoiceEditor, { XERO_INVOICE_CAPABILITIES_QUERY_KEY } from '../src/components/jobs/InvoiceEditor';
 import { AUTO_INVOICE_EMAIL_QUERY_KEY } from '../src/components/settings/AutoInvoiceEmailSetting';
@@ -49,11 +51,14 @@ function render({ toggle, sending, inv = invoice(), contacts = [SAM, PAT], def =
       <InvoiceEditor invoiceId={inv.id} onClose={() => {}} clientId="client-1" clientContacts={contacts} buildingDefault={def} />
     </QueryClientProvider>,
   );
-  return html.replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&quot;/g, '"');
+  return recipientOptionsAsHtml(html.replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&quot;/g, '"'));
 }
 const actionBar = (html: string) => html.slice(html.indexOf('data-testid="invoice-actions"'));
 const mainButton = (html: string) => actionBar(html).match(/<button([^>]*)>([^<]+)<\/button>/)!;
 const hasSendTo = (html: string) => /Send invoice to/.test(html);
+/** The recipient card's heading row and whether a recipient picker (the dropdown) is shown under it. */
+const heading = (html: string) => (/data-testid="recipient-heading"[^>]*>([\s\S]*?)<\/div>/.exec(html)?.[1] ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+const hasPicker = (html: string) => /data-recipient-select/.test(html);
 const recipient = (html: string) => html.slice(html.indexOf('data-testid="invoice-recipient"'), html.indexOf('data-testid="invoice-email-notice"'));
 
 // ---- the rules, every combination ---------------------------------------------------------------------------------------------------
@@ -109,8 +114,9 @@ test('EDITOR toggle OFF, building default usable: "Create in Xero", the default 
   assert.doesNotMatch(html, /<select/, 'no picker until "Change for this invoice"');
   const r = recipient(html);
   assert.match(r, /Xero contact for this invoice/);
-  assert.match(r, />Sam<\/span><span class="text-teal-700">✓ Xero: Sam Ltd<\/span>/);
-  assert.match(r, /this building's default\. It will not be emailed\./);
+  assert.match(r, />Sam<\/span><span class="text-neutral-600">ct-sam@client\.test<\/span><span class="text-teal-700">✓ Xero: Sam Ltd<\/span>/, 'name, email, Xero contact');
+  assert.match(r, /· this building's default<\/span>/);
+  assert.equal(heading(html), 'Xero contact for this invoice It will not be emailed.', '"It will not be emailed." on the heading row');
   assert.match(r, />Change for this invoice<\/button>/);
   assert.doesNotMatch(html, /data-testid="no-invoice-default"/);
   assert.doesNotMatch(html, /Send invoice</);
@@ -119,11 +125,12 @@ test('EDITOR toggle OFF, building default usable: "Create in Xero", the default 
 test('EDITOR toggle OFF, NO usable default: a Xero-contact picker with why, where to set a default (new tab), and the button waits for a choice', () => {
   const html = render({ toggle: false, sending: false, def: null });
   assert.equal(hasSendTo(html), false);
-  assert.match(html, /Xero contact for this invoice<select/);
+  assert.equal(heading(html), 'Xero contact for this invoice It will not be emailed.');
+  assert.ok(hasPicker(html), 'a picker under it');
   assert.match(html, /data-testid="no-invoice-default"[^>]*>This building has no default invoice recipient, so one is chosen for each invoice\./);
   assert.match(html, /Choose the Xero contact this invoice is for\. A contact that is not linked to Xero yet can be chosen; it must be linked to its existing Xero\s+contact before the invoice can be sent\./);
   assert.equal(mainButton(html)[2], 'Create in Xero');
-  assert.match(html, /<option value="" disabled="" selected="">Choose a recipient…<\/option>/, 'nothing is preselected: not the first, primary or only contact');
+  assert.match(html, /<option value="" disabled=""(?: class="[^"]*")? selected="">Choose a recipient…<\/option>/, 'nothing is preselected: not the first, primary or only contact');
   assert.doesNotMatch(html, /Change for this invoice|Use the building default/);
 });
 
@@ -142,7 +149,7 @@ test('EDITOR toggle ON, system sending ON: "Send invoice"; "Send invoice to" the
   assert.equal(mainButton(html)[2], 'Send invoice');
   const r = recipient(html);
   assert.match(r, /Send invoice to/);
-  assert.match(r, />Sam<\/span><span class="text-teal-700">✓ Xero: Sam Ltd<\/span>/);
+  assert.match(r, />Sam<\/span><span class="text-neutral-600">ct-sam@client\.test<\/span><span class="text-teal-700">✓ Xero: Sam Ltd<\/span>/, 'name, email, Xero contact');
   assert.match(r, />Change for this invoice<\/button>/);
   assert.doesNotMatch(r, /It will not be emailed/);
   assert.doesNotMatch(html, /<select/);
@@ -150,8 +157,9 @@ test('EDITOR toggle ON, system sending ON: "Send invoice"; "Send invoice to" the
 
 test('EDITOR toggle ON, NO usable default: "Send invoice to" picker, nothing preselected, and the explanation', () => {
   const html = render({ toggle: true, sending: true, def: null });
-  assert.match(html, /Send invoice to<select/);
-  assert.match(html, /<option value="" disabled="" selected="">Choose a recipient…<\/option>/);
+  assert.equal(heading(html), 'Send invoice to', 'emailed: no "will not be emailed" note');
+  assert.ok(hasPicker(html));
+  assert.match(html, /<option value="" disabled=""(?: class="[^"]*")? selected="">Choose a recipient…<\/option>/);
   assert.match(html, /data-testid="no-invoice-default"/);
 });
 
@@ -177,7 +185,7 @@ test('EDITOR: the sticky action bar is unchanged in every mode', () => {
 
 // ---- what is sent: never a guessed or stale contact ----------------------------------------------------------------------------------
 test('SEND: with the picker hidden the default is used (no contactId) - a choice made earlier while it was visible is ignored', () => {
-  const code = readFileSync(join(process.cwd(), 'src', 'components', 'jobs', 'InvoiceEditor.tsx'), 'utf8');
+  const code = readSourceFile('src', 'components', 'jobs', 'InvoiceEditor.tsx');
   assert.match(code, /const effectiveContactId = showContactPicker \? selectedContactId : '';/);
   assert.match(code, /selectedContactId: effectiveContactId,/);
   assert.equal(resolveSendRecipientId({ addingNewContact: false, selectedContactId: '', usableDefaultContactId: 'ct-sam' }), undefined, 'the server uses the default');

@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSourceFile } from './helpers/sourceCode';
 
 import {
   LOCKED_RECIPIENT_MESSAGE,
@@ -14,7 +15,7 @@ import {
 } from '../src/lib/invoiceRecipient';
 import { canSendInvoiceTo, defaultRecipientProblem, isUsableRecipient, isValidEmail, linkStatusLabel, localLinkStatus } from '../src/lib/xeroLinkStatus';
 
-const src = (...p: string[]) => readFileSync(join(process.cwd(), 'src', ...p), 'utf8').replace(/\r\n/g, '\n');
+const src = (...p: string[]) => readSourceFile('src', ...p);
 const stripComments = (t: string) => t.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
 
 const XC = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -86,7 +87,7 @@ test('the invoice editor locks the recipient once the invoice exists in Xero (sh
   assert.match(code, /const recipientLocked = !!invoice\?\.xeroInvoiceId;/);
   assert.match(code, /const showContactPicker = needsXeroContactChoice\(\{ recipientLocked, usableDefault: !!usableDefaultContactId, chooseOther: chooseOtherContact \}\);/);
   assert.match(code, /\{recipientLocked \? \(\s*<>[\s\S]*?locked: this invoice is already in Xero\./);
-  assert.match(code, /<option key=\{c\.id\} value=\{c\.id\}>/);
+  assert.match(code, /\.\.\.clientContacts\.map\(\(c\) => \(\{\s+value: c\.id,\s+text: `\$\{c\.name\}\$\{c\.email \? ` — \$\{c\.email\}` : ''\}`,/);
   assert.match(code, /LOCKED_RECIPIENT_MESSAGE/);
 });
 

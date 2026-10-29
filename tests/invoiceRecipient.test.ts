@@ -9,10 +9,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSourceFile } from './helpers/sourceCode';
 
 import { resolveSendRecipientId, UNLINKED_NEW_CONTACT_MESSAGE } from '../src/lib/invoiceRecipient';
 
-const editor = readFileSync(join(process.cwd(), 'src', 'components', 'jobs', 'InvoiceEditor.tsx'), 'utf8');
+const editor = readSourceFile('src', 'components', 'jobs', 'InvoiceEditor.tsx');
 const code = editor.replace(/\r\n/g, '\n').replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
 
 test('sending while the new-contact form is open is refused: save the contact first - nothing is saved or sent', () => {

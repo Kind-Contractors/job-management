@@ -5,9 +5,11 @@
 // Real code under a fake fetch (no network: the app's Supabase URL is tests.invalid) and static page renders.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { recipientOptionsAsHtml } from './helpers/recipientOptions';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -21,9 +23,9 @@ import { AuthContext } from '../src/auth/AuthProvider';
 import type { InvoiceDetail, JobContactSummary } from '../src/domain/types';
 
 Object.defineProperty(globalThis, 'navigator', { value: { onLine: true }, configurable: true });
-const src = (...p: string[]) => readFileSync(join(process.cwd(), ...p), 'utf8').replace(/\r\n/g, '\n');
+const src = (...p: string[]) => readSourceFile(...p);
 const noComments = (code: string) => code.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-const decode = (h: string) => h.replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&quot;/g, '"');
+const decode = (h: string) => recipientOptionsAsHtml(h.replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&quot;/g, '"'));
 
 function contact(id: string, name: string, over: Partial<JobContactSummary> = {}): JobContactSummary {
   return {
@@ -214,9 +216,9 @@ function reportPage(contacts: JobContactSummary[]) {
 
 test('PAGE 1: accounts-only contacts stay in the report recipient list, labelled "Accounts only"; ordinary ones are unlabelled', () => {
   const html = reportPage([OPS, ACC, contact('noemail', 'No Email', { email: null, isAccountsContact: true })]);
-  assert.match(html, /<option value="acc">Accounts Team · acc@client\.test · Accounts only<\/option>/);
-  assert.match(html, /<option value="noemail">No Email · no email on file · Accounts only<\/option>/);
-  assert.match(html, /<option value="ops">Sam Ops · ops@client\.test<\/option>/);
+  assert.match(html, /<option value="acc"(?: class="[^"]*")?>Accounts Team · acc@client\.test · Accounts only<\/option>/);
+  assert.match(html, /<option value="noemail"(?: class="[^"]*")?>No Email · no email on file · Accounts only<\/option>/);
+  assert.match(html, /<option value="ops"(?: class="[^"]*")?>Sam Ops · ops@client\.test<\/option>/);
 });
 
 test('PAGE 2: when every contact is accounts-only, nobody is chosen and the page explains why', () => {
@@ -257,7 +259,7 @@ test('INVOICE: accounts-only contacts are still offered as invoice recipients an
       <InvoiceEditor invoiceId="inv-1" onClose={() => {}} clientId="c1" clientContacts={[OPS, ACC]} buildingDefault={null} />
     </QueryClientProvider>,
   ));
-  assert.match(html, /<option value="acc">Accounts Team — acc@client\.test · not linked to Xero yet<\/option>/, 'selectable invoice recipient');
+  assert.match(html, /<option value="acc"(?: class="[^"]*")?>Accounts Team — acc@client\.test · not linked to Xero yet<\/option>/, 'selectable invoice recipient');
   assert.doesNotMatch(html, /data-testid="find-xero-contact"/, 'linking moved to the Building File (Contacts & Defaults)');
   assert.doesNotMatch(noComments(src('src', 'components', 'jobs', 'FindXeroContactPanel.tsx')), /isAccountsContact/, 'the panel never filters on it');
   for (const f of [

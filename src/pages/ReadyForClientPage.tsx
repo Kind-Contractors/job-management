@@ -76,6 +76,7 @@ import {
 import kindContractorsLogo from "../assets/kind_Contractors_logo.png";
 import kindLeaf from "../assets/kind_leaf.png";
 import { backdropDismiss } from '../lib/dialogHooks';
+import RecipientSelect from '../components/shared/RecipientSelect';
 
 /** Strips the `data:...;base64,` prefix a data URL carries — the email provider wants raw base64 content, not a data URL. */
 function blobToBase64(blob: Blob): Promise<string> {
@@ -1362,22 +1363,21 @@ export default function ReadyForClientPage({
                     </div>
                   ) : (
                     <>
-                      <select
+                      <RecipientSelect
+                        label="Recipient"
                         value={selectedContactId ?? ""}
-                        onChange={(e) =>
-                          setSelectedContactId(e.target.value || null)
-                        }
-                        className="mt-1.5 border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
-                      >
-                        <option value="">Choose a recipient…</option>
-                        {selected.job.clientContacts.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                            {c.email ? ` · ${c.email}` : " · no email on file"}
-                            {c.isAccountsContact ? " · Accounts only" : ""}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(value) => setSelectedContactId(value || null)}
+                        className="mt-1.5 max-w-[520px]"
+                        options={[
+                          { value: "", text: "Choose a recipient…" },
+                          ...selected.job.clientContacts.map((c) => ({
+                            value: c.id,
+                            text: `${c.name}${c.email ? ` · ${c.email}` : " · no email on file"}`,
+                            // Only the words "Accounts only" are amber; the name and email keep the normal colour.
+                            note: c.isAccountsContact ? { text: "Accounts only", warn: true } : undefined,
+                          })),
+                        ]}
+                      />
                       {selectedContact ? (
                         <>
                           <div className="mt-1.5 text-[12.5px] text-ink">

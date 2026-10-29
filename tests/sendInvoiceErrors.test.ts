@@ -9,6 +9,7 @@ import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSourceFile } from './helpers/sourceCode';
 
 import { sendInvoice } from '../src/repository/invoicesRepository';
 
@@ -86,6 +87,6 @@ test('a network failure is reported, not swallowed', async () => {
 });
 
 test('the invoice editor shows that message and also reloads the invoice, so the reason stored on a failed invoice appears', () => {
-  const editor = readFileSync(join(process.cwd(), 'src', 'components', 'jobs', 'InvoiceEditor.tsx'), 'utf8').replace(/\r\n/g, '\n');
+  const editor = readSourceFile('src', 'components', 'jobs', 'InvoiceEditor.tsx');
   assert.match(editor, /onError: \(err\) => \{\s*invalidate\(\);\s*setSendResult\(\{ ok: false, message: err instanceof Error \? err\.message : 'Failed to send\.' \}\);\s*\},/);
 });

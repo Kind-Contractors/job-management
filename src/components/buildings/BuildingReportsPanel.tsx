@@ -18,6 +18,7 @@ import { issueClientVideoLinks, listVideosForVisit, signVideoThumbnailUrls } fro
 import { formatWhen } from '../reports/ReportCompletionControls';
 import SkippedPhotosDialog from '../reports/SkippedPhotosDialog';
 import PdfDocumentView from '../reports/PdfDocumentView';
+import ScrollableList from '../shared/ScrollableList';
 import { backdropDismiss } from '../../lib/dialogHooks';
 
 /** The real data and PDF calls - the same ones the Send to client screen's "Download PDF" uses. */
@@ -129,7 +130,8 @@ export default function BuildingReportsPanel({
             : 'No reports to download yet. A report appears here once it is marked Completed or sent to the client in Ready for client.'}
         </div>
       ) : (
-        available.map((entry) => {
+        <ScrollableList count={available.length} label="Job reports">
+        {available.map((entry) => {
           const busy = busyReportId === entry.reportId;
           const error = errors[entry.reportId];
           return (
@@ -178,7 +180,8 @@ export default function BuildingReportsPanel({
               )}
             </div>
           );
-        })
+        })}
+        </ScrollableList>
       )}
       {notYetAvailable > 0 && (
         <div className="border-t border-divider px-4 py-2 text-[11.5px] text-neutral-500">

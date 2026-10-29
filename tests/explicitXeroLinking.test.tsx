@@ -5,6 +5,7 @@
 // same rules is in xeroCreateInvoiceFunction.test.ts (NO-AUTO and SHARED MAILBOX tests).
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -15,7 +16,7 @@ import { BLANK_CONTACT_FORM, checkContactForm, duplicateEmailWarning } from '../
 import { canSendInvoiceTo, defaultRecipientProblem } from '../src/lib/xeroLinkStatus';
 import { NOT_LINKED_RECIPIENT_MESSAGE, resolveSendRecipientId, sendAttemptOutcome } from '../src/lib/invoiceRecipient';
 
-const src = (...p: string[]) => readFileSync(join(process.cwd(), ...p), 'utf8').replace(/\r\n/g, '\n');
+const src = (...p: string[]) => readSourceFile(...p);
 const noComments = (code: string) => code.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
 const CONTACTS = [{ id: 'c1', name: 'Sue (Kingfisher Court)', email: 'accounts@agent.test', isPrimary: true }];
 const XA = 'aaaaaaaa-0000-4000-8000-00000000000a';
@@ -104,7 +105,7 @@ test('BUILDING FILE 1: every contact row (Contacts & Defaults) offers Link to Xe
   assert.match(tab, /\{status === 'linked' \? 'Change Xero link' : 'Link to Xero'\}/);
   assert.match(tab, /<LinkXeroContactDialog\s+localContactId=\{linkingContact\.id\}\s+localContactName=\{linkingContact\.name\}\s+localContactEmail=\{linkingContact\.email\}/);
   assert.match(tab, /currentXeroContactId=\{linkingContact\.xeroContactId\}/, 'replacing an existing link still needs its explicit confirmation in the dialog');
-  assert.match(tab, /suggestedTerm=\{building\.name \|\| building\.buildingName \|\| linkingContact\.name\}/, 'the name search starts from this building');
+  assert.doesNotMatch(tab, /suggestedTerm/, 'nothing is pre-filled: the manager types the name to search');
   assert.match(tab, /refreshAfterXeroLink\(queryClient\);/, 'only the contacts and job rows are refreshed');
   assert.doesNotMatch(noComments(src('src', 'pages', 'BuildingFilePage.tsx')), /setLinkingContact|<LinkXeroContactDialog/, 'the Site file only summarises');
 });
@@ -135,7 +136,7 @@ test('INVOICE 1: contacts are no longer added from the invoice ("+ Add another e
 test('INVOICE 2: a chosen contact that is not linked shows why and a Link button; the main button can be pressed but does not send', () => {
   const editor = noComments(src('src', 'components', 'jobs', 'InvoiceEditor.tsx'));
   assert.match(editor, /data-testid="recipient-not-linked"/);
-  assert.match(editor, /must be linked to their existing Xero contact before this invoice\s+can be sent: link them, then press &ldquo;\{mode\.label\}&rdquo; again\./);
+  assert.match(editor, /must be linked to their existing Xero contact before this invoice\s+can be sent: link them, then press &ldquo;\{mode\.label\}\s*&rdquo; again\./);
   assert.match(editor, /onClick=\{\(\) => setLinkingContact\(selectedContact\)\}/);
   assert.match(editor, /\(selectedContact \? true : !!usableDefaultContactId\)/, 'any listed contact counts as chosen');
   assert.match(editor, /disabled=\{anyMutationPending \|\| lines\.length === 0 \|\| !recipientChosen\}/);
@@ -154,9 +155,11 @@ test('STEP A 1: sendAttemptOutcome - an unlinked chosen contact (with or without
 
 test('STEP A 2: every contact is a selectable option - no option is disabled for being unlinked or having no email', () => {
   const editor = noComments(src('src', 'components', 'jobs', 'InvoiceEditor.tsx'));
-  assert.match(editor, /<option key=\{c\.id\} value=\{c\.id\}>/);
+  assert.match(editor, /\.\.\.clientContacts\.map\(\(c\) => \(\{\s+value: c\.id,\s+text: `\$\{c\.name\}\$\{c\.email \? ` — \$\{c\.email\}` : ''\}`,/);
   assert.doesNotMatch(editor, /disabled=\{!canSendInvoiceTo\(c\)\}/);
-  assert.match(editor, /: ' · not linked to Xero yet'\}/);
+  const contactOptions = editor.slice(editor.indexOf('...clientContacts.map((c) => ({'), editor.indexOf(']}', editor.indexOf('...clientContacts.map((c) => ({')));
+  assert.doesNotMatch(contactOptions, /disabled/, 'no contact option is ever disabled');
+  assert.match(contactOptions, /: \{ text: 'not linked to Xero yet', warn: true \}/);
 });
 
 test('STEP A 3: pressing the button with an unlinked recipient saves NOTHING and calls NOTHING - it shows the explanation instead', () => {
@@ -178,7 +181,7 @@ test('STEP A 3: pressing the button with an unlinked recipient saves NOTHING and
 test('STEP A 4: the explanation becomes an alert after a press, says nothing was saved or sent, offers the Link dialog, and explains a missing email', () => {
   const editor = noComments(src('src', 'components', 'jobs', 'InvoiceEditor.tsx'));
   assert.match(editor, /role=\{xeroLinkNeededFor === selectedContact\.id \? 'alert' : undefined\}/);
-  assert.match(editor, /\{xeroLinkNeededFor === selectedContact\.id && <div className="font-semibold">Not sent: a Xero contact is needed\.<\/div>\}/);
+  assert.match(editor, /\{xeroLinkNeededFor === selectedContact\.id &&\s*\(?\s*<div className="font-semibold">\s*Not sent: a Xero contact is needed\.\s*<\/div>\s*\)?\s*\}/);
   assert.match(editor, /\{xeroLinkNeededFor === selectedContact\.id && ' Nothing has been saved or sent\.'\}/);
   assert.match(editor, /\{!isValidEmail\(selectedContact\.email\) && \(\s*<div data-testid="recipient-no-email"/);
   assert.match(editor, /has no email address in the app\. The invoice uses the email address held on the Xero contact\s+you link, so choose the Xero contact that has the right invoicing email\./);
@@ -187,7 +190,7 @@ test('STEP A 4: the explanation becomes an alert after a press, says nothing was
 
 test('STEP A 5: the press state is cleared when the choice or the invoice changes; a link keeps the chosen recipient (only contacts and job rows reload)', () => {
   const editor = noComments(src('src', 'components', 'jobs', 'InvoiceEditor.tsx'));
-  assert.match(editor, /setSelectedContactId\(e\.target\.value\);\s+setXeroLinkNeededFor\(null\);/);
+  assert.match(editor, /onChange=\{\(value\) => \{\s+setSelectedContactId\(value\);\s+setXeroLinkNeededFor\(null\);/);
   assert.match(editor, /setChooseOtherContact\(false\);\s+setXeroLinkNeededFor\(null\);\s+\}, \[invoiceId\]\);/);
   const dialog = editor.slice(editor.indexOf('{linkingContact && ('));
   assert.match(dialog, /onLinked=\{\(\) => refreshAfterXeroLink\(queryClient\)\}/);

@@ -25,7 +25,7 @@ function render(email: string | null, seeded?: XeroEmailMatchResult) {
   return decode(
     renderToStaticMarkup(
       <QueryClientProvider client={qc}>
-        <LinkXeroContactDialog localContactId="ct-1" localContactName="Amanda Da Silva" localContactEmail={email} suggestedTerm="Amanda Da Silva" currentXeroContactId={null} onClose={() => {}} onLinked={() => {}} />
+        <LinkXeroContactDialog localContactId="ct-1" localContactName="Amanda Da Silva" localContactEmail={email} currentXeroContactId={null} onClose={() => {}} onLinked={() => {}} />
       </QueryClientProvider>,
     ),
   );
@@ -59,7 +59,7 @@ test('no email match: says so and points to the name search, which is still offe
   const html = render(EMAIL, { outcome: 'none', results: [], mayBeIncomplete: false });
   assert.match(emailSection(html), /No Xero contact has the email amanda@dasilva\.test\. If the contact uses a different email in Xero, search by name below\./);
   assert.match(html, /aria-label="Search Xero contacts"/);
-  assert.match(html, /value="Amanda Da Silva"/);
+  assert.match(html, /<input (?![^>]*value="[^"])[^>]*aria-label="Search Xero contacts"/, 'the name search is offered EMPTY: the manager types it');
 });
 
 test('no email match on a full page: says it cannot be sure, rather than "none"', () => {

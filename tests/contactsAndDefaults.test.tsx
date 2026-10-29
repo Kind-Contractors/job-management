@@ -5,6 +5,7 @@
 // to static markup (there is no DOM library in this repo); wiring and safeguards are checked from source.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -15,7 +16,7 @@ import ReportDefaultPanel from '../src/components/buildings/ReportDefaultPanel';
 import EditContactForm, { changedFields, editFormFrom } from '../src/components/contacts/EditContactForm';
 import { REPORT_DEFAULT_PROBLEM, reportDefaultSummary, resolveDisplayContact } from '../src/lib/contactDisplay';
 
-const src = (...p: string[]) => readFileSync(join(process.cwd(), ...p), 'utf8').replace(/\r\n/g, '\n');
+const src = (...p: string[]) => readSourceFile(...p);
 const noComments = (code: string) => code.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
 const decode = (h: string) => h.replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&quot;/g, '"');
 const wrap = (el: React.ReactElement) => decode(renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}>{el}</QueryClientProvider>));
@@ -98,8 +99,8 @@ test('REPORT PANEL: shows the main contact; accounts-only contacts are never off
 test('REPORT PANEL: with no default it says why and offers only operational contacts', () => {
   const html = wrap(<ReportDefaultPanel clientId="cl1" clientName="Atlas" contacts={[OPS, contact('o2', 'Other'), ACC]} buildingCount={1} refreshKeys={[]} />);
   assert.match(html, new RegExp(REPORT_DEFAULT_PROBLEM.no_main.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(html, /<option value="ops">Olly Ops — ops@client\.test<\/option>/);
-  assert.match(html, /<option value="o2">Other — o2@client\.test<\/option>/);
+  assert.match(html, /<option value="ops"(?: class="[^"]*")?>Olly Ops — ops@client\.test<\/option>/);
+  assert.match(html, /<option value="o2"(?: class="[^"]*")?>Other — o2@client\.test<\/option>/);
   assert.doesNotMatch(html, /<option value="acc"/, 'accounts-only is never offered as the report default');
   const onlyAcc = wrap(<ReportDefaultPanel clientId="cl1" clientName="Atlas" contacts={[ACC]} buildingCount={1} refreshKeys={[]} />);
   assert.match(onlyAcc, /Add an operational \(not accounts-only\) contact, above, to set a default\./);
