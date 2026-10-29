@@ -38,8 +38,8 @@ test('FAILED REFRESH after adding a contact: the new id is chosen but the list s
 });
 
 test('SUBMISSION BLOCKED while unavailable: the main button needs the chosen contact in the list, and the send passes the same fact', () => {
-  assert.match(editor, /const recipientUnavailable = !recipientLocked && recipientSelectionState\(effectiveContactId, addingNewContact, clientContacts\) === 'missing';/);
-  assert.match(editor, /const recipientChosen = recipientLocked \|\| \(!addingNewContact && !recipientUnavailable && \(selectedContact \? true : !!usableDefaultContactId\)\);/);
+  assert.match(editor, /const recipientUnavailable = !recipientLocked && recipientSelectionState\(effectiveContactId, false, clientContacts\) === 'missing';/);
+  assert.match(editor, /const recipientChosen = recipientLocked \|\| \(!recipientUnavailable && \(selectedContact \? true : !!usableDefaultContactId\)\);/);
   assert.match(editor, /disabled=\{anyMutationPending \|\| lines\.length === 0 \|\| !recipientChosen\}/);
   assert.match(editor, /selectedIsAvailable: !recipientUnavailable,/);
   const send = editor.slice(editor.indexOf('const sendMutation'));

@@ -82,12 +82,10 @@ test('with every contact linked there is nothing to show', () => {
 });
 
 // ---- inside the invoice editor ------------------------------------------------------------------------------------------------------------
-test('the invoice editor shows the Link button beside an unlinked contact, and keeps linked contacts selectable', () => {
+test('the invoice editor has no search panel and no per-contact Link list (both in Contacts & Defaults), and keeps every contact selectable', () => {
   const html = renderEditor([LINKED, MO]);
-  assert.match(html, /Not linked to Xero/);
-  assert.match(html, /aria-label="Link Mo to a Xero contact"[^>]*>Link<\/button>/);
-  assert.match(html, />Mo<\/div><div[^>]*>ct-mo@example\.test<\/div>/, 'the email is shown beside the name in the Link list');
-  assert.doesNotMatch(html, /aria-label="Link Linked Person/);
+  assert.doesNotMatch(html, /data-testid="find-xero-contact"|Find a contact in Xero/);
+  assert.doesNotMatch(html, /aria-label="Link Mo to a Xero contact"|data-testid="unlinked-list"/, 'the per-contact Link list is gone');
   assert.match(html, /<option value="ct-linked">Linked Person — ct-linked@example\.test · Xero: Oak Estates Ltd<\/option>/, 'linked: selectable');
   assert.match(html, /<option value="ct-mo">Mo — ct-mo@example\.test · not linked to Xero yet<\/option>/, 'unlinked: selectable; it must be linked before the invoice is sent');
 });
@@ -112,9 +110,10 @@ test('once the invoice exists in Xero (recipient locked) no Link list is offered
   assert.doesNotMatch(html, /Link Mo to a Xero contact/);
 });
 
-test('the editor opens the SHARED link dialog for the clicked contact, and refreshes on success', () => {
+test('the editor still opens the SHARED link dialog for a chosen unlinked contact (alert and notice), and refreshes on success', () => {
   const editor = code('components', 'jobs', 'InvoiceEditor.tsx');
-  assert.match(editor, /<UnlinkedRecipientsList contacts=\{clientContacts\} onLink=\{setLinkingContact\}/);
+  assert.doesNotMatch(editor, /<UnlinkedRecipientsList/, 'replaced by the Find-in-Xero panel');
+  assert.match(editor, /onClick=\{\(\) => setLinkingContact\(selectedContact\)\}/);
   assert.match(editor, /<LinkXeroContactDialog\s+localContactId=\{linkingContact\.id\}\s+localContactName=\{linkingContact\.name\}/);
   assert.match(editor, /currentXeroContactId=\{linkingContact\.xeroContactId\}/);
   assert.match(editor, /onLinked=\{\(\) => refreshAfterXeroLink\(queryClient\)\}/);
@@ -138,8 +137,7 @@ test('nothing on the Link path can send an invoice', () => {
   assert.doesNotMatch(code('repository', 'xeroLinksRepository.ts'), /xero-create-invoice|sendInvoice\(/);
 });
 
-test('a contact with no email shows just its name, in the list and in the selector', () => {
+test('a contact with no email shows just its name in the selector', () => {
   const html = renderEditor([{ ...MO, email: null }]);
   assert.match(html, /<option value="ct-mo">Mo · not linked to Xero yet<\/option>/, 'unlinked, no email: still selectable');
-  assert.match(html, />Mo<\/div><div class="text-\[11px\] text-due-fg">/);
 });

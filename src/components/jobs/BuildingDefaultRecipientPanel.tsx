@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
 import type { BuildingRow, Contact } from '../../domain/types';
 import { defaultRecipientProblem, isUsableRecipient, VERIFY_STATE_TEXT } from '../../lib/xeroLinkStatus';
 import { contactInitials } from '../../lib/contactDisplay';
@@ -71,15 +70,15 @@ export default function BuildingDefaultRecipientPanel({ building, contacts }: { 
   const showPicker = !def || changing;
 
   return (
-    <div data-testid="building-invoicing" className="border border-neutral-300 bg-white">
-      <div className="flex items-center gap-2 border-b border-neutral-300 px-4 py-2.5">
-        <span className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">Invoicing</span>
-        {/* The whole Ready for accounts list (it has no per-building filter). */}
-        <Link to="/ready-for-accounts" className="ml-auto text-[11.5px] font-semibold text-teal-700 hover:underline">
-          Ready for accounts →
-        </Link>
+    <div data-testid="invoice-default" className="border border-neutral-300 bg-white">
+      <div className="border-b border-neutral-300 px-4 py-2.5 font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
+        Invoices · default recipient
       </div>
       <div className="flex flex-col gap-2 px-4 py-3 text-[12.5px]">
+        <div className="text-[11px] text-neutral-600">
+          For this building only. Invoices for it go to this Xero-linked contact unless another is chosen for a single invoice (which
+          never changes this default).
+        </div>
         {def ? (
           <div className="flex items-center gap-3 border border-neutral-300 bg-neutral-100 p-2.5">
             <span aria-hidden="true" className="grid h-8 w-8 flex-none place-items-center bg-teal font-heading text-[11px] font-semibold text-white">
@@ -155,7 +154,7 @@ export default function BuildingDefaultRecipientPanel({ building, contacts }: { 
               </select>
             </label>
             {linkable.length === 0 && (
-              <div className="text-[11px] text-neutral-500">Link a contact to its Xero contact first (&ldquo;Link to Xero&rdquo; in Contacts, above).</div>
+              <div className="text-[11px] text-neutral-500">Link a contact to its Xero contact first (&ldquo;Link to Xero&rdquo; under Manage contacts).</div>
             )}
             <div className="flex gap-1.5">
               <button
@@ -181,12 +180,6 @@ export default function BuildingDefaultRecipientPanel({ building, contacts }: { 
           </>
         )}
         {error && <div className="text-[11.5px] text-missed-fg">{error}</div>}
-
-        {/* Read-only here; edited with the building ("Edit building"). */}
-        <div className="mt-1 flex justify-between gap-3 border-t border-divider pt-2">
-          <span className="flex-none text-neutral-600">Invoice details</span>
-          <span className="text-right whitespace-pre-line text-ink">{building.invoiceDetails || '—'}</span>
-        </div>
       </div>
     </div>
   );

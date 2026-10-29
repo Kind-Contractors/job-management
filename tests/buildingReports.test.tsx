@@ -174,7 +174,7 @@ test('WIRING: the panel is on the Site file tab with active AND historical jobs;
   const page = src('pages', 'BuildingFilePage.tsx');
   assert.match(page, /queryKey: \['historicalJobRows'\], queryFn: listHistoricalJobRows/);
   assert.match(page, /<BuildingReportsPanel\s+buildingId=\{building\.id\}\s+jobLists=\{\[jobRows, historicalJobs\.data \?\? \[\]\]\}/);
-  const site = page.slice(page.indexOf("{tab === 'site' ? ("), page.indexOf(') : (\n        <div className="flex flex-col gap-4">'));
+  const site = page.slice(page.indexOf("tab === 'site' ? ("), page.indexOf(') : (\n        <div className="flex flex-col gap-4">'));
   assert.match(site, /<BuildingReportsPanel/, 'on the Site file tab');
   assert.match(page, /queryFn: \(\) => listBuildingHistory\(buildingId!\)/);
   assert.match(page, /queryFn: \(\) => listBuildingPhotos\(buildingId!\)/);

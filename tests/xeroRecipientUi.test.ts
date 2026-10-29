@@ -81,10 +81,11 @@ test('the invoice editor no longer guesses a recipient from the primary or only 
   assert.match(code, /usableDefaultContactId/);
 });
 
-test('the invoice editor locks the picker once the invoice exists in Xero, and offers every contact (linked or not)', () => {
+test('the invoice editor locks the recipient once the invoice exists in Xero (shown, no picker), and offers every contact (linked or not)', () => {
   const code = stripComments(src('components', 'jobs', 'InvoiceEditor.tsx'));
   assert.match(code, /const recipientLocked = !!invoice\?\.xeroInvoiceId;/);
-  assert.match(code, /disabled=\{anyMutationPending \|\| recipientLocked\}/);
+  assert.match(code, /const showContactPicker = needsXeroContactChoice\(\{ recipientLocked, usableDefault: !!usableDefaultContactId, chooseOther: chooseOtherContact \}\);/);
+  assert.match(code, /\{recipientLocked \? \(\s*<>[\s\S]*?locked: this invoice is already in Xero\./);
   assert.match(code, /<option key=\{c\.id\} value=\{c\.id\}>/);
   assert.match(code, /LOCKED_RECIPIENT_MESSAGE/);
 });

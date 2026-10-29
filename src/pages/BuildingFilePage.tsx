@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { listBuildingHistory, listBuildingPhotos, listBuildingRows } from '../repository/buildingsRepository';
 import { listHistoricalJobRows, listJobRows } from '../repository/jobsRepository';
 import { listContactsForClient } from '../repository/contactsRepository';
@@ -9,21 +9,24 @@ import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
 import JobCreator from '../components/jobs/JobCreator';
 import BuildingEditor from '../components/jobs/BuildingEditor';
 import BuildingAccessEditor from '../components/jobs/BuildingAccessEditor';
-import BuildingDefaultRecipientPanel from '../components/jobs/BuildingDefaultRecipientPanel';
 import BuildingReportsPanel from '../components/buildings/BuildingReportsPanel';
 import ChangeBuildingClientPanel from '../components/buildings/ChangeBuildingClientPanel';
 import BuildingManagementHistory from '../components/buildings/BuildingManagementHistory';
-import BuildingAddContactForm from '../components/buildings/BuildingAddContactForm';
-import LinkXeroContactDialog from '../components/jobs/LinkXeroContactDialog';
-import { refreshAfterXeroLink } from '../components/jobs/UnlinkedRecipientsList';
-import type { Contact } from '../domain/types';
-import { isUsableRecipient, linkStatusLabel, localLinkStatus } from '../lib/xeroLinkStatus';
-import { contactInitials } from '../lib/contactDisplay';
+import ContactsAndDefaultsTab from '../components/buildings/ContactsAndDefaultsTab';
+import { defaultRecipientProblem, isUsableRecipient, linkStatusLabel, localLinkStatus } from '../lib/xeroLinkStatus';
+import { contactInitials, REPORT_DEFAULT_PROBLEM, reportDefaultSummary } from '../lib/contactDisplay';
 import { buildingReports } from '../lib/buildingReports';
 import Breadcrumbs from '../components/shell/Breadcrumbs';
 import { HISTORY_EVENT_LABEL, historyEventDetail } from '../lib/historyEventLabels';
 
-type Tab = 'site' | 'history';
+type Tab = 'site' | 'contacts' | 'history';
+
+const TAB_LABEL: Record<Tab, string> = { site: 'Site file', contacts: 'Contacts & Defaults', history: 'History' };
+
+/** The tab is in the URL (?tab=contacts / ?tab=history), so it can be linked to (e.g. from an invoice) and survives a refresh. */
+function tabFromParam(value: string | null): Tab {
+  return value === 'contacts' || value === 'history' ? value : 'site';
+}
 
 function money(n: number): string {
   return `£${n.toLocaleString('en-GB')}`;
@@ -34,7 +37,18 @@ const PHOTO_PHASE_LABEL = { before: 'Before', during: 'During', after: 'After' }
 
 export default function BuildingFilePage() {
   const { buildingId } = useParams<{ buildingId: string }>();
-  const [tab, setTab] = useState<Tab>('site');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = tabFromParam(searchParams.get('tab'));
+  const setTab = (next: Tab) =>
+    setSearchParams(
+      (params) => {
+        const updated = new URLSearchParams(params);
+        if (next === 'site') updated.delete('tab');
+        else updated.set('tab', next);
+        return updated;
+      },
+      { replace: true },
+    );
   // Collapsed by default — the activity log can get long over time, and
   // Work Photos (always shown in full below it) shouldn't require
   // scrolling past it to reach.
@@ -43,13 +57,8 @@ export default function BuildingFilePage() {
   const [editingBuilding, setEditingBuilding] = useState(false);
   const [changingClient, setChangingClient] = useState(false);
   const [clientNotice, setClientNotice] = useState<string | null>(null);
-  const [addingContact, setAddingContact] = useState(false);
-  const [contactNotice, setContactNotice] = useState<string | null>(null);
   // The contact just added here: the notice offers to link it to its existing Xero contact straight away (optional).
-  const [justAddedContactId, setJustAddedContactId] = useState<string | null>(null);
   // The contact whose "Link to Xero" was pressed: opens the shared LinkXeroContactDialog for exactly that contact.
-  const [linkingContact, setLinkingContact] = useState<Contact | null>(null);
-  const queryClient = useQueryClient();
   const [editingAccess, setEditingAccess] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [creatingJob, setCreatingJob] = useState(false);
@@ -162,6 +171,10 @@ export default function BuildingFilePage() {
   // The same split the Job reports panel shows (ready = marked Completed or sent to the client).
   const reports = buildingReports(building.id, jobRows, historicalJobs.data ?? []);
   const linkedContacts = contacts.filter(isUsableRecipient).length;
+  // The two defaults, as the Site file summary shows them (managed on the Contacts & Defaults tab).
+  const reportDefault = reportDefaultSummary(contacts);
+  const invoiceDefaultProblem = defaultRecipientProblem(building.defaultRecipient, contacts);
+  const invoiceDefaultContact = building.defaultRecipient ? (contacts.find((c) => c.id === building.defaultRecipient!.contactId) ?? null) : null;
   const selectedJob = jobRows.find((j) => j.id === selectedJobId);
   const siblings = selectedJob ? buildingJobs.filter((j) => j.id !== selectedJob.id) : [];
 
@@ -276,7 +289,7 @@ export default function BuildingFilePage() {
       )}
 
       <div className="mt-4 mb-4 flex gap-1 border-b border-divider">
-        {(['site', 'history'] as Tab[]).map((t) => (
+        {(['site', 'contacts', 'history'] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -285,12 +298,20 @@ export default function BuildingFilePage() {
               tab === t ? 'border-teal text-teal-700' : 'border-transparent text-neutral-600',
             ].join(' ')}
           >
-            {t === 'site' ? 'Site file' : 'History'}
+            {TAB_LABEL[t]}
           </button>
         ))}
       </div>
 
-      {tab === 'site' ? (
+      {tab === 'contacts' ? (
+        <ContactsAndDefaultsTab
+          building={building}
+          contacts={contacts}
+          contactsLoading={contactsLoading}
+          contactsError={contactsError}
+          buildingCount={buildings.filter((b) => b.clientId === building.clientId).length}
+        />
+      ) : tab === 'site' ? (
         <div className="grid grid-cols-[minmax(0,3fr)_minmax(360px,2fr)] items-start gap-5">
           {/* The right column carries more (invoicing, contacts, history, access), so it gets the larger share of the width. */}
           <div className="flex min-w-0 flex-col gap-4">
@@ -368,134 +389,100 @@ export default function BuildingFilePage() {
           </div>
 
           <div className="flex min-w-0 flex-col gap-4">
+            {/* Read-only summary: who reports and invoices go to, and the client's contacts. Managed on the Contacts & Defaults tab. */}
             <div data-testid="building-contacts" className="border border-neutral-300 bg-white">
               <div className="flex items-center gap-2 border-b border-neutral-300 px-4 py-2.5">
-                <span className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">Contacts · {contacts.length}</span>
+                <span className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
+                  Contacts &amp; defaults · {contacts.length}
+                </span>
                 <button
                   type="button"
-                  onClick={() => {
-                    setAddingContact(true);
-                    setContactNotice(null);
-                    setJustAddedContactId(null);
-                  }}
-                  disabled={contactsLoading || contactsError}
-                  className="ml-auto cursor-pointer text-[11.5px] font-semibold text-teal-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
+                  onClick={() => setTab('contacts')}
+                  className="ml-auto cursor-pointer text-[11.5px] font-semibold text-teal-700 hover:underline"
                 >
-                  + Add contact
+                  Edit contacts &amp; defaults
                 </button>
               </div>
-              {contactNotice && (
-                <div role="status" className="border-b border-divider bg-teal-100 px-4 py-2 text-[12px] text-teal-700">
-                  {contactNotice}
-                  {(() => {
-                    // Offered, never done for the manager: the new contact is linked only if they choose and confirm a Xero contact.
-                    const added = justAddedContactId ? contacts.find((c) => c.id === justAddedContactId) : undefined;
-                    if (!added) return null;
-                    return isUsableRecipient(added) ? (
-                      <> {linkStatusLabel(added)}.</>
-                    ) : (
-                      <>
-                        {' '}
-                        To invoice it, link it to its existing Xero contact.{' '}
-                        <button type="button" onClick={() => setLinkingContact(added)} className="cursor-pointer font-semibold underline">
-                          Link to Xero contact now
-                        </button>
-                      </>
-                    );
-                  })()}
-                </div>
-              )}
               {contactsLoading ? (
                 <div className="px-4 py-3 text-[12.5px] text-neutral-500">Loading contacts…</div>
               ) : contactsError ? (
                 <div className="px-4 py-3 text-[12.5px] text-missed-fg">Couldn't load contacts.</div>
-              ) : contacts.length === 0 ? (
-                <div className="px-4 py-3 text-[12.5px] text-neutral-500">No contacts recorded for this client.</div>
               ) : (
-                contacts.map((c) => (
-                  <div key={c.id} className="flex items-center gap-3 border-b border-divider px-4 py-2.5 text-[12.5px] last:border-b-0">
-                    <span aria-hidden="true" className="grid h-8 w-8 flex-none place-items-center bg-neutral-200 font-heading text-[11px] font-semibold text-teal-700">
-                      {contactInitials(c.name)}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                        <span className="font-semibold text-ink">{c.name}</span>
-                        {c.isPrimary && (
-                          <span className="border border-teal-700 bg-teal-100 px-1 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.06em] text-teal-700 uppercase">
-                            Primary
-                          </span>
-                        )}
-                        {c.isAccountsContact && (
-                          <span className="border border-teal-700 bg-teal-100 px-1 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.06em] text-teal-700 uppercase">
-                            Accounts only
-                          </span>
-                        )}
-                      </div>
-                      <div className="truncate text-[11.5px] text-neutral-600">
-                        {[c.email ?? c.phoneNumber ?? 'No email or phone', c.role].filter(Boolean).join(' · ')}
-                      </div>
-                      {localLinkStatus(c) !== 'not_linked' && (
-                        <div className={`truncate text-[11px] ${localLinkStatus(c) === 'linked' ? 'text-teal-700' : 'text-due-fg'}`}>
-                          {localLinkStatus(c) === 'linked' ? '✓ ' : ''}
-                          {linkStatusLabel(c)}
-                        </div>
+                <>
+                  <div data-testid="defaults-summary" className="flex flex-col gap-1.5 border-b border-divider px-4 py-2.5 text-[12px]">
+                    <div>
+                      <span className="text-neutral-600">Job reports go to </span>
+                      {reportDefault.kind === 'contact' ? (
+                        <span className="font-semibold text-ink">{reportDefault.contact.name}</span>
+                      ) : (
+                        <span className="text-due-fg">{REPORT_DEFAULT_PROBLEM[reportDefault.why]}</span>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setLinkingContact(c)}
-                      aria-label={`${localLinkStatus(c) === 'not_linked' ? 'Link' : 'Change the Xero link of'} ${c.name}`}
-                      className={[
-                        'flex-none cursor-pointer px-2 py-1 text-[11px] font-semibold',
-                        localLinkStatus(c) === 'linked'
-                          ? 'border border-neutral-300 text-teal-700 hover:bg-neutral-100'
-                          : 'border border-dashed border-neutral-500 text-neutral-700 hover:bg-neutral-100',
-                      ].join(' ')}
-                    >
-                      {localLinkStatus(c) === 'linked' ? 'Change Xero link' : 'Link to Xero'}
-                    </button>
+                    <div>
+                      <span className="text-neutral-600">Invoices for this building go to </span>
+                      {invoiceDefaultContact && !invoiceDefaultProblem ? (
+                        <>
+                          <span className="font-semibold text-ink">{invoiceDefaultContact.name}</span>
+                          {invoiceDefaultContact.xeroContactName && <span className="text-teal-700"> · ✓ Xero: {invoiceDefaultContact.xeroContactName}</span>}
+                        </>
+                      ) : (
+                        <span className="text-due-fg">
+                          {invoiceDefaultProblem ?? 'no default yet: a recipient is chosen for each invoice.'}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                ))
-              )}
-              {/* A dialog over the page (see BuildingAddContactForm). */}
-              {addingContact && !contactsLoading && !contactsError && (
-                <BuildingAddContactForm
-                  clientId={building.clientId}
-                  clientName={building.clientName}
-                  buildingId={building.id}
-                  contacts={contacts}
-                  onClose={() => setAddingContact(false)}
-                  onCreated={(contact) => {
-                    setAddingContact(false);
-                    setContactNotice(`Contact added: ${contact.name}.`);
-                    setJustAddedContactId(contact.id);
-                  }}
-                />
+                  {contacts.length === 0 ? (
+                    <div className="px-4 py-3 text-[12.5px] text-neutral-500">No contacts recorded for this client.</div>
+                  ) : (
+                    contacts.map((c) => (
+                      <div key={c.id} className="flex items-center gap-3 border-b border-divider px-4 py-2 text-[12.5px] last:border-b-0">
+                        <span aria-hidden="true" className="grid h-8 w-8 flex-none place-items-center bg-neutral-200 font-heading text-[11px] font-semibold text-teal-700">
+                          {contactInitials(c.name)}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                            <span className="font-semibold text-ink">{c.name}</span>
+                            {c.isPrimary && (
+                              <span className="border border-teal-700 bg-teal-100 px-1 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.06em] text-teal-700 uppercase">
+                                Main contact
+                              </span>
+                            )}
+                            {c.isAccountsContact && (
+                              <span className="border border-teal-700 bg-teal-100 px-1 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.06em] text-teal-700 uppercase">
+                                Accounts only
+                              </span>
+                            )}
+                          </div>
+                          <div className="truncate text-[11.5px] text-neutral-600">{c.email ?? c.phoneNumber ?? 'No email or phone'}</div>
+                        </div>
+                        <span
+                          title={linkStatusLabel(c)}
+                          className={`flex-none text-[11px] ${localLinkStatus(c) === 'linked' ? 'text-teal-700' : 'text-due-fg'}`}
+                        >
+                          {localLinkStatus(c) === 'linked' ? '✓ Xero' : localLinkStatus(c) === 'needs_relink' ? 'Link again' : 'Not linked'}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </>
               )}
             </div>
 
-            {linkingContact && (
-              // The shared link dialog: the email lookup lists every Xero contact with this contact's email and picks none; the name
-              // search is pre-filled with this building's name (Xero often has one contact per building). Nothing is linked until the
-              // manager chooses and confirms; replacing a link needs its own confirmation, and a contact that is any building's
-              // default recipient cannot be re-linked (the server refuses until that default is cleared).
-              <LinkXeroContactDialog
-                localContactId={linkingContact.id}
-                localContactName={linkingContact.name}
-                localContactEmail={linkingContact.email}
-                suggestedTerm={building.name || building.buildingName || linkingContact.name}
-                currentXeroContactId={linkingContact.xeroContactId}
-                onClose={() => setLinkingContact(null)}
-                onLinked={() => refreshAfterXeroLink(queryClient)}
-              />
-            )}
-
-            {/* Invoicing: the default invoice recipient and the invoice details. Needs the contacts (only linked ones can be chosen). */}
-            {contactsLoading ? (
-              <div className="border border-neutral-300 bg-white px-4 py-3 text-[12.5px] text-neutral-500">Loading invoicing…</div>
-            ) : (
-              !contactsError && <BuildingDefaultRecipientPanel building={building} contacts={contacts} />
-            )}
+            <div data-testid="building-invoicing" className="border border-neutral-300 bg-white">
+              <div className="flex items-center gap-2 border-b border-neutral-300 px-4 py-2.5">
+                <span className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">Invoicing</span>
+                {/* The whole Ready for accounts list (it has no per-building filter). */}
+                <Link to="/ready-for-accounts" className="ml-auto text-[11.5px] font-semibold text-teal-700 hover:underline">
+                  Ready for accounts →
+                </Link>
+              </div>
+              {/* Read-only here; edited with the building ("Edit building"). */}
+              <div className="flex justify-between gap-3 px-4 py-2.5 text-[12.5px]">
+                <span className="flex-none text-neutral-600">Invoice details</span>
+                <span className="text-right whitespace-pre-line text-ink">{building.invoiceDetails || '—'}</span>
+              </div>
+            </div>
 
             <BuildingManagementHistory buildingId={building.id} currentClientName={building.clientName} />
 

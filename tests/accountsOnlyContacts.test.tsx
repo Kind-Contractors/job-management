@@ -128,7 +128,7 @@ test('SAVE 4: the popover saves the whole form, seeded from the saved value - ed
   const reqs = await withFakeDb(SAVED, () => updateContact('ct-1', 'c1', { name: 'Accounts Team', email: 'acc@client.test', phoneNumber: '0207', isPrimary: false, isAccountsContact: true }));
   const patch = contactWrites(reqs).find((r) => r.method === 'PATCH')!;
   assert.equal(patch.body.is_accounts_contact, true, 'the same value as saved');
-  assert.deepEqual(history(reqs), ['Contact updated: Accounts Team'], 'no classification change recorded');
+  assert.deepEqual(history(reqs), ['Contact updated: Accounts Team (phone)'], 'only the phone changed: no classification change recorded');
 });
 
 test('SAVE 5: marking and un-marking are explicit writes, each recorded in the contact history', async () => {
@@ -258,7 +258,8 @@ test('INVOICE: accounts-only contacts are still offered as invoice recipients an
     </QueryClientProvider>,
   ));
   assert.match(html, /<option value="acc">Accounts Team — acc@client\.test · not linked to Xero yet<\/option>/, 'selectable invoice recipient');
-  assert.match(html, /aria-label="Link Accounts Team to a Xero contact"/, 'offered for Xero linking');
+  assert.doesNotMatch(html, /data-testid="find-xero-contact"/, 'linking moved to the Building File (Contacts & Defaults)');
+  assert.doesNotMatch(noComments(src('src', 'components', 'jobs', 'FindXeroContactPanel.tsx')), /isAccountsContact/, 'the panel never filters on it');
   for (const f of [
     ['src', 'components', 'jobs', 'InvoiceEditor.tsx'], ['src', 'components', 'jobs', 'BuildingDefaultRecipientPanel.tsx'], ['src', 'components', 'jobs', 'LinkXeroContactDialog.tsx'],
     ['src', 'components', 'jobs', 'UnlinkedRecipientsList.tsx'], ['src', 'lib', 'invoiceRecipient.ts'], ['src', 'lib', 'xeroLinkStatus.ts'], ['src', 'repository', 'mapJobRow.ts'],

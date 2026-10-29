@@ -45,3 +45,29 @@ export function contactInitials(name: string): string {
   const letters = words.length > 1 ? words[0][0] + words[1][0] : words[0].slice(0, 2);
   return letters.toUpperCase();
 }
+
+/**
+ * What the job-report default IS for a client, and why, for display (the Building File's summary and the Contacts & Defaults
+ * tab). The same rule as resolveReportRecipientDefault - the only ordinary contact, else the ordinary main (primary) contact - so
+ * the screen always says what Ready for client will actually preselect. When there is none, `why` says what to fix.
+ */
+export type ReportDefaultSummary =
+  | { kind: 'contact'; contact: JobContactSummary; via: 'only_contact' | 'main_contact' }
+  | { kind: 'none'; why: 'no_contacts' | 'all_accounts_only' | 'main_is_accounts_only' | 'no_main' };
+
+export function reportDefaultSummary(contacts: JobContactSummary[]): ReportDefaultSummary {
+  const resolved = resolveReportRecipientDefault(contacts);
+  if (resolved.kind === 'single') return { kind: 'contact', contact: resolved.contact, via: 'only_contact' };
+  if (resolved.kind === 'primary') return { kind: 'contact', contact: resolved.contact, via: 'main_contact' };
+  if (resolved.kind === 'none') return { kind: 'none', why: 'no_contacts' };
+  if (resolved.kind === 'none_eligible') return { kind: 'none', why: 'all_accounts_only' };
+  return { kind: 'none', why: contacts.some((c) => c.isPrimary && c.isAccountsContact === true) ? 'main_is_accounts_only' : 'no_main' };
+}
+
+export const REPORT_DEFAULT_PROBLEM: Record<Extract<ReportDefaultSummary, { kind: 'none' }>['why'], string> = {
+  no_contacts: 'No contacts yet, so job reports have no default recipient.',
+  all_accounts_only: 'Every contact is accounts-only, so job reports have no default recipient. Add an operational contact.',
+  main_is_accounts_only:
+    'The main contact is accounts-only, so it is never used for job reports and there is no default. Choose an operational main contact.',
+  no_main: 'Several contacts and no main contact, so a recipient is chosen for each job report. Choose a main contact to set a default.',
+};

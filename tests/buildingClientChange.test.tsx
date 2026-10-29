@@ -142,7 +142,7 @@ test('PAGE: Change client sits beside Edit; the history panel is on the Site fil
   const page = src('src', 'pages', 'BuildingFilePage.tsx');
   assert.match(page, /\{changingClient \? 'Close' : 'Change client'\}/);
   assert.match(page, /<ChangeBuildingClientPanel\s+building=\{building\}\s+buildingJobs=\{\[\.\.\.buildingJobs, \.\.\.\(historicalJobs\.data \?\? \[\]\)\.filter\(\(j\) => j\.buildingId === building\.id\)\]\}/);
-  const site = page.slice(page.indexOf("{tab === 'site' ? ("), page.indexOf(') : (\n        <div className="flex flex-col gap-4">'));
+  const site = page.slice(page.indexOf("tab === 'site' ? ("), page.indexOf(') : (\n        <div className="flex flex-col gap-4">'));
   assert.match(site, /<BuildingManagementHistory buildingId=\{building\.id\} currentClientName=\{building\.clientName\} \/>/);
   assert.equal(HISTORY_EVENT_LABEL.building_client_changed, 'Client changed');
 });

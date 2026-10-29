@@ -40,10 +40,11 @@ test('INITIALS: first letters of the first two words, else the first two letters
   assert.equal(contactInitials('   '), '?');
 });
 
-// ---- the Invoicing card -------------------------------------------------------------------------------------------------------------
+// ---- the invoice default (Contacts & Defaults tab) -----------------------------------------------------------------------------------------
 test('INVOICING: with a default, the recipient is shown with its Xero contact; Change / Verify with Xero / Clear default; picker hidden', () => {
   const html = renderPanel(building({ defaultRecipient: { contactId: 'c1', xeroContactId: 'X1', xeroOrgId: 'ORG' } }), [LINKED, UNLINKED]);
-  assert.match(html, /Invoicing/);
+  assert.match(html, /Invoices · default recipient/);
+  assert.match(html, /For this building only\. Invoices for it go to this Xero-linked contact unless another is chosen for a single invoice \(which\s+never changes this default\)\./);
   assert.match(html, /Default invoice recipient/);
   assert.match(html, />SC<\/span>/, 'initials of the default recipient');
   assert.match(html, />Sam Client<\/div>/);
@@ -64,18 +65,24 @@ test('INVOICING: without a default, the picker is shown straight away and offers
   assert.doesNotMatch(html, />Change<\/button>|Verify with Xero|Clear default/);
 });
 
-test('INVOICING: no linked contact points at Link to Xero in Contacts, above', () => {
+test('INVOICING: no linked contact points at Link to Xero under Manage contacts', () => {
   const html = renderPanel(building(), [UNLINKED]);
   assert.match(html, /No contact is linked to Xero yet/);
-  assert.match(html, /Link a contact to its Xero contact first \(“Link to Xero” in Contacts, above\)\./);
+  assert.match(html, /Link a contact to its Xero contact first \(“Link to Xero” under Manage contacts\)\./);
 });
 
-test('INVOICING: a stale default still says invoices cannot be sent; invoice details are shown read-only', () => {
+test('INVOICING: a stale default still says invoices cannot be sent; the panel no longer carries invoice details', () => {
   const html = renderPanel(building({ defaultRecipient: { contactId: 'c1', xeroContactId: 'OTHER', xeroOrgId: 'ORG' } }), [LINKED]);
   assert.match(html, /Invoices for this building cannot be sent until it is fixed\./);
-  assert.match(html, /Invoice details<\/span><span[^>]*>PO 4471\nAttn: accounts<\/span>/);
-  assert.doesNotMatch(html, /<textarea|<input/, 'invoice details are edited with the building, not here');
-  assert.match(renderPanel(building({ invoiceDetails: '' }), [LINKED]), /Invoice details<\/span><span[^>]*>—<\/span>/);
+  assert.doesNotMatch(html, /Invoice details|<textarea|<input/, 'invoice details stay on the Site file (read-only), edited with the building');
+});
+
+test('SITE FILE: the Invoicing card keeps the invoice details (read-only) and the Ready for accounts link', () => {
+  const p = page();
+  const card = p.slice(p.indexOf('data-testid="building-invoicing"'), p.indexOf('<BuildingManagementHistory'));
+  assert.match(card, /<Link to="\/ready-for-accounts"[^>]*>\s*Ready for accounts →\s*<\/Link>/);
+  assert.match(card, /Invoice details<\/span>\s*<span className="text-right whitespace-pre-line text-ink">\{building\.invoiceDetails \|\| '—'\}<\/span>/);
+  assert.doesNotMatch(card, /<BuildingDefaultRecipientPanel|<select/, 'the default is managed on the Contacts & Defaults tab');
 });
 
 test('INVOICING: Change opens the picker with Save default and Cancel; saving closes it (source)', () => {
@@ -117,29 +124,35 @@ test('PAGE: jobs table - Service / Repeats / Price per visit, rows open the insp
   assert.match(p, /\{yearlyTotal \? `\$\{money\(yearlyTotal\)\} \/ yr` : '—'\}/, 'no "£0 / yr" when nothing can be totalled');
 });
 
-test('PAGE: Site file keeps every panel; right column order is Contacts, Invoicing, Management history, Internal access', () => {
+test('PAGE: Site file keeps every panel; right column order is Contacts & defaults, Invoicing, Management history, Internal access', () => {
   const p = page();
-  const site = p.slice(p.indexOf("{tab === 'site' ? ("), p.indexOf(') : (\n        <div className="flex flex-col gap-4">'));
-  const order = ['data-testid="building-contacts"', '<BuildingDefaultRecipientPanel', '<BuildingManagementHistory', 'Internal only · access'].map((s) => site.indexOf(s));
+  const site = p.slice(p.indexOf("tab === 'site' ? ("), p.indexOf(') : (\n        <div className="flex flex-col gap-4">'));
+  const order = ['data-testid="building-contacts"', 'data-testid="building-invoicing"', '<BuildingManagementHistory', 'Internal only · access'].map((s) => site.indexOf(s));
   assert.ok(order.every((i) => i > 0), String(order));
   assert.ok(order[0] < order[1] && order[1] < order[2] && order[2] < order[3], String(order));
   assert.doesNotMatch(site, /Edit site instructions|setEditingBuilding/, 'site instructions have no Edit of their own - "Edit building" covers them');
 });
 
-test('PAGE: compact contacts keep the badges, link status and the Link / Change Xero link button', () => {
+test('PAGE: the Site file contact summary is read-only: badges, Xero state, both defaults, and "Edit contacts & defaults"', () => {
   const p = page();
-  assert.match(p, /\{contactInitials\(c\.name\)\}/);
-  assert.match(p, />\s*Primary\s*<\/span>/);
-  assert.match(p, />\s*Accounts only\s*<\/span>/);
-  assert.match(p, /aria-label=\{`\$\{localLinkStatus\(c\) === 'not_linked' \? 'Link' : 'Change the Xero link of'\} \$\{c\.name\}`\}/);
-  assert.match(p, /\{linkStatusLabel\(c\)\}/);
+  const card = p.slice(p.indexOf('data-testid="building-contacts"'), p.indexOf('data-testid="building-invoicing"'));
+  assert.match(card, /\{contactInitials\(c\.name\)\}/);
+  assert.match(card, />\s*Main contact\s*<\/span>/);
+  assert.match(card, />\s*Accounts only\s*<\/span>/);
+  assert.match(card, /title=\{linkStatusLabel\(c\)\}/);
+  assert.match(card, /Job reports go to/);
+  assert.match(card, /\{REPORT_DEFAULT_PROBLEM\[reportDefault\.why\]\}/);
+  assert.match(card, /Invoices for this building go to/);
+  assert.match(card, /\{invoiceDefaultProblem \?\? 'no default yet: a recipient is chosen for each invoice\.'\}/);
+  assert.match(card, /onClick=\{\(\) => setTab\('contacts'\)\}[\s\S]*?Edit contacts &amp; defaults/);
+  assert.doesNotMatch(card, /setLinkingContact|setAddingContact/, 'no link or add actions on the Site file');
 });
 
 test('SCOPE: nothing new was added - no Download all, no Monthly plan link, no extra tabs', () => {
   const p = page();
   const reportsPanel = src('src', 'components', 'buildings', 'BuildingReportsPanel.tsx');
   for (const code of [p, reportsPanel]) assert.doesNotMatch(code, /Download all|Monthly plan|Open Report review/);
-  assert.match(p, /\(\['site', 'history'\] as Tab\[\]\)/, 'still exactly two tabs');
+  assert.match(p, /\(\['site', 'contacts', 'history'\] as Tab\[\]\)/, 'Site file, Contacts & Defaults, History');
 });
 
 test('EDIT BUILDING: opens as a dialog; closed only by Cancel, the close button or Escape (not a click outside), and not mid-save', () => {
@@ -168,9 +181,4 @@ test('ADD CONTACT: opens as a dialog; closed only by Cancel, the close button or
 
 test('LAYOUT: the right column gets the larger share of the width (it carries more)', () => {
   assert.match(page(), /grid-cols-\[minmax\(0,3fr\)_minmax\(360px,2fr\)\]/);
-});
-
-test('INVOICING: the header links to Ready for accounts', () => {
-  const html = renderPanel(building(), [LINKED]);
-  assert.match(html, /<a[^>]*href="\/ready-for-accounts"[^>]*>Ready for accounts →<\/a>/);
 });
