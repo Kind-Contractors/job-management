@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { JobRow, JobVisitSummary } from '../../domain/types';
 import { cancelJobWork, type CancelWorkResult, type CancelWorkScope } from '../../repository/jobsRepository';
 import { isOpenVisit, keptReasonLabel, keptStayText, keptSubject, planCancelWork } from '../../lib/cancelWork';
+import { backdropDismiss } from '../../lib/dialogHooks';
 
 function dateLabel(date: string | null): string {
   return date ? new Date(date).toLocaleDateString('en-GB') : 'No date set';
@@ -82,6 +83,8 @@ export default function CancelWorkDialog({ job, visit, onClose, onDone }: Cancel
   const [scope, setScope] = useState<CancelWorkScope>(startVisit ? 'visit' : 'job');
   const [reason, setReason] = useState('');
   const [result, setResult] = useState<CancelWorkResult | null>(null);
+  // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
+  const backdrop = backdropDismiss(result ? undefined : onClose);
 
   const plan = planCancelWork(job, scope, startVisit);
   const nothingToCancel = scope !== 'job' && plan.willCancel.length === 0;
@@ -105,7 +108,7 @@ export default function CancelWorkDialog({ job, visit, onClose, onDone }: Cancel
   const subtitle = `${job.buildingName} · ${job.jobSummary}${startVisit ? ` · ${dateLabel(startVisit.scheduledDate)}` : ''}`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30" onClick={result ? undefined : onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30" {...backdrop}>
       <div onClick={(e) => e.stopPropagation()} className="max-h-[85vh] w-[460px] overflow-y-auto border border-neutral-300 bg-white p-4">
         <div className="border-b border-divider pb-2.5">
           <div className="font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">Cancel</div>

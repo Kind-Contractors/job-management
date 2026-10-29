@@ -18,6 +18,7 @@ import { issueClientVideoLinks, listVideosForVisit, signVideoThumbnailUrls } fro
 import { formatWhen } from '../reports/ReportCompletionControls';
 import SkippedPhotosDialog from '../reports/SkippedPhotosDialog';
 import PdfDocumentView from '../reports/PdfDocumentView';
+import { backdropDismiss } from '../../lib/dialogHooks';
 
 /** The real data and PDF calls - the same ones the Send to client screen's "Download PDF" uses. */
 export const CLIENT_REPORT_DOWNLOAD_DEPS: ClientReportDownloadDeps = {
@@ -240,13 +241,15 @@ interface ReportViewerDialogProps {
  * Close, a click outside, or Escape returns to the Building screen.
  */
 export function ReportViewerDialog({ title, blob, onDownload, onClose }: ReportViewerDialogProps) {
+  // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
+  const backdrop = backdropDismiss(onClose);
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-label={`Job report: ${title}`}
       className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30"
-      onClick={onClose}
+      {...backdrop}
       onKeyDown={(e) => {
         if (e.key === 'Escape') onClose();
       }}

@@ -8,6 +8,7 @@ import {
 } from '../../repository/jobsRepository';
 import { isReportCompleted, isReportReadyForClient } from '../../lib/statusPresentation';
 import { isInvoiceInXero } from '../../lib/invoiceStatus';
+import { backdropDismiss } from '../../lib/dialogHooks';
 
 export type JobLifecycleTransition = ActiveToHistoricalLifecycleStatus;
 
@@ -108,6 +109,8 @@ interface JobLifecycleDialogProps {
  * changes after this dialog opened but before Confirm is clicked.
  */
 export default function JobLifecycleDialog({ job, transition, onClose, onSuccess }: JobLifecycleDialogProps) {
+  // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
+  const backdrop = backdropDismiss(onClose);
   const queryClient = useQueryClient();
   const [reason, setReason] = useState('');
   const [recontactMonths, setRecontactMonths] = useState<number | null>(null);
@@ -179,7 +182,7 @@ export default function JobLifecycleDialog({ job, transition, onClose, onSuccess
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30" {...backdrop}>
       <div onClick={(e) => e.stopPropagation()} className="w-[440px] border border-neutral-300 bg-white p-4">
         <div className="border-b border-divider pb-2.5">
           <div className="font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">Job status</div>

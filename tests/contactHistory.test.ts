@@ -131,7 +131,7 @@ test('UNCHANGED: what is written to the contact row is exactly as before (only t
 // ---- the stale notice ----------------------------------------------------------------------------------------------------------
 test('NOTICE: starting another edit, or opening "+ Add contact" (either button), clears the last save\'s notice', () => {
   const tab = readFileSync(join(process.cwd(), 'src', 'components', 'buildings', 'ContactsAndDefaultsTab.tsx'), 'utf8').replace(/\r\n/g, '\n');
-  assert.match(tab, /if \(editingId !== c\.id\) \{\s+setNotice\(null\);\s+setJustAddedId\(null\);\s+\}\s+setEditingId\(editingId === c\.id \? null : c\.id\);/);
+  assert.match(tab, /setNotice\(null\);\s+setJustAddedId\(null\);\s+setEditingId\(c\.id\);/, 'Edit');
   assert.match(tab, /setAddingContact\(true\);\s+setAddingForXero\(false\);\s+setNotice\(null\);\s+setJustAddedId\(null\);/, '+ Add contact');
   assert.match(tab, /setAddingForXero\(true\);\s+setAddingContact\(true\);\s+setNotice\(null\);\s+setJustAddedId\(null\);/, '+ Add a new contact (Find in Xero)');
   assert.match(tab, /setNotice\(changed \? `\$\{saved\.name\} was updated\.` : `No changes to \$\{saved\.name\}\.`\);/, 'the notice is set only when that save has finished (onSaved)');

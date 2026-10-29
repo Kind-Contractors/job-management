@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../auth/AuthProvider';
+import { backdropDismiss } from '../lib/dialogHooks';
 import {
   createUser,
   deleteUser,
@@ -345,8 +346,10 @@ function DeleteConfirmDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
+  const backdrop = backdropDismiss(onCancel);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30" onClick={onCancel}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30" {...backdrop}>
       <div onClick={(e) => e.stopPropagation()} className="w-[420px] border border-neutral-300 bg-white p-4">
         <div className="border-b border-divider pb-2.5">
           <div className="font-heading text-[10px] font-semibold tracking-[0.16em] text-missed-fg uppercase">Delete user</div>

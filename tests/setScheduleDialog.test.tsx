@@ -106,7 +106,7 @@ test('CANCEL: the modal offers Cancel, and dismisses on the backdrop', () => {
   assert.match(html, />Cancel</);
   const dialog = src('components/monthlyPlan/SetScheduleDialog.tsx');
   assert.match(dialog, /onCancel=\{onClose\}/, 'Cancel closes the modal');
-  assert.match(dialog, /onClick=\{onClose\}[\s\S]*onClick=\{\(e\) => e\.stopPropagation\(\)\}/, 'backdrop closes, panel does not');
+  assert.match(dialog, /const backdrop = backdropDismiss\(onClose\);[\s\S]*\{\.\.\.backdrop\}[\s\S]*onClick=\{\(e\) => e\.stopPropagation\(\)\}/, 'backdrop closes (a press that started there), panel does not');
 });
 
 test('CANCEL writes nothing — only Save ever calls upsertSchedule', () => {

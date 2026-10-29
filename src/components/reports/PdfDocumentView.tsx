@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
+import { backdropDismiss } from '../../lib/dialogHooks';
 
 /** A web link drawn over a page, positioned in percent of the page so it follows the page's displayed size. */
 export interface PdfPageLink {
@@ -270,13 +271,15 @@ export default function PdfDocumentView({ blob, title }: { blob: Blob; title: st
 
 /** The enlarged photo, over everything. Close, a click outside the photo, or Escape returns to the report. */
 export function PhotoLightbox({ zoom, onClose }: { zoom: Zoom; onClose: () => void }) {
+  // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
+  const backdrop = backdropDismiss(onClose);
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Photo, enlarged"
       className="fixed inset-0 z-[70] flex items-center justify-center bg-ink/80 p-6"
-      onClick={onClose}
+      {...backdrop}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
           e.stopPropagation();

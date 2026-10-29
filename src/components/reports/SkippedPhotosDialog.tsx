@@ -1,5 +1,6 @@
 // Shown before a report PDF is downloaded, viewed or sent when some photos could not be read. Used by the Send to client screen
 // and the Building screen's job reports.
+import { backdropDismiss } from "../../lib/dialogHooks";
 
 interface SkippedPhotosDialogProps {
   count: number;
@@ -15,11 +16,13 @@ export default function SkippedPhotosDialog({
   onCancel,
   onContinue,
 }: SkippedPhotosDialogProps) {
+  // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
+  const backdrop = backdropDismiss(onCancel);
   const noun = count === 1 ? "photo" : "photos";
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/30"
-      onClick={onCancel}
+      {...backdrop}
     >
       <div
         onClick={(e) => e.stopPropagation()}

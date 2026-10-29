@@ -14,6 +14,7 @@ import { timeRangeError } from '../../lib/timeRange';
 import SearchableSelect from '../shared/SearchableSelect';
 import JobCreator from '../jobs/JobCreator';
 import CancelWorkDialog from '../jobs/CancelWorkDialog';
+import { backdropDismiss } from '../../lib/dialogHooks';
 
 const DATE_HEADER_FORMAT = new Intl.DateTimeFormat('en-GB', {
   weekday: 'long',
@@ -110,6 +111,8 @@ export default function ScheduleDayDrawer({
   // never touches the already-selected client/building/date/technician
   // state below.
   const [creatingJob, setCreatingJob] = useState(false);
+  // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
+  const jobCreatorBackdrop = backdropDismiss(() => setCreatingJob(false));
   // Optional time for a new job booking (display only - it never orders the visit).
   const [visitStart, setVisitStart] = useState('');
   const [visitEnd, setVisitEnd] = useState('');
@@ -424,7 +427,7 @@ export default function ScheduleDayDrawer({
       )}
     </div>
     {creatingJob && (
-      <div className="fixed inset-0 z-[60] flex justify-end bg-ink/30" onClick={() => setCreatingJob(false)}>
+      <div className="fixed inset-0 z-[60] flex justify-end bg-ink/30" {...jobCreatorBackdrop}>
         <div onClick={(e) => e.stopPropagation()}>
           <JobCreator
             buildingId={buildingId}

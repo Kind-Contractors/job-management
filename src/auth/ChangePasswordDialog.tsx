@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import { backdropDismiss } from '../lib/dialogHooks';
 
 // Supabase Auth's own hard floor — the project's dashboard could require
 // more, but this is the one requirement guaranteed true for every project
@@ -74,6 +75,8 @@ function PasswordField({ label, value, onChange, autoComplete }: PasswordFieldPr
  * only ever runs for an already-authenticated session.
  */
 export default function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
+  // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
+  const backdrop = backdropDismiss(onClose);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -113,7 +116,7 @@ export default function ChangePasswordDialog({ onClose }: { onClose: () => void 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30" {...backdrop}>
       <div onClick={(e) => e.stopPropagation()} className="w-[380px] border border-neutral-300 bg-white p-4">
         {success ? (
           <>
