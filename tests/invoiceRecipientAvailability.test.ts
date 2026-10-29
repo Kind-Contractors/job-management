@@ -4,13 +4,14 @@
 // usable default?", and the dropdown, unable to show the chosen id, displayed the default while the send would use the chosen id.)
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { RECIPIENT_UNAVAILABLE_MESSAGE, recipientSelectionState, resolveSendRecipientId } from '../src/lib/invoiceRecipient';
 
 const LIST = [{ id: 'ct-default' }, { id: 'ct-sam' }];
-const editor = readFileSync(join(process.cwd(), 'src', 'components', 'jobs', 'InvoiceEditor.tsx'), 'utf8').replace(/\r\n/g, '\n');
+const editor = readSourceFile('src', 'components', 'jobs', 'InvoiceEditor.tsx');
 
 test('a chosen recipient that IS in the list is available, and is what is sent', () => {
   assert.equal(recipientSelectionState('ct-sam', false, LIST), 'available');
@@ -47,7 +48,7 @@ test('SUBMISSION BLOCKED while unavailable: the main button needs the chosen con
 });
 
 test('the screen never shows a different recipient: a "not loaded yet" entry is shown for the chosen id, with the reason and a reload', () => {
-  assert.match(editor, /\{recipientUnavailable && \(\s*<option value=\{effectiveContactId\} disabled>\s*Chosen contact not loaded yet\s*<\/option>\s*\)\}/);
+  assert.match(editor, /\.\.\.\(recipientUnavailable \? \[\{ value: effectiveContactId, text: 'Chosen contact not loaded yet', disabled: true \},?\s*\] : \[\]\)/);
   assert.match(editor, /\{recipientUnavailable && \(\s*<div data-testid="recipient-unavailable" role="alert"[^>]*>\s*\{RECIPIENT_UNAVAILABLE_MESSAGE\}/);
   assert.match(editor, /onClick=\{\(\) => void queryClient\.invalidateQueries\(\{ queryKey: \['jobRows'\] \}\)\}[\s\S]{0,120}Reload recipients/);
 });

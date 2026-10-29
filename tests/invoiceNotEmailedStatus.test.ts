@@ -4,11 +4,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSourceFile } from './helpers/sourceCode';
 
 import { isInvoiceInXero } from '../src/lib/invoiceStatus';
 import { hasOpenAccountsWork } from '../src/lib/queueJobs';
 
-const code = (...p: string[]) => readFileSync(join(process.cwd(), ...p), 'utf8').replace(/\r\n/g, '\n').replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+const code = (...p: string[]) => readSourceFile(...p).replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
 
 test('an invoice in Xero without an email is "in Xero" (accounts work done) but is not "sent"', () => {
   assert.equal(isInvoiceInXero('in_xero_not_emailed'), true);

@@ -16,8 +16,6 @@ interface LinkXeroContactDialogProps {
   localContactName: string;
   /** The contact's email in the app, shown in the email-first lookup (the server reads the email from the database itself). */
   localContactEmail: string | null;
-  /** Only a SUGGESTED name-search term (for example the client's name); nothing is searched by name or linked until the manager acts. */
-  suggestedTerm: string;
   /** The Xero contact this person is already linked to, if any: choosing a different one asks for an explicit replace. */
   currentXeroContactId: string | null;
   onClose: () => void;
@@ -65,7 +63,6 @@ export default function LinkXeroContactDialog({
   localContactId,
   localContactName,
   localContactEmail,
-  suggestedTerm,
   currentXeroContactId,
   onClose,
   onLinked,
@@ -73,7 +70,8 @@ export default function LinkXeroContactDialog({
   // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
   const backdrop = backdropDismiss(onClose);
   // Xero accepts a search term of at most 50 characters (the server refuses longer ones too).
-  const [term, setTerm] = useState(suggestedTerm.replace(/\s+/g, ' ').trim().slice(0, SEARCH_TERM_MAX));
+  // The name search starts EMPTY: the manager types what to look for (nothing is pre-filled or searched for them).
+  const [term, setTerm] = useState('');
   const [chosen, setChosen] = useState<XeroContactCandidate | null>(null);
   const [replace, setReplace] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,14 +87,10 @@ export default function LinkXeroContactDialog({
     gcTime: 0,
   });
 
-  // The name search runs as the manager types (once typing pauses, at least 2 characters), or at once with Enter / Search. The
-  // pre-filled suggestion is NOT searched until the manager acts (types, or presses Search). Same read-only search and cache as
-  // "Find a contact in Xero"; results are never written to the browser's saved cache.
-  const [typed, setTyped] = useState(false);
+  // The name search runs as the manager types (once typing pauses, at least 2 characters), or at once with Enter / Search. Same
+  // read-only search and cache as "Find a contact in Xero"; results are never written to the browser's saved cache.
   const [submitted, setSubmitted] = useState<string | null>(null);
-  // Only typed text is debounced: until the manager types, it stays '' - so the suggestion is never searched in the pause after
-  // the first keystroke either.
-  const debounced = useDebouncedValue(typed ? term.trim() : '', XERO_AUTOSEARCH_DELAY_MS);
+  const debounced = useDebouncedValue(term.trim(), XERO_AUTOSEARCH_DELAY_MS);
   const searchTerm = submitted ?? debounced;
   const search = useQuery({
     queryKey: ['xeroContactSearch', searchTerm],
@@ -214,7 +208,6 @@ export default function LinkXeroContactDialog({
             value={term}
             onChange={(e) => {
               setTerm(e.target.value);
-              setTyped(true);
               setSubmitted(null);
               setChosen(null);
               setError(null);

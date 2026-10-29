@@ -6,6 +6,7 @@ import { isUsableRecipient, linkStatusLabel, localLinkStatus, VERIFY_STATE_TEXT 
 import { verifyContactLink, type XeroLinkVerification } from '../../repository/xeroLinksRepository';
 import BuildingAddContactForm from './BuildingAddContactForm';
 import ReportDefaultPanel from './ReportDefaultPanel';
+import ScrollableList from '../shared/ScrollableList';
 import EditContactForm from '../contacts/EditContactForm';
 import FindXeroContactPanel from '../jobs/FindXeroContactPanel';
 import LinkXeroContactDialog from '../jobs/LinkXeroContactDialog';
@@ -131,7 +132,8 @@ export default function ContactsAndDefaultsTab({ building, contacts, contactsLoa
                 </button>
               </div>
             ) : (
-              shown.map((c) => {
+              <ScrollableList count={shown.length} label="Contacts">
+              {shown.map((c) => {
                 const status = localLinkStatus(c);
                 const verification = verifications[c.id];
                 return (
@@ -212,7 +214,8 @@ export default function ContactsAndDefaultsTab({ building, contacts, contactsLoa
                     </div>
                   </div>
                 );
-              })
+              })}
+              </ScrollableList>
             )}
           </div>
 
@@ -293,14 +296,13 @@ export default function ContactsAndDefaultsTab({ building, contacts, contactsLoa
       )}
 
       {linkingContact && (
-        // The shared link dialog (email lookup first, then a name search pre-filled with this building's name). Nothing is linked
+        // The shared link dialog (email lookup first, then a name search the manager types in). Nothing is linked
         // until the manager chooses and confirms; replacing a link needs its own confirmation, and a contact that is any building's
         // default recipient cannot be re-linked (the server refuses until that default is cleared).
         <LinkXeroContactDialog
           localContactId={linkingContact.id}
           localContactName={linkingContact.name}
           localContactEmail={linkingContact.email}
-          suggestedTerm={building.name || building.buildingName || linkingContact.name}
           currentXeroContactId={linkingContact.xeroContactId}
           onClose={() => setLinkingContact(null)}
           onLinked={() => {

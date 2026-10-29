@@ -6,6 +6,7 @@
 import 'fake-indexeddb/auto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSourceFile } from './helpers/sourceCode';
 import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -52,7 +53,7 @@ beforeEach(() => {
   server.row = { auto_invoice_emails_enabled: false, updated_at: '2026-10-18T09:00:00Z' };
 });
 
-const src = (...p: string[]) => readFileSync(join(process.cwd(), ...p), 'utf8').replace(/\r\n/g, '\n');
+const src = (...p: string[]) => readSourceFile(...p);
 const code = (...p: string[]) => src(...p).replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
 
 // ---- 1. defaults to OFF ------------------------------------------------------------------------------------------------------------------

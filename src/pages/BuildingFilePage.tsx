@@ -17,6 +17,7 @@ import { defaultRecipientProblem, isUsableRecipient, linkStatusLabel, localLinkS
 import { contactInitials, REPORT_DEFAULT_PROBLEM, reportDefaultSummary } from '../lib/contactDisplay';
 import { buildingReports } from '../lib/buildingReports';
 import Breadcrumbs from '../components/shell/Breadcrumbs';
+import ScrollableList from '../components/shared/ScrollableList';
 import { HISTORY_EVENT_LABEL, historyEventDetail } from '../lib/historyEventLabels';
 
 type Tab = 'site' | 'contacts' | 'history';
@@ -343,6 +344,7 @@ export default function BuildingFilePage() {
                     <span>Repeats</span>
                     <span className="text-right">Price per visit</span>
                   </div>
+                  <ScrollableList count={buildingJobs.length} label="Jobs at this building">
                   {buildingJobs.map((job) => (
                     <div
                       key={job.id}
@@ -367,6 +369,7 @@ export default function BuildingFilePage() {
                       </span>
                     </div>
                   ))}
+                  </ScrollableList>
                   <div className="flex justify-between gap-3 bg-neutral-100 px-4 py-2 text-[12px] text-neutral-600">
                     <span>
                       {jobsWithoutYearlyValue > 0
@@ -435,7 +438,8 @@ export default function BuildingFilePage() {
                   {contacts.length === 0 ? (
                     <div className="px-4 py-3 text-[12.5px] text-neutral-500">No contacts recorded for this client.</div>
                   ) : (
-                    contacts.map((c) => (
+                    <ScrollableList count={contacts.length} label="Contacts">
+                    {contacts.map((c) => (
                       <div key={c.id} className="flex items-center gap-3 border-b border-divider px-4 py-2 text-[12.5px] last:border-b-0">
                         <span aria-hidden="true" className="grid h-8 w-8 flex-none place-items-center bg-neutral-200 font-heading text-[11px] font-semibold text-teal-700">
                           {contactInitials(c.name)}
@@ -463,7 +467,8 @@ export default function BuildingFilePage() {
                           {localLinkStatus(c) === 'linked' ? '✓ Xero' : localLinkStatus(c) === 'needs_relink' ? 'Link again' : 'Not linked'}
                         </span>
                       </div>
-                    ))
+                    ))}
+                    </ScrollableList>
                   )}
                 </>
               )}

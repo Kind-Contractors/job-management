@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import type { JobRow, JobVisitSummary } from '../domain/types';
 import { isVisitInAccountsQueue, useQueueJobRows, visitNeedsCompletion } from '../lib/queueJobs';
 import { createInvoiceDraft } from '../repository/invoicesRepository';
+import { listBuildingRows } from '../repository/buildingsRepository';
 import { useAuth } from '../auth/AuthProvider';
 import { type StatusPresentation } from '../lib/statusPresentation';
 import StatusPill from '../components/jobs/StatusPill';
@@ -66,6 +67,8 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
   // The visit whose completion form was dismissed (so it shows a button instead); reset by completing it.
   const [completionHiddenFor, setCompletionHiddenFor] = useState<string | null>(null);
   const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null);
+  // The buildings' invoice details (the same cached list the Buildings screens use), shown with the invoice's recipient.
+  const { data: buildingRows = [] } = useQuery({ queryKey: ['buildingRows'], queryFn: listBuildingRows });
   const [createError, setCreateError] = useState<string | null>(null);
   const [selectedForInvoiceIds, setSelectedForInvoiceIds] = useState<Set<string>>(new Set());
   const [combineError, setCombineError] = useState<string | null>(null);
@@ -346,6 +349,7 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
                 clientId={selected.job.clientId}
                 clientName={selected.job.clientName}
                 buildingId={selected.job.buildingId}
+                invoiceDetails={buildingRows.find((b) => b.id === selected.job.buildingId)?.invoiceDetails ?? ''}
                 clientContacts={selected.job.clientContacts}
                 buildingDefault={selected.job.buildingDefaultRecipient}
               />

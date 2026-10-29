@@ -4,6 +4,7 @@
 // wiring is checked from source. The live search and link are exercised in a browser against DEV with test records only.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -12,7 +13,7 @@ import { XeroCandidateCard } from '../src/components/jobs/FindXeroContactPanel';
 import { xeroPanelLinkState } from '../src/lib/xeroPanelLink';
 import type { XeroContactCandidate } from '../src/repository/xeroLinksRepository';
 
-const src = (...p: string[]) => readFileSync(join(process.cwd(), ...p), 'utf8').replace(/\r\n/g, '\n');
+const src = (...p: string[]) => readSourceFile(...p);
 const noComments = (code: string) => code.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
 const decode = (h: string) => h.replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&quot;/g, '"');
 
@@ -135,10 +136,15 @@ test('SEARCH: as you type (once typing pauses, 2-50 characters) or at once with 
   assert.doesNotMatch(p, /searchMutation/, 'a query keyed by the term: an older answer can never replace a newer one');
 });
 
-test('LINK DIALOG: the name search also runs as you type - but the pre-filled suggestion is searched only when the manager acts', () => {
+test('LINK DIALOG: the name search starts EMPTY (nothing pre-filled, nothing searched on open) and runs as the manager types', () => {
   const d = noComments(src('src', 'components', 'jobs', 'LinkXeroContactDialog.tsx'));
-  assert.match(d, /const debounced = useDebouncedValue\(typed \? term\.trim\(\) : '', XERO_AUTOSEARCH_DELAY_MS\);\s+const searchTerm = submitted \?\? debounced;/, 'only typed text is ever searched automatically');
-  assert.match(d, /setTerm\(e\.target\.value\);\s+setTyped\(true\);\s+setSubmitted\(null\);\s+setChosen\(null\);/);
+  assert.match(d, /const \[term, setTerm\] = useState\(''\);/, 'empty to start with');
+  assert.doesNotMatch(d, /suggestedTerm/);
+  assert.match(d, /const debounced = useDebouncedValue\(term\.trim\(\), XERO_AUTOSEARCH_DELAY_MS\);\s+const searchTerm = submitted \?\? debounced;/);
+  assert.match(d, /setTerm\(e\.target\.value\);\s+setSubmitted\(null\);\s+setChosen\(null\);/);
+  for (const f of ['src/components/buildings/ContactsAndDefaultsTab.tsx', 'src/components/jobs/InvoiceEditor.tsx', 'src/components/jobs/ContactPopover.tsx']) {
+    assert.doesNotMatch(src(...f.split('/')), /suggestedTerm/, `${f} pre-fills nothing`);
+  }
   assert.match(d, /queryKey: \['xeroContactSearch', searchTerm\]/, 'the same search and cache as Find a contact in Xero');
   assert.match(d, /meta: \{ persist: false \}/);
   assert.match(d, /onSubmit=/, 'Enter / Search still searches at once');

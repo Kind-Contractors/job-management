@@ -3,6 +3,7 @@
 // variant; a new contact still cannot be invoiced until it is linked to its existing Xero contact.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -12,7 +13,7 @@ import NewContactForm from '../src/components/contacts/NewContactForm';
 import { BLANK_CONTACT_FORM, checkContactForm } from '../src/lib/contactForm';
 import { canSendInvoiceTo } from '../src/lib/xeroLinkStatus';
 
-const src = (...p: string[]) => readFileSync(join(process.cwd(), ...p), 'utf8').replace(/\r\n/g, '\n');
+const src = (...p: string[]) => readSourceFile(...p);
 const CONTACTS = [{ id: 'c1', name: 'Sam Client', email: 'sam@atlas.test', isPrimary: true }];
 
 test('CHECKS: an invoice recipient needs a valid email; name still required; duplicates still refused', () => {
@@ -59,7 +60,7 @@ test('REMOVED: the invoice editor no longer adds contacts; it points to Contacts
 
 test('the invoice screen passes the job\'s client, its name and its building (for the Contacts & Defaults link)', () => {
   const page = src('src', 'pages', 'ReadyForAccountsPage.tsx');
-  assert.match(page, /clientId=\{selected\.job\.clientId\}\s+clientName=\{selected\.job\.clientName\}\s+buildingId=\{selected\.job\.buildingId\}\s+clientContacts=\{selected\.job\.clientContacts\}/);
+  assert.match(page, /clientId=\{selected\.job\.clientId\}\s+clientName=\{selected\.job\.clientName\}\s+buildingId=\{selected\.job\.buildingId\}\s+invoiceDetails=\{buildingRows\.find\(\(b\) => b\.id === selected\.job\.buildingId\)\?\.invoiceDetails \?\? ''\}\s+clientContacts=\{selected\.job\.clientContacts\}/);
 });
 
 test('REGRESSION: the Building File keeps an optional email; All Live Jobs keeps its own popover with the shared checks', () => {
