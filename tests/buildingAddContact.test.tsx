@@ -77,15 +77,17 @@ test("SAVE: the building's client id, the shared form (shared checks, the existi
   for (const code of [wrapper, shared]) assert.doesNotMatch(code, /xeroLinks|linkContact|xero-link-contact|xero-create|sendInvoice/i, 'no Xero call, nothing sent');
 });
 
-test('PAGE: "+ Add contact" on the Contacts panel opens the form for the building\'s client; Cancel closes it; success says so; the list is shown in full', () => {
+test('TAB: "+ Add contact" (Contacts & Defaults) opens the form for the building\'s client; Cancel closes it; success says so; the list is shown in full', () => {
+  const tab = src('src', 'components', 'buildings', 'ContactsAndDefaultsTab.tsx');
   const page = src('src', 'pages', 'BuildingFilePage.tsx');
-  assert.match(page, />\s*\+ Add contact\s*<\/button>/);
-  assert.match(page, /disabled=\{contactsLoading \|\| contactsError\}/, 'not offered until the contacts have loaded');
-  assert.match(page, /<BuildingAddContactForm\s+clientId=\{building\.clientId\}\s+clientName=\{building\.clientName\}\s+buildingId=\{building\.id\}\s+contacts=\{contacts\}\s+onClose=\{\(\) => setAddingContact\(false\)\}/);
-  assert.match(page, /setContactNotice\(`Contact added: \$\{contact\.name\}\.`\);\s+setJustAddedContactId\(contact\.id\);/);
-  assert.doesNotMatch(page, /max-h-\[320px\]/, 'the compact list is shown in full, without an inner scroll box');
-  assert.match(page, /No contacts recorded for this client\./, 'the empty state is kept');
-  assert.match(page, /Couldn't load contacts\./, 'the error state is kept');
+  assert.match(tab, />\s*\+ Add contact\s*<\/button>/);
+  assert.match(tab, /if \(contactsLoading\) return/, 'not offered until the contacts have loaded');
+  assert.match(tab, /<BuildingAddContactForm\s+clientId=\{building\.clientId\}\s+clientName=\{building\.clientName\}\s+buildingId=\{building\.id\}\s+contacts=\{contacts\}/);
+  assert.match(tab, /setNotice\(`Contact added: \$\{contact\.name\}\.`\);\s+setJustAddedId\(contact\.id\);/);
+  for (const code of [tab, page]) assert.doesNotMatch(code, /max-h-\[320px\]/, 'the list is shown in full, without an inner scroll box');
+  assert.match(tab, /No contacts recorded for \{clientName\} yet\./, 'the empty state is kept');
+  assert.match(tab, /Couldn&apos;t load contacts\./, 'the error state is kept');
+  assert.doesNotMatch(page, /<BuildingAddContactForm/, 'the Site file only summarises; contacts are added on the tab');
 });
 
 // ---- All Live Jobs: the same checks, nothing else changed ---------------------------------------------------------------------------------

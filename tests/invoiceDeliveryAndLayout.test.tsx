@@ -102,12 +102,9 @@ test('LAYOUT: the Ready for accounts detail column scrolls (it was the one part 
   for (const cls of ['overflow-y-auto', 'min-h-0', 'flex-1']) assert.ok(col![1].split(' ').includes(cls), `detail column has ${cls}`);
 });
 
-test('LAYOUT: a long "Not linked to Xero" list scrolls within itself - every contact is still listed (nothing hidden)', () => {
+test('LAYOUT: with many contacts every one is still a recipient option, and no search panel crowds the invoice', () => {
   const many = Array.from({ length: 30 }, (_, i) => contact(`c${i}`, `Person ${i}`, `p${i}@x.test`, null));
   const html = render(invoice(), many);
-  const list = html.match(/<div data-testid="unlinked-list" class="([^"]+)"/);
-  assert.ok(list);
-  for (const cls of ['overflow-y-auto', 'max-h-[40vh]']) assert.ok(list![1].split(' ').includes(cls), `list has ${cls}`);
-  for (let i = 0; i < 30; i += 1) assert.match(html, new RegExp(`aria-label="Link Person ${i} to a Xero contact"`));
+  assert.doesNotMatch(html, /data-testid="find-xero-contact"|data-testid="unlinked-list"/);
   assert.equal((html.match(/<option value="c\d+"/g) ?? []).length, 30, 'every contact is still a recipient option');
 });

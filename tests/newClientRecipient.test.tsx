@@ -47,14 +47,14 @@ test('a NEW unlinked contact (valid email, no building default) is listed and SE
 
 test('the editor says how to proceed: link a contact to its EXISTING Xero contact; the app never matches or creates one', () => {
   const html = render([NEW_CONTACT]);
-  assert.match(html, /None of this client(?:'|&#x27;)s contacts is linked to a Xero contact yet\. You can choose any of them, but it must be linked to\s+its existing Xero contact \(Link, below\) before the invoice can be sent\. The app never matches or creates a Xero contact\s+by itself\./);
+  assert.match(html, /None of this client(?:'|&#x27;)s contacts is linked to a Xero contact yet\. You can choose any of them, but it must be linked to\s+its existing Xero contact \(“Link to Xero contact”, offered once you choose it\) before the invoice can be sent\.\s+The app never matches or creates a Xero contact by itself\./);
   assert.doesNotMatch(html, /created in Xero, when you submit/);
 });
 
-test('the Link button is offered for it, with what linking is for', () => {
+test('no default: it says so and offers "Set up contacts & defaults" (a new tab), not a search panel', () => {
   const html = render([NEW_CONTACT]);
-  assert.match(html, /aria-label="Link Pat New to a Xero contact"[^>]*>Link<\/button>/);
-  assert.match(html, /Link it to its existing Xero contact to invoice it\./);
+  assert.doesNotMatch(html, /data-testid="find-xero-contact"/);
+  assert.match(html, /data-testid="no-invoice-default"[^>]*>This building has no default invoice recipient, so one is chosen for each invoice\./);
 });
 
 test('a contact restored from an older browser cache (Xero fields MISSING, not null) is selectable but treated as unlinked, not as sendable', () => {

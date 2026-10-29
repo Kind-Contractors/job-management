@@ -98,21 +98,22 @@ test('BUILDINGS 3: the server refuses to re-link a contact that is any building\
 });
 
 // ---- the Building File: Link to Xero on every contact, and offered after "+ Add contact" ---------------------------------------------------
-test('BUILDING FILE 1: every contact row offers Link to Xero (or Change Xero link) and opens the SHARED dialog for exactly that contact', () => {
-  const page = noComments(src('src', 'pages', 'BuildingFilePage.tsx'));
-  assert.match(page, /onClick=\{\(\) => setLinkingContact\(c\)\}/);
-  assert.match(page, /\{localLinkStatus\(c\) === 'linked' \? 'Change Xero link' : 'Link to Xero'\}/);
-  assert.match(page, /<LinkXeroContactDialog\s+localContactId=\{linkingContact\.id\}\s+localContactName=\{linkingContact\.name\}\s+localContactEmail=\{linkingContact\.email\}/);
-  assert.match(page, /currentXeroContactId=\{linkingContact\.xeroContactId\}/, 'replacing an existing link still needs its explicit confirmation in the dialog');
-  assert.match(page, /suggestedTerm=\{building\.name \|\| building\.buildingName \|\| linkingContact\.name\}/, 'the name search starts from this building');
-  assert.match(page, /onLinked=\{\(\) => refreshAfterXeroLink\(queryClient\)\}/, 'only the contacts and job rows are refreshed');
+test('BUILDING FILE 1: every contact row (Contacts & Defaults) offers Link to Xero (or Change Xero link) and opens the SHARED dialog for exactly that contact', () => {
+  const tab = noComments(src('src', 'components', 'buildings', 'ContactsAndDefaultsTab.tsx'));
+  assert.match(tab, /onClick=\{\(\) => setLinkingContact\(c\)\}/);
+  assert.match(tab, /\{status === 'linked' \? 'Change Xero link' : 'Link to Xero'\}/);
+  assert.match(tab, /<LinkXeroContactDialog\s+localContactId=\{linkingContact\.id\}\s+localContactName=\{linkingContact\.name\}\s+localContactEmail=\{linkingContact\.email\}/);
+  assert.match(tab, /currentXeroContactId=\{linkingContact\.xeroContactId\}/, 'replacing an existing link still needs its explicit confirmation in the dialog');
+  assert.match(tab, /suggestedTerm=\{building\.name \|\| building\.buildingName \|\| linkingContact\.name\}/, 'the name search starts from this building');
+  assert.match(tab, /refreshAfterXeroLink\(queryClient\);/, 'only the contacts and job rows are refreshed');
+  assert.doesNotMatch(noComments(src('src', 'pages', 'BuildingFilePage.tsx')), /setLinkingContact|<LinkXeroContactDialog/, 'the Site file only summarises');
 });
 
 test('BUILDING FILE 2: after "+ Add contact" the notice OFFERS to link the new contact (optional); once linked it says so instead', () => {
-  const page = noComments(src('src', 'pages', 'BuildingFilePage.tsx'));
-  assert.match(page, /setJustAddedContactId\(contact\.id\);/);
-  assert.match(page, /return isUsableRecipient\(added\) \? \(\s*<> \{linkStatusLabel\(added\)\}\.<\/>\s*\) : \(/);
-  assert.match(page, /onClick=\{\(\) => setLinkingContact\(added\)\}[^>]*>\s*Link to Xero contact now\s*<\/button>/);
+  const tab = noComments(src('src', 'components', 'buildings', 'ContactsAndDefaultsTab.tsx'));
+  assert.match(tab, /setJustAddedId\(contact\.id\);/);
+  assert.match(tab, /\(isUsableRecipient\(justAdded\) \? \(\s*<> \{linkStatusLabel\(justAdded\)\}\.<\/>\s*\) : \(/);
+  assert.match(tab, /onClick=\{\(\) => setLinkingContact\(justAdded\)\}[^>]*>\s*Link to Xero contact now\s*<\/button>/);
   const wrapper = src('src', 'components', 'buildings', 'BuildingAddContactForm.tsx');
   assert.match(wrapper, /onCreated=\{onCreated\}/, 'the saved contact itself is passed on');
   assert.doesNotMatch(noComments(wrapper), /linkContact|xero-link|xeroLinks/i, 'creating a contact links nothing');
@@ -121,15 +122,14 @@ test('BUILDING FILE 2: after "+ Add contact" the notice OFFERS to link the new c
 test('BUILDING FILE 3: the default-recipient panel points at the Building File\'s own Link to Xero, not the jobs list', () => {
   const panel = src('src', 'components', 'jobs', 'BuildingDefaultRecipientPanel.tsx');
   assert.doesNotMatch(panel, /open the contact from the jobs list/);
-  assert.match(panel, /Link a contact to its Xero contact first \(&ldquo;Link to Xero&rdquo; in Contacts, above\)\./);
+  assert.match(panel, /Link a contact to its Xero contact first \(&ldquo;Link to Xero&rdquo; under Manage contacts\)\./);
 });
 
 // ---- the invoice screen: link offered after adding a recipient; unlinked never sendable; unsaved edits kept ---------------------------------
-test('INVOICE 1: after "+ Add another email address" the notice offers "Link to Xero contact now" until the contact is linked', () => {
+test('INVOICE 1: contacts are no longer added from the invoice ("+ Add another email address" removed); they are added in Contacts & Defaults', () => {
   const editor = noComments(src('src', 'components', 'jobs', 'InvoiceEditor.tsx'));
-  assert.match(editor, /setJustAdded\(contact\);/);
-  assert.match(editor, /const current = clientContacts\.find\(\(c\) => c\.id === justAdded\.id\) \?\? justAdded;\s+return isUsableRecipient\(current\) \?/);
-  assert.match(editor, /onClick=\{\(\) => setLinkingContact\(current\)\}[\s\S]*?Link to Xero contact now/);
+  assert.doesNotMatch(editor, /Add another email address|ADD_NEW_CONTACT_VALUE|NewContactForm|NewRecipientDialog|createContactForClient|FindXeroContactPanel/);
+  assert.match(editor, /href=\{`\/buildings\/\$\{buildingId\}\?tab=contacts`\}\s+target="_blank"\s+rel="noopener noreferrer"/);
 });
 
 test('INVOICE 2: a chosen contact that is not linked shows why and a Link button; the main button can be pressed but does not send', () => {
@@ -187,8 +187,8 @@ test('STEP A 4: the explanation becomes an alert after a press, says nothing was
 
 test('STEP A 5: the press state is cleared when the choice or the invoice changes; a link keeps the chosen recipient (only contacts and job rows reload)', () => {
   const editor = noComments(src('src', 'components', 'jobs', 'InvoiceEditor.tsx'));
-  assert.match(editor, /setSelectedContactId\(e\.target\.value\);\s+setContactNotice\(null\);\s+setJustAdded\(null\);\s+setXeroLinkNeededFor\(null\);/);
-  assert.match(editor, /setJustAdded\(null\);\s+setXeroLinkNeededFor\(null\);\s+\}, \[invoiceId\]\);/);
+  assert.match(editor, /setSelectedContactId\(e\.target\.value\);\s+setXeroLinkNeededFor\(null\);/);
+  assert.match(editor, /setChooseOtherContact\(false\);\s+setXeroLinkNeededFor\(null\);\s+\}, \[invoiceId\]\);/);
   const dialog = editor.slice(editor.indexOf('{linkingContact && ('));
   assert.match(dialog, /onLinked=\{\(\) => refreshAfterXeroLink\(queryClient\)\}/);
   assert.doesNotMatch(dialog.slice(0, dialog.indexOf('/>')), /setSelectedContactId|persistCurrentDraft|sendMutation/, 'linking neither changes the choice nor saves or sends');
@@ -205,15 +205,14 @@ test('INVOICE 3: an unresolved or unlinked recipient is refused BEFORE the invoi
   assert.match(NOT_LINKED_RECIPIENT_MESSAGE, /Nothing was saved or sent\./);
 });
 
-test('INVOICE 4: creating or linking a contact never reloads or saves the invoice, so unsaved edits stay on screen', () => {
+test('INVOICE 4: linking a contact never reloads or saves the invoice, so unsaved edits stay on screen; contacts & defaults open in a NEW tab', () => {
   const editor = noComments(src('src', 'components', 'jobs', 'InvoiceEditor.tsx'));
-  const form = editor.slice(editor.indexOf('<NewContactForm'), editor.indexOf('</NewRecipientDialog>'));
-  assert.doesNotMatch(form, /\['invoice'|persistCurrentDraft|updateInvoiceDraft|sendMutation|setDescription|setLines|setDueDate/);
   const dialog = editor.slice(editor.indexOf('{linkingContact && ('), editor.indexOf('</div>', editor.indexOf('{linkingContact && (')));
   assert.match(dialog, /onLinked=\{\(\) => refreshAfterXeroLink\(queryClient\)\}/);
   const refresh = src('src', 'components', 'jobs', 'UnlinkedRecipientsList.tsx');
   assert.match(refresh, /queryClient\.invalidateQueries\(\{ queryKey: \['jobRows'\] \}\);\s+queryClient\.invalidateQueries\(\{ queryKey: \['contacts'\] \}\);\s+\}/, 'jobRows and contacts only - never the invoice');
-  for (const offer of ['setLinkingContact(current)', 'setLinkingContact(selectedContact)']) assert.ok(editor.includes(offer), offer);
+  assert.ok(editor.includes('setLinkingContact(selectedContact)'), 'the contextual Link to Xero contact is kept');
+  assert.match(editor, /target="_blank"/, 'Set up contacts & defaults never navigates this page away (unsaved invoice edits kept)');
 });
 
 // ---- job reports are independent of invoice recipients and Xero links ----------------------------------------------------------------------

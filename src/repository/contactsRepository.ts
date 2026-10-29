@@ -61,8 +61,32 @@ export interface ContactFieldsInput {
 async function unsetOtherPrimaryContacts(clientId: string, exceptContactId?: string): Promise<void> {
   let query = supabase.from('contacts').update({ is_primary: false }).eq('client_id', clientId).eq('is_primary', true);
   if (exceptContactId) query = query.neq('id', exceptContactId);
-  const { error } = await query;
+  // The rows the update actually changed (none when the client had no other main contact), so only a real demotion is recorded.
+  const { data: demoted, error } = await query.select('id, name');
   if (error) throw new Error(`Failed to update the client's existing primary contact: ${error.message}`);
+  // Recorded as soon as it has happened: the demotion is real even if the caller's own save then fails.
+  for (const c of demoted ?? []) {
+    await logContactActivity(clientId, 'contact_updated', `Contact updated: ${c.name} (no longer main contact)`);
+  }
+}
+
+/**
+ * What changed, for the contact history: field NAMES and status changes only - never the values themselves (no email
+ * address or phone number is written to the history). Empty when nothing really changed.
+ */
+export function contactChangeSummary(
+  before: { name: string; email: string | null; phone_number: string | null; is_primary: boolean; is_accounts_contact: boolean },
+  patch: Partial<ContactFieldsInput>,
+): string[] {
+  const changes: string[] = [];
+  if (patch.name !== undefined && patch.name !== before.name) changes.push('name');
+  if (patch.email !== undefined && (patch.email ?? null) !== (before.email ?? null)) changes.push('email');
+  if (patch.phoneNumber !== undefined && (patch.phoneNumber ?? null) !== (before.phone_number ?? null)) changes.push('phone');
+  if (patch.isPrimary !== undefined && patch.isPrimary !== before.is_primary) changes.push(patch.isPrimary ? 'now main contact' : 'no longer main contact');
+  if (patch.isAccountsContact !== undefined && patch.isAccountsContact !== before.is_accounts_contact) {
+    changes.push(patch.isAccountsContact ? 'marked accounts only' : 'no longer accounts only');
+  }
+  return changes;
 }
 
 /**
@@ -111,7 +135,8 @@ export async function createContactForClient(clientId: string, input: ContactFie
 
   if (error) throw new Error(`Failed to create contact: ${error.message}`);
 
-  await logContactActivity(clientId, 'contact_added', `Contact added: ${data.name}${data.is_accounts_contact ? ' (accounts only)' : ''}`);
+  const added = [data.is_primary ? 'main contact' : null, data.is_accounts_contact ? 'accounts only' : null].filter(Boolean);
+  await logContactActivity(clientId, 'contact_added', `Contact added: ${data.name}${added.length ? ` (${added.join(', ')})` : ''}`);
 
   return {
     id: data.id,
@@ -162,22 +187,9 @@ export async function updateContact(
   const { error } = await supabase.from('contacts').update(dbPatch).eq('id', contactId);
   if (error) throw new Error(`Failed to update contact: ${error.message}`);
 
-  const changed =
-    !!before &&
-    ((patch.name !== undefined && patch.name !== before.name) ||
-      (patch.email !== undefined && patch.email !== before.email) ||
-      (patch.phoneNumber !== undefined && patch.phoneNumber !== before.phone_number) ||
-      (patch.isPrimary !== undefined && patch.isPrimary !== before.is_primary) ||
-      (patch.isAccountsContact !== undefined && patch.isAccountsContact !== before.is_accounts_contact));
-
-  if (changed) {
+  const changes = before ? contactChangeSummary(before, patch) : [];
+  if (changes.length > 0) {
     const name = patch.name ?? before!.name;
-    const classification =
-      patch.isAccountsContact !== undefined && patch.isAccountsContact !== before!.is_accounts_contact
-        ? patch.isAccountsContact
-          ? ' (marked accounts only)'
-          : ' (no longer accounts only)'
-        : '';
-    await logContactActivity(clientId, 'contact_updated', `Contact updated: ${name}${classification}`);
+    await logContactActivity(clientId, 'contact_updated', `Contact updated: ${name} (${changes.join(', ')})`);
   }
 }

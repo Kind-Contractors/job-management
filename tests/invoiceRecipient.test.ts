@@ -52,11 +52,10 @@ test('the refusal happens FIRST in the send: before the draft is saved and befor
   assert.ok(refuse < save && save < send, `refuse (${refuse}) < save (${save}) < send (${send})`);
 });
 
-test('Send is disabled while the "add" option is selected, and the shared new-contact form is shown (email required)', () => {
-  assert.match(code, /const recipientChosen = recipientLocked \|\| \(!addingNewContact && !recipientUnavailable && /);
+test('Send needs a chosen recipient (locked, a listed contact, or the usable default); there is no "add" option on the invoice any more', () => {
+  assert.match(code, /const recipientChosen = recipientLocked \|\| \(!recipientUnavailable && \(selectedContact \? true : !!usableDefaultContactId\)\);/);
   assert.match(code, /disabled=\{anyMutationPending \|\| lines\.length === 0 \|\| !recipientChosen\}/);
-  assert.match(code, /\{editable && !recipientLocked && addingNewContact && \(\s*<NewRecipientDialog clientName=\{clientName\} onClose=\{\(\) => setSelectedContactId\(''\)\}>\s*<NewContactForm\s+clientId=\{clientId\}/);
-  assert.match(code, /requireEmail\s+refreshKeys=\{\[\['jobRows'\], \['historicalJobRows'\], \['contacts', clientId\]\]\}/);
+  assert.doesNotMatch(code, /NewRecipientDialog|<NewContactForm|ADD_NEW_CONTACT_VALUE/);
 });
 
 test('a refused send surfaces its message through the existing error path (onError), not a silent failure', () => {

@@ -345,6 +345,7 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
                 onClose={() => setOpenInvoiceId(null)}
                 clientId={selected.job.clientId}
                 clientName={selected.job.clientName}
+                buildingId={selected.job.buildingId}
                 clientContacts={selected.job.clientContacts}
                 buildingDefault={selected.job.buildingDefaultRecipient}
               />
