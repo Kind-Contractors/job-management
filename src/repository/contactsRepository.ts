@@ -193,3 +193,87 @@ export async function updateContact(
     await logContactActivity(clientId, 'contact_updated', `Contact updated: ${name} (${changes.join(', ')})`);
   }
 }
+
+/**
+ * What decides whether a contact may be deleted, read fresh when the delete dialog opens. Contacts belong to the CLIENT, so every
+ * check covers all of the client's buildings. `updatedAt` is the version the manager is looking at: the delete only goes ahead if
+ * the contact is still exactly that version (see deleteContact). Null when the contact no longer exists for this client.
+ */
+export interface ContactDeletionCheck {
+  contactId: string;
+  name: string;
+  updatedAt: string;
+  isPrimary: boolean;
+  /** The client's buildings whose default invoice recipient is this contact (a delete is refused by the database while any is). */
+  defaultForBuildings: { id: string; name: string }[];
+  /** Job reports sent to this contact (the send history references it, so the database refuses the delete). */
+  reportSends: number;
+  /** Linked to a Xero contact: deleting removes only the app's link; nothing changes in Xero. */
+  xeroContactName: string | null;
+  linkedToXero: boolean;
+  /** How many buildings share this client's contacts (the contact is removed from all of them). */
+  buildingCount: number;
+}
+
+export async function checkContactDeletion(contactId: string, clientId: string): Promise<ContactDeletionCheck | null> {
+  const { data: contact, error } = await supabase
+    .from('contacts')
+    .select('id, client_id, name, is_primary, xero_contact_id, xero_contact_name, updated_at')
+    .eq('id', contactId)
+    .maybeSingle();
+  if (error) throw new Error(`Could not check the contact: ${error.message}`);
+  if (!contact || contact.client_id !== clientId) return null;
+
+  const [defaults, sends, buildings] = await Promise.all([
+    supabase.from('buildings').select('id, name, address').eq('default_invoice_contact_id', contactId),
+    supabase.from('report_client_sends').select('id', { count: 'exact', head: true }).eq('recipient_contact_id', contactId),
+    supabase.from('buildings').select('id', { count: 'exact', head: true }).eq('client_id', clientId),
+  ]);
+  for (const r of [defaults, sends, buildings]) if (r.error) throw new Error(`Could not check the contact: ${r.error.message}`);
+
+  return {
+    contactId: contact.id,
+    name: contact.name,
+    updatedAt: contact.updated_at,
+    isPrimary: contact.is_primary === true,
+    defaultForBuildings: (defaults.data ?? []).map((b) => ({ id: b.id, name: b.name || b.address })),
+    reportSends: sends.count ?? 0,
+    xeroContactName: contact.xero_contact_name ?? null,
+    linkedToXero: !!contact.xero_contact_id?.trim(),
+    buildingCount: buildings.count ?? 0,
+  };
+}
+
+/** Why a delete was refused: the database's foreign keys are the final word, whatever was checked before. */
+export const CONTACT_DELETE_REFUSED = {
+  invoiceDefault: 'This contact is now the default invoice recipient of a building. Change or clear that default first. Nothing was deleted.',
+  reportHistory: 'This contact has been sent job reports, so it is kept for the record of who they went to. Nothing was deleted.',
+  changed: 'This contact changed (or was removed) after you opened it. Close this and check it again. Nothing was deleted.',
+};
+
+/**
+ * Deletes ONE contact by its id - only if it is still the version the manager checked (`expectedUpdatedAt`), so an edit made in the
+ * meantime (for example becoming the main contact) is never deleted unseen. The database still refuses a contact that is a building's
+ * default invoice recipient or has been sent job reports (foreign keys), whatever was checked before; those refusals come back as
+ * plain messages. On success the deletion is recorded in each of the client's building histories, by name only.
+ */
+export async function deleteContact(contactId: string, clientId: string, expectedUpdatedAt: string, name: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('contacts')
+    .delete()
+    .eq('id', contactId)
+    .eq('client_id', clientId)
+    .eq('updated_at', expectedUpdatedAt)
+    .select('id');
+  if (error) {
+    if (error.code === '23503') {
+      const which = `${error.message} ${error.details ?? ''}`;
+      if (which.includes('report_client_sends')) throw new Error(CONTACT_DELETE_REFUSED.reportHistory);
+      throw new Error(CONTACT_DELETE_REFUSED.invoiceDefault);
+    }
+    throw new Error(`The contact could not be deleted: ${error.message}`);
+  }
+  if (!data || data.length === 0) throw new Error(CONTACT_DELETE_REFUSED.changed);
+
+  await logContactActivity(clientId, 'contact_deleted', `Contact deleted: ${name}`);
+}
