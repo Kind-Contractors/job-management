@@ -8,6 +8,7 @@ import BuildingAddContactForm from './BuildingAddContactForm';
 import ReportDefaultPanel from './ReportDefaultPanel';
 import ScrollableList from '../shared/ScrollableList';
 import EditContactForm from '../contacts/EditContactForm';
+import DeleteContactDialog from '../contacts/DeleteContactDialog';
 import FindXeroContactPanel from '../jobs/FindXeroContactPanel';
 import LinkXeroContactDialog from '../jobs/LinkXeroContactDialog';
 import BuildingDefaultRecipientPanel from '../jobs/BuildingDefaultRecipientPanel';
@@ -35,6 +36,8 @@ export default function ContactsAndDefaultsTab({ building, contacts, contactsLoa
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
+  // The contact whose Delete was pressed: the dialog checks what depends on it before anything can be deleted.
+  const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null);
   const [addingContact, setAddingContact] = useState(false);
   // "+ Add contact" pressed from the Find-in-Xero panel: the contact then added is offered there to confirm its link.
   const [addingForXero, setAddingForXero] = useState(false);
@@ -188,6 +191,18 @@ export default function ContactsAndDefaultsTab({ building, contacts, contactsLoa
                         </button>
                         <button
                           type="button"
+                          onClick={() => {
+                            setNotice(null);
+                            setJustAddedId(null);
+                            setDeleting({ id: c.id, name: c.name });
+                          }}
+                          aria-label={`Delete ${c.name}`}
+                          className="cursor-pointer border border-neutral-300 px-2 py-1 text-[11px] text-missed-fg hover:bg-neutral-100"
+                        >
+                          Delete
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => setLinkingContact(c)}
                           aria-label={`${status === 'not_linked' ? 'Link' : 'Change the Xero link of'} ${c.name}`}
                           className={[
@@ -250,6 +265,24 @@ export default function ContactsAndDefaultsTab({ building, contacts, contactsLoa
           <BuildingDefaultRecipientPanel building={building} contacts={contacts} />
         </div>
       </div>
+
+      {deleting && (
+        <DeleteContactDialog
+          contactId={deleting.id}
+          contactName={deleting.name}
+          clientId={building.clientId}
+          clientName={building.clientName}
+          onClose={() => setDeleting(null)}
+          onDeleted={(name) => {
+            setDeleting(null);
+            if (editingId === deleting.id) setEditingId(null);
+            if (xeroNewContactId === deleting.id) setXeroNewContactId(null);
+            // The contact lists, the job rows (their contacts), the buildings (defaults) and this building's history.
+            for (const queryKey of [...refreshKeys, ['buildingRows']]) void queryClient.invalidateQueries({ queryKey });
+            setNotice(`${name} was deleted.`);
+          }}
+        />
+      )}
 
       {editingContact && (
         <EditContactDialog name={editingContact.name} onClose={() => setEditingId(null)}>

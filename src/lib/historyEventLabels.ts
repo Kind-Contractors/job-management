@@ -11,6 +11,7 @@ export const HISTORY_EVENT_LABEL: Record<string, string> = {
   access_info_updated: 'Access details updated',
   contact_added: 'Contact added',
   contact_updated: 'Contact updated',
+  contact_deleted: 'Contact deleted',
   job_created: 'Job created',
   job_details_updated: 'Job details updated',
   job_price_changed: 'Price changed',
