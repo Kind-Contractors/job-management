@@ -8,6 +8,7 @@ import {
   HiOutlineBriefcase,
   HiOutlineBuildingOffice2,
   HiOutlineCalendarDays,
+  HiOutlineDocumentText,
   HiOutlineClipboardDocumentCheck,
   HiOutlinePaperAirplane,
   HiOutlineTableCells,
@@ -50,14 +51,15 @@ function NavItem({
   dotClass?: string;
   icon: IconType;
   label: string;
-  count: number;
+  /** Omitted for a row that is not a count of anything (Records is for looking things up, not outstanding work). */
+  count?: number;
   collapsed: boolean;
 }) {
   if (collapsed) {
     return (
       <div
         onClick={onClick}
-        title={`${label} — ${count}`}
+        title={count === undefined ? label : `${label} — ${count}`}
         className={[
           'flex cursor-pointer flex-col items-center gap-0.5 border-l-2 py-2 hover:bg-neutral-200',
           active ? 'border-ink bg-neutral-200' : 'border-transparent',
@@ -67,7 +69,7 @@ function NavItem({
           <Icon size={16} />
           {dotClass && <i className={`absolute -top-1 -right-1 block h-1.5 w-1.5 flex-none ${dotClass}`} />}
         </span>
-        <span className="font-body text-[9px] text-neutral-500 tabular-nums">{count}</span>
+        {count !== undefined && <span className="font-body text-[9px] text-neutral-500 tabular-nums">{count}</span>}
       </div>
     );
   }
@@ -76,7 +78,7 @@ function NavItem({
     <div onClick={onClick} title={label} className={navLinkClasses(active)}>
       {dotClass && <i className={`block h-[7px] w-[7px] flex-none ${dotClass}`} />}
       {label}
-      <b className="ml-auto font-body text-xs tabular-nums">{count}</b>
+      {count !== undefined && <b className="ml-auto font-body text-xs tabular-nums">{count}</b>}
     </div>
   );
 }
@@ -121,6 +123,7 @@ export default function NavRail() {
   const onVideosWithoutReport = pathname === '/videos-without-report';
   const onUsers = pathname === '/users';
   const onHistoricalJobs = pathname === '/historical-jobs';
+  const onRecords = pathname === '/records';
   const onWasteReports = pathname === '/waste-reports';
 
   const divisionFiltered = jobRows.filter((j) => division === 'Both' || j.division === division);
@@ -141,18 +144,15 @@ export default function NavRail() {
     return needsBookingCount(buildMonthlyPlan(divisionFiltered, shiftMonthPrefix(todayISO.slice(0, 7), 1), todayISO));
   }, [divisionFiltered]);
 
-  // A report being "ready for accounts" is a per-visit condition (approved,
-  // not yet sent to accounts), not a job-level status — a job can have this
-  // sitting on an old visit while its overall status is anything. Counted
-  // directly rather than via `job.status`, using the one shared predicate
-  // (isVisitReadyForAccounts) also used by AllLiveJobsPage's filter and
-  // VisitRow's inline badge.
+  // A visit being "ready for accounts" is a per-visit condition (approved, and
+  // its invoice not yet in Xero), not a job-level status. Counted from the
+  // same rows the Ready for accounts page lists (accountsQueueRows), so the
+  // badge always equals that list.
   const readyForAccountsCount = counts.readyForAccounts;
   const goToReadyForAccounts = () => navigate('/ready-for-accounts');
 
-  // Same shape as readyForAccountsCount above, keyed on the sibling
-  // isReportReadyForClient predicate — a report awaiting client-send, not
-  // an invoicing concern.
+  // Same shape as readyForAccountsCount above, from the same rows the Ready
+  // for client page lists (clientQueueRows): approved and not yet delivered.
   const readyForClientCount = counts.readyForClient;
   const goToReadyForClient = () => navigate('/ready-for-client');
 
@@ -172,7 +172,7 @@ export default function NavRail() {
     void confirmLeave().then((ok) => ok && setSearchParams(next, { replace: true })); // the division filter can drop the open report from the queue
   };
 
-  const viewItems: { key: string; label: string; icon: IconType; active: boolean; count: number; onClick: () => void }[] = [
+  const viewItems: { key: string; label: string; icon: IconType; active: boolean; count?: number; onClick: () => void }[] = [
     { key: 'jobs', label: 'All live jobs', icon: HiOutlineBriefcase, active: onJobs && !status, count: divisionFiltered.length, onClick: () => goToView('client') },
     { key: 'buildings', label: 'Buildings', icon: HiOutlineBuildingOffice2, active: onBuildings, count: buildingRows.length, onClick: () => navigate('/buildings') },
     { key: 'schedule', label: 'Schedule', icon: HiOutlineCalendarDays, active: onThisWeek, count: technicians.length, onClick: () => navigate('/this-week') },
@@ -188,6 +188,14 @@ export default function NavRail() {
       active: onHistoricalJobs,
       count: historicalJobRows.filter((j) => division === 'Both' || j.division === division).length,
       onClick: () => navigate('/historical-jobs'),
+    },
+    {
+      key: 'records',
+      label: 'Records',
+      icon: HiOutlineDocumentText,
+      active: onRecords,
+      // No badge: Records is where delivered reports and invoices are looked up, not a queue of outstanding work.
+      onClick: () => navigate('/records'),
     },
   ];
 

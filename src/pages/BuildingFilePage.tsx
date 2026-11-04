@@ -16,6 +16,7 @@ import ContactsAndDefaultsTab from '../components/buildings/ContactsAndDefaultsT
 import { defaultRecipientProblem, isUsableRecipient, linkStatusLabel, localLinkStatus } from '../lib/xeroLinkStatus';
 import { contactInitials, REPORT_DEFAULT_PROBLEM, reportDefaultSummary } from '../lib/contactDisplay';
 import { buildingReports } from '../lib/buildingReports';
+import BuildingInvoicesPanel from '../components/buildings/BuildingInvoicesPanel';
 import Breadcrumbs from '../components/shell/Breadcrumbs';
 import ScrollableList from '../components/shared/ScrollableList';
 import { HISTORY_EVENT_LABEL, historyEventDetail } from '../lib/historyEventLabels';
@@ -389,6 +390,9 @@ export default function BuildingFilePage() {
               historicalError={historicalJobs.isError}
               onRetryHistorical={() => void historicalJobs.refetch()}
             />
+
+            {/* Invoice history of every job at this building (active and historical), as recorded in JMS. */}
+            <BuildingInvoicesPanel buildingId={building.id} />
           </div>
 
           <div className="flex min-w-0 flex-col gap-4">

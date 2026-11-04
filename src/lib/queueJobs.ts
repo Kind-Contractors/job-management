@@ -4,8 +4,8 @@
 // have report or accounting work a manager must act on - so cancelling a job never makes such work disappear. Nothing
 // else in the app reads the extra rows (All Live Jobs, the schedule, Month Matrix ... stay on active jobs only).
 //
-// For a non-active job a queue only takes the visits that genuinely still need action, so a job whose reports are all
-// finished never shows up, and the Completed tab never sees one.
+// A queue only takes the visits that genuinely still need action - for active and non-active jobs alike - so a report or
+// invoice that has been dealt with leaves the queue (it is found in Records), and the Delivered tab never sees a closed job.
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { JobRow, JobVisitSummary } from '../domain/types';
@@ -29,19 +29,46 @@ export function hasOpenAccountsWork(visit: JobVisitSummary): boolean {
   return visit.reportReviewStatus === 'approved' && (!visit.invoiceId || !isInvoiceInXero(visit.invoiceStatus));
 }
 
-/** Ready for client: approved and not yet marked Completed - the same rule for active and non-active jobs. */
+/** Ready for client: approved and not yet delivered (emailed or marked Completed) - the same rule for active and non-active jobs. */
 export function isVisitInClientQueue(visit: JobVisitSummary): boolean {
   return isReportReadyForClient(visit);
 }
 
-/** Ready for accounts list: unchanged for an active job (approved-and-unbilled, or already invoiced); only open work for a non-active one. */
-export function isVisitInAccountsQueue(job: JobRow, visit: JobVisitSummary): boolean {
-  return isActiveJob(job) ? isVisitReadyForAccounts(visit) || !!visit.invoiceId : hasOpenAccountsWork(visit);
+/**
+ * Ready for accounts: approved and no invoice yet, or an invoice that is not in Xero yet (draft / sending / failed) - the
+ * same rule for active and non-active jobs, and the SAME rule for the list, its heading and the rail badge. A visit whose
+ * invoice has been created in Xero ('sent' or 'in_xero_not_emailed') has left the queue; it is found in Records.
+ * `job` is kept in the signature for callers; the rule itself is per visit.
+ */
+export function isVisitInAccountsQueue(_job: JobRow, visit: JobVisitSummary): boolean {
+  return isVisitReadyForAccounts(visit);
 }
 
-/** The "ready for accounts" nav count: unchanged for an active job; open accounting work for a non-active one. */
+/** The "ready for accounts" rail count - exactly the list's rule (kept as its own name for existing callers). */
 export function isVisitCountedForAccounts(job: JobRow, visit: JobVisitSummary): boolean {
-  return isActiveJob(job) ? isVisitReadyForAccounts(visit) : hasOpenAccountsWork(visit);
+  return isVisitInAccountsQueue(job, visit);
+}
+
+/** The jobs in the chosen division ('Both' = all) - the rail's division filter, applied the same way by the queue pages. */
+export function jobsInDivision(jobs: JobRow[], division: string | null | undefined): JobRow[] {
+  const d = division ?? 'Both';
+  return d === 'Both' ? jobs : jobs.filter((j) => j.division === d);
+}
+
+/** One row per visit in a queue. */
+export interface QueueVisitRow {
+  job: JobRow;
+  visit: JobVisitSummary;
+}
+
+/** The Ready for client queue's rows for the division - what the page lists and what the rail counts. */
+export function clientQueueRows(jobs: JobRow[], division: string | null | undefined): QueueVisitRow[] {
+  return jobsInDivision(jobs, division).flatMap((job) => job.visits.filter(isVisitInClientQueue).map((visit) => ({ job, visit })));
+}
+
+/** The Ready for accounts queue's rows for the division - what the page lists and what the rail counts. */
+export function accountsQueueRows(jobs: JobRow[], division: string | null | undefined): QueueVisitRow[] {
+  return jobsInDivision(jobs, division).flatMap((job) => job.visits.filter((v) => isVisitInAccountsQueue(job, v)).map((visit) => ({ job, visit })));
 }
 
 /**
@@ -60,11 +87,11 @@ export function mergeQueueJobs(active: JobRow[], nonActiveWithOpenWork: JobRow[]
 
 /** The three nav badges for the report queues, over active jobs plus closed jobs with open work, for the chosen division. */
 export function queueCounts(queueJobRows: JobRow[], division: string): { review: number; readyForAccounts: number; readyForClient: number } {
-  const rows = queueJobRows.filter((j) => division === 'Both' || j.division === division);
   return {
-    review: rows.filter((j) => j.status === 'review').length,
-    readyForAccounts: rows.reduce((n, j) => n + j.visits.filter((v) => isVisitCountedForAccounts(j, v)).length, 0),
-    readyForClient: rows.reduce((n, j) => n + j.visits.filter(isVisitInClientQueue).length, 0),
+    review: jobsInDivision(queueJobRows, division).filter((j) => j.status === 'review').length,
+    // The same row builders the two pages list from, so a badge always equals its page's list.
+    readyForAccounts: accountsQueueRows(queueJobRows, division).length,
+    readyForClient: clientQueueRows(queueJobRows, division).length,
   };
 }
 
