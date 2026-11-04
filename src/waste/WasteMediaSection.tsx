@@ -82,7 +82,7 @@ export default function WasteMediaSection({ phase, media, progressOf, previewUrl
                 >
                   {status.text}
                 </div>
-                {m.status === 'failed' && !m.permanentFailure && (
+                {((m.status === 'failed' && !m.permanentFailure) || (m.status === 'pending' && m.lastError)) && (
                   <button type="button" onClick={() => onRetry(m.id)} className="cursor-pointer text-[11px] text-teal underline">
                     Try again
                   </button>
