@@ -13,6 +13,7 @@ import {
 } from '../lib/records';
 import type { BuildingReportEntry } from '../lib/buildingReports';
 import { useDebouncedValue } from '../lib/dialogHooks';
+import Pager, { usePaged } from '../components/shared/Pager';
 import { isActiveJob } from '../lib/queueJobs';
 import { formatWhen } from '../components/reports/ReportCompletionControls';
 import InvoiceRecordItem, { formatDay } from '../components/records/InvoiceRecordItem';
@@ -22,10 +23,8 @@ type Tab = 'reports' | 'invoices';
 
 const input = 'border border-neutral-300 px-2.5 py-1.5 text-[12.5px] outline-none focus:border-teal';
 
+// Search is the global box in the top bar (?q=, shared by both tabs); these are the tab's own filters.
 function Filters({
-  search,
-  onSearch,
-  placeholder,
   from,
   to,
   onFrom,
@@ -33,9 +32,6 @@ function Filters({
   dateLabel,
   children,
 }: {
-  search: string;
-  onSearch: (v: string) => void;
-  placeholder: string;
   from: string;
   to: string;
   onFrom: (v: string) => void;
@@ -45,7 +41,6 @@ function Filters({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-divider px-4 py-2.5">
-      <input type="search" value={search} onChange={(e) => onSearch(e.target.value)} placeholder={placeholder} aria-label={placeholder} className={`${input} w-72`} />
       <label className="flex items-center gap-1 text-[11.5px] text-neutral-600">
         {dateLabel} from
         <input type="date" value={from} max={to || undefined} onChange={(e) => onFrom(e.target.value)} aria-label={`${dateLabel} from`} className="border border-neutral-300 px-1.5 py-1 text-[12px]" />
@@ -60,18 +55,18 @@ function Filters({
 }
 
 /** Delivered job reports: emailed through the system or marked Completed, from active and historical jobs. */
-export function ReportRecordsTab({ entries, loading, error, historicalError }: { entries: BuildingReportEntry[]; loading: boolean; error: boolean; historicalError: boolean }) {
-  const [search, setSearch] = useState('');
+export function ReportRecordsTab({ entries, search, loading, error, historicalError }: { entries: BuildingReportEntry[]; search: string; loading: boolean; error: boolean; historicalError: boolean }) {
   const [status, setStatus] = useState<ReportRecordStatus>('all');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const q = useDebouncedValue(search, 250);
   const rows = useMemo(() => filterReportRecords(entries, { search: q, status, from, to }), [entries, q, status, from, to]);
+  const paged = usePaged(rows, JSON.stringify([q, status, from, to]));
   const pdf = useReportPdf();
 
   return (
     <div data-testid="report-records">
-      <Filters search={search} onSearch={setSearch} placeholder="Search client, building, address or job" from={from} to={to} onFrom={setFrom} onTo={setTo} dateLabel="Delivered">
+      <Filters from={from} to={to} onFrom={setFrom} onTo={setTo} dateLabel="Delivered">
         <select value={status} onChange={(e) => setStatus(e.target.value as ReportRecordStatus)} aria-label="Report status" className={input}>
           <option value="all">Emailed or completed</option>
           <option value="emailed">Emailed through the system</option>
@@ -87,7 +82,7 @@ export function ReportRecordsTab({ entries, loading, error, historicalError }: {
         <p className="px-4 py-3 text-[12.5px] text-neutral-500">{entries.length === 0 ? 'No reports have been emailed or marked completed yet.' : 'No reports match these filters.'}</p>
       ) : (
         <div>
-          {rows.map((e) => {
+          {paged.pageRows.map((e) => {
             const busy = pdf.busyReportId === e.reportId;
             return (
               <div key={e.reportId} data-testid="report-record" className="border-b border-divider px-4 py-2.5 text-[12.5px]">
@@ -136,6 +131,7 @@ export function ReportRecordsTab({ entries, loading, error, historicalError }: {
               </div>
             );
           })}
+          <Pager {...paged} label="Job reports" />
         </div>
       )}
       {pdf.dialogs}
@@ -144,17 +140,17 @@ export function ReportRecordsTab({ entries, loading, error, historicalError }: {
 }
 
 /** Every invoice recorded in JMS, whatever its status or its job's lifecycle. */
-export function InvoiceRecordsTab({ invoices, loading, error }: { invoices: InvoiceRecord[]; loading: boolean; error: boolean }) {
-  const [search, setSearch] = useState('');
+export function InvoiceRecordsTab({ invoices, search, loading, error }: { invoices: InvoiceRecord[]; search: string; loading: boolean; error: boolean }) {
   const [status, setStatus] = useState<InvoiceRecordStatusFilter>('all');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const q = useDebouncedValue(search, 250);
   const rows = useMemo(() => filterInvoiceRecords(invoices, { search: q, status, from, to }), [invoices, q, status, from, to]);
+  const paged = usePaged(rows, JSON.stringify([q, status, from, to]));
 
   return (
     <div data-testid="invoice-records">
-      <Filters search={search} onSearch={setSearch} placeholder="Search invoice number, client, building or job" from={from} to={to} onFrom={setFrom} onTo={setTo} dateLabel="Created">
+      <Filters from={from} to={to} onFrom={setFrom} onTo={setTo} dateLabel="Created">
         <select value={status} onChange={(e) => setStatus(e.target.value as InvoiceRecordStatusFilter)} aria-label="Invoice status" className={input}>
           <option value="all">Any status</option>
           {(Object.keys(INVOICE_STATUS_LABEL) as (keyof typeof INVOICE_STATUS_LABEL)[]).map((s) => (
@@ -175,7 +171,12 @@ export function InvoiceRecordsTab({ invoices, loading, error }: { invoices: Invo
       ) : rows.length === 0 ? (
         <p className="px-4 py-3 text-[12.5px] text-neutral-500">{invoices.length === 0 ? 'No invoices have been created yet.' : 'No invoices match these filters.'}</p>
       ) : (
-        rows.map((i) => <InvoiceRecordItem key={i.id} invoice={i} />)
+        <>
+          {paged.pageRows.map((i) => (
+            <InvoiceRecordItem key={i.id} invoice={i} />
+          ))}
+          <Pager {...paged} label="Invoices" />
+        </>
       )}
     </div>
   );
@@ -189,6 +190,8 @@ export function InvoiceRecordsTab({ invoices, loading, error }: { invoices: Invo
 export default function RecordsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tab: Tab = searchParams.get('tab') === 'invoices' ? 'invoices' : 'reports';
+  // The global search box in the top bar (it keeps ?q= when the tab changes).
+  const search = searchParams.get('q') ?? '';
   const active = useQuery({ queryKey: ['jobRows'], queryFn: listJobRows });
   const historical = useQuery({ queryKey: ['historicalJobRows'], queryFn: listHistoricalJobRows });
   const invoices = useQuery({ queryKey: ['invoiceRecords'], queryFn: listInvoiceRecords });
@@ -226,9 +229,9 @@ export default function RecordsPage() {
       </div>
       <div className="mx-5 mb-5 border border-neutral-300 bg-white">
         {tab === 'reports' ? (
-          <ReportRecordsTab entries={reportEntries} loading={active.isPending} error={active.isError} historicalError={historical.isError} />
+          <ReportRecordsTab entries={reportEntries} search={search} loading={active.isPending} error={active.isError} historicalError={historical.isError} />
         ) : (
-          <InvoiceRecordsTab invoices={invoices.data ?? []} loading={invoices.isPending} error={invoices.isError} />
+          <InvoiceRecordsTab invoices={invoices.data ?? []} search={search} loading={invoices.isPending} error={invoices.isError} />
         )}
       </div>
     </div>

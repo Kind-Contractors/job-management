@@ -15,7 +15,10 @@ import kindContractorsLogo from '../../assets/kind_Contractors_logo.png';
  * filtered on `q` (their boxes were disabled for no reason) and the Monthly Plan was never added. Month Matrix is
  * deliberately NOT here - it does not read `q`.
  */
-export const SEARCHABLE_ROUTES = ['/jobs', '/buildings', '/this-week', '/historical-jobs', '/monthly-plan'] as const;
+export const SEARCHABLE_ROUTES = ['/jobs', '/buildings', '/this-week', '/historical-jobs', '/monthly-plan', '/records'] as const;
+
+/** What the box searches on a route whose page searches more than jobs and buildings. */
+const SEARCH_PLACEHOLDER: Record<string, string> = { '/records': 'Search records: client, building, job or invoice number' };
 
 export function isSearchableRoute(pathname: string): boolean {
   return (SEARCHABLE_ROUTES as readonly string[]).includes(pathname);
@@ -67,7 +70,7 @@ export default function TopBar() {
           <input
             value={q}
             onChange={(e) => onSearch(e.target.value)}
-            placeholder="Search jobs & buildings"
+            placeholder={SEARCH_PLACEHOLDER[pathname] ?? 'Search jobs & buildings'}
             disabled={!searchable}
             title={searchable ? undefined : 'Search isn’t available on this view'}
             className="min-w-0 flex-1 border-0 bg-transparent text-ink outline-none placeholder:text-neutral-500 disabled:cursor-not-allowed disabled:opacity-50"
