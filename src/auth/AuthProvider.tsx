@@ -19,8 +19,8 @@ import { setCurrentUserId } from './currentUser';
  */
 export type AuthStatus = 'loading' | 'signed_out' | 'unauthorized' | 'check_failed' | 'authorized';
 
-/** `app_users.role` — the only two values the DB's own CHECK constraint allows. */
-export type AppRole = 'manager' | 'technician';
+/** `app_users.role` — the values the DB's own CHECK constraint allows. A waste reporter only ever sees the waste-report screens. */
+export type AppRole = 'manager' | 'technician' | 'waste_reporter';
 
 export interface AuthContextValue {
   status: AuthStatus;
@@ -50,7 +50,7 @@ interface AuthorizationResult {
 async function checkAuthorization(userId: string): Promise<AuthorizationResult> {
   const { data, error } = await supabase.from('app_users').select('role, is_active').eq('id', userId).maybeSingle();
   if (error) return { status: 'check_failed', role: null };
-  if (data?.is_active && (data.role === 'manager' || data.role === 'technician')) {
+  if (data?.is_active && (data.role === 'manager' || data.role === 'technician' || data.role === 'waste_reporter')) {
     return { status: 'authorized', role: data.role };
   }
   return { status: 'unauthorized', role: null };

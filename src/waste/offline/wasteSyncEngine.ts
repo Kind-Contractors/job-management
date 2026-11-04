@@ -1,0 +1,641 @@
+// The waste reporter's upload-and-send engine: framework-free, driven by IndexedDB (./wasteDb.ts), so nothing is lost when the
+// phone loses signal, the app is closed, or the page reloads.
+//
+//   add a photo/video  ->  queued on the phone at once  ->  uploaded (videos resumable)  ->  checked by the server (waste-media-check)
+//   "Send report"      ->  draft locked  ->  sent with waste_submit_report() as soon as every file has passed its check
+//
+// ONE WORKER AT A TIME. Every trigger (a new file, "Send", coming back online, the app reopening, a 30 s timer) calls kick(). The
+// worker flag is claimed synchronously - before anything is awaited - so two triggers can never run two workers, and a trigger that
+// arrives while one runs just asks it for one more pass. Sending a report is therefore never attempted twice at the same time; and
+// even if it were (another tab, a lost reply), the report id chosen on the phone makes the server return the existing report
+// instead of creating a second one.
+import { useEffect, useState } from 'react';
+import { getCurrentUserId } from '../../auth/currentUser';
+import { preparePhotoForUpload } from '../../technician/offline/photoCompression';
+import { readVideoMetadata, type VideoMetadata } from '../../lib/videoMetadata';
+import { UploadCancelledError, UploadError } from '../../lib/reportVideoUpload';
+import {
+  checkUploadedFile,
+  removeUnsubmittedFiles,
+  submitWasteReport,
+  uploadSmallFile,
+  uploadVideoFile,
+  WasteRpcError,
+  type FileCheckOutcome,
+  type SubmitWasteReportInput,
+  type VideoUploadOptions,
+} from '../wasteApi';
+import {
+  checkWastePick,
+  checkWasteVideoLength,
+  londonToday,
+  photoExtFor,
+  wasteMediaPath,
+  wasteThumbPath,
+  type WasteMediaKind,
+  type WastePhase,
+} from '../wasteRules';
+import {
+  deleteDraft,
+  deleteMedia,
+  getDraft,
+  getMedia,
+  listDrafts,
+  listMediaForOwner,
+  listMediaForReport,
+  putDraft,
+  putMedia,
+  updateDraftIfPresent,
+  updateMediaIfPresent,
+  type WasteDraft,
+  type WasteMedia,
+} from './wasteDb';
+
+/** Everything the engine reaches out to, so tests can replace the network and the clock. */
+export interface WasteEngineDeps {
+  isOnline: () => boolean;
+  now: () => Date;
+  newId: () => string;
+  uploadSmallFile: (path: string, blob: Blob, contentType: string) => Promise<void>;
+  uploadVideoFile: (path: string, blob: Blob, contentType: string, options: VideoUploadOptions) => Promise<void>;
+  checkUploadedFile: (path: string) => Promise<FileCheckOutcome>;
+  removeFiles: (paths: string[]) => Promise<void>;
+  submitReport: (input: SubmitWasteReportInput) => Promise<{ created: boolean }>;
+  preparePhoto: (file: File) => Promise<{ blob: Blob; filename: string }>;
+  readVideoMetadata: (file: File) => Promise<VideoMetadata>;
+}
+
+const defaultDeps: WasteEngineDeps = {
+  isOnline: () => (typeof navigator === 'undefined' ? true : navigator.onLine),
+  now: () => new Date(),
+  newId: () => crypto.randomUUID(),
+  uploadSmallFile,
+  uploadVideoFile,
+  checkUploadedFile,
+  removeFiles: removeUnsubmittedFiles,
+  submitReport: submitWasteReport,
+  preparePhoto: preparePhotoForUpload,
+  readVideoMetadata,
+};
+let deps: WasteEngineDeps = defaultDeps;
+
+/** Test hook only. */
+export function setWasteEngineDepsForTests(over: Partial<WasteEngineDeps> | null): void {
+  deps = over ? { ...defaultDeps, ...over } : defaultDeps;
+}
+
+const RETRY_INTERVAL_MS = 30_000;
+const MAX_AUTO_ATTEMPTS = 6;
+const BACKOFF_MS = [5_000, 15_000, 60_000, 180_000, 600_000];
+
+// ---- change notification -----------------------------------------------------------------------------------------------------
+const listeners = new Set<() => void>();
+function notify(): void {
+  for (const fn of listeners) fn();
+}
+/** Fires on every local change (a file added/removed, a status or progress change, a report sent). */
+export function subscribeWasteQueue(callback: () => void): () => void {
+  listeners.add(callback);
+  return () => listeners.delete(callback);
+}
+
+const sentListeners = new Set<(reportId: string) => void>();
+/** Fires once when the server has confirmed a report (sent now, or found already sent). */
+export function subscribeWasteReportSent(callback: (reportId: string) => void): () => void {
+  sentListeners.add(callback);
+  return () => sentListeners.delete(callback);
+}
+
+/** Upload progress lives in memory only (writing it to IndexedDB on every chunk would be wasteful). */
+const progressById = new Map<string, number>();
+export function uploadProgress(mediaId: string): number | null {
+  return progressById.get(mediaId) ?? null;
+}
+
+function requireOwner(): string {
+  const ownerId = getCurrentUserId();
+  if (!ownerId) throw new Error('You are not signed in.');
+  return ownerId;
+}
+
+// ---- drafts ------------------------------------------------------------------------------------------------------------------
+
+function emptyDraft(ownerId: string): WasteDraft {
+  const today = londonToday(deps.now());
+  const at = deps.now().toISOString();
+  return {
+    ownerId,
+    reportId: deps.newId(),
+    address: '',
+    startDate: today,
+    endDate: today,
+    description: '',
+    submitRequested: false,
+    submitError: null,
+    permanentFailure: false,
+    createdAt: at,
+    updatedAt: at,
+  };
+}
+
+/** The report being written now: the newest draft not yet sent, or a fresh one. */
+export async function getOrCreateEditingDraft(): Promise<WasteDraft> {
+  const ownerId = requireOwner();
+  const editing = (await listDrafts(ownerId)).filter((d) => !d.submitRequested);
+  if (editing.length > 0) return editing[editing.length - 1];
+  const draft = emptyDraft(ownerId);
+  await putDraft(draft);
+  notify();
+  return draft;
+}
+
+/** "Start another report". A blank draft already open is reused rather than piling up empty ones. */
+export async function startNewDraft(): Promise<WasteDraft> {
+  return getOrCreateEditingDraft();
+}
+
+export async function getWasteDraft(reportId: string): Promise<WasteDraft | undefined> {
+  const ownerId = getCurrentUserId();
+  return ownerId ? getDraft(ownerId, reportId) : undefined;
+}
+
+export async function listWasteDrafts(): Promise<WasteDraft[]> {
+  const ownerId = getCurrentUserId();
+  return ownerId ? listDrafts(ownerId) : [];
+}
+
+export async function listWasteMedia(reportId: string): Promise<WasteMedia[]> {
+  const ownerId = getCurrentUserId();
+  return ownerId ? listMediaForReport(ownerId, reportId) : [];
+}
+
+/** Saves typing as it happens. Ignored once the report has been sent (it is locked). */
+export async function updateWasteDraftFields(
+  reportId: string,
+  fields: Partial<Pick<WasteDraft, 'address' | 'startDate' | 'endDate' | 'description'>>,
+): Promise<void> {
+  const ownerId = requireOwner();
+  const draft = await getDraft(ownerId, reportId);
+  if (!draft || draft.submitRequested) return;
+  await updateDraftIfPresent({ ...draft, ...fields, updatedAt: deps.now().toISOString() });
+}
+
+/** "Send report": locks the draft; the worker sends it once every file has passed its check. */
+export async function requestWasteSubmit(reportId: string): Promise<void> {
+  const ownerId = requireOwner();
+  const draft = await getDraft(ownerId, reportId);
+  if (!draft) throw new Error('This report is no longer on this phone.');
+  await updateDraftIfPresent({ ...draft, submitRequested: true, submitError: null, permanentFailure: false, updatedAt: deps.now().toISOString() });
+  notify();
+  kick();
+}
+
+/** After a refusal that needs a change (a date, the address): unlock the draft so it can be edited and sent again. */
+export async function editWasteDraftAgain(reportId: string): Promise<void> {
+  const ownerId = requireOwner();
+  const draft = await getDraft(ownerId, reportId);
+  if (!draft) return;
+  await updateDraftIfPresent({ ...draft, submitRequested: false, submitError: null, permanentFailure: false, updatedAt: deps.now().toISOString() });
+  notify();
+}
+
+/** Try sending again after a refusal (e.g. once a rejected file has been removed). */
+export async function retryWasteSubmit(reportId: string): Promise<void> {
+  const ownerId = requireOwner();
+  const draft = await getDraft(ownerId, reportId);
+  if (!draft) return;
+  await updateDraftIfPresent({ ...draft, submitError: null, permanentFailure: false, updatedAt: deps.now().toISOString() });
+  notify();
+  kick();
+}
+
+/** Throws the draft and its files away (only a draft that has not been confirmed by the server - a sent report is never touched). */
+export async function discardWasteDraft(reportId: string): Promise<void> {
+  const ownerId = requireOwner();
+  const media = await listMediaForReport(ownerId, reportId);
+  for (const m of media) await deleteMedia(m.id);
+  await deleteDraft(ownerId, reportId);
+  notify();
+  // Best effort: files already uploaded for it. The bucket refuses to remove anything a submitted report uses.
+  const uploaded = media.flatMap((m) => [m.fileUploaded || m.status !== 'pending' ? m.storagePath : null, m.thumbPath]).filter((p): p is string => !!p);
+  if (uploaded.length > 0 && deps.isOnline()) await deps.removeFiles(uploaded).catch(() => undefined);
+}
+
+// ---- files -------------------------------------------------------------------------------------------------------------------
+
+export type AddMediaResult = { ok: true; media: WasteMedia } | { ok: false; message: string };
+
+/** Adds a picked photo or video to a section: checked, prepared and saved on the phone at once; the upload starts in the background. */
+export async function addWasteMedia(reportId: string, phase: WastePhase, kind: WasteMediaKind, file: File): Promise<AddMediaResult> {
+  const ownerId = requireOwner();
+  const draft = await getDraft(ownerId, reportId);
+  if (!draft) return { ok: false, message: 'This report is no longer on this phone.' };
+  if (draft.submitRequested) return { ok: false, message: 'This report has been sent, so it can’t be changed.' };
+
+  const existing = await listMediaForReport(ownerId, reportId);
+  const sourceKey = `${file.name}|${file.size}|${file.lastModified}`;
+  if (existing.some((m) => m.sourceKey === sourceKey && m.phase === phase)) {
+    return { ok: false, message: 'That file is already in this section.' };
+  }
+  const pick = checkWastePick(file, kind, phase, existing);
+  if (!pick.ok) return pick;
+
+  const id = deps.newId();
+  let blob: Blob = file;
+  let mime: string;
+  let ext: string;
+  let durationSeconds: number | null = null;
+  let thumbnail: Blob | null = null;
+
+  if (pick.kind === 'photo') {
+    const prepared = await deps.preparePhoto(file);
+    blob = prepared.blob;
+    const photoExt = photoExtFor(blob.type || file.type);
+    if (!photoExt) {
+      return { ok: false, message: 'This photo’s format can’t be used. In the camera settings choose "Most Compatible" (JPEG), or take a screenshot of it.' };
+    }
+    mime = photoExt === 'jpg' ? 'image/jpeg' : 'image/png';
+    ext = photoExt;
+  } else {
+    mime = pick.mime;
+    ext = pick.ext;
+    const meta = await deps.readVideoMetadata(file).catch(() => ({ durationSeconds: null, thumbnail: null }));
+    const tooLong = checkWasteVideoLength(meta.durationSeconds);
+    if (tooLong) return { ok: false, message: tooLong };
+    durationSeconds = meta.durationSeconds;
+    thumbnail = meta.thumbnail;
+  }
+
+  const media: WasteMedia = {
+    id,
+    ownerId,
+    reportId,
+    kind: pick.kind,
+    phase,
+    blob,
+    fileName: file.name,
+    mime,
+    ext,
+    sizeBytes: blob.size,
+    sourceKey,
+    durationSeconds,
+    thumbnail,
+    storagePath: wasteMediaPath(ownerId, reportId, phase, id, ext),
+    thumbPath: thumbnail ? wasteThumbPath(ownerId, reportId, phase, id) : null,
+    fileUploaded: false,
+    thumbUploaded: false,
+    tusUrl: null,
+    status: 'pending',
+    progress: 0,
+    lastError: null,
+    permanentFailure: false,
+    attempts: 0,
+    nextAttemptAt: null,
+    sortOrder: existing.length,
+    createdAt: deps.now().toISOString(),
+  };
+  await putMedia(media);
+  notify();
+  kick();
+  return { ok: true, media };
+}
+
+/** Removes a file from a draft that has not been sent. An uploaded copy is removed from the server too (best effort). */
+export async function removeWasteMedia(mediaId: string): Promise<void> {
+  const ownerId = requireOwner();
+  const media = await getMedia(mediaId);
+  if (!media || media.ownerId !== ownerId) return;
+  const draft = await getDraft(ownerId, media.reportId);
+  if (draft?.submitRequested) throw new Error('This report has been sent, so its photos and videos can’t be changed.');
+  await deleteMedia(mediaId);
+  progressById.delete(mediaId);
+  notify();
+  const paths = [media.storagePath, media.thumbPath].filter((p): p is string => !!p);
+  if (deps.isOnline()) await deps.removeFiles(paths).catch(() => undefined);
+}
+
+/** "Try again" on a file that stopped after too many failed attempts. */
+export async function retryWasteMedia(mediaId: string): Promise<void> {
+  const media = await getMedia(mediaId);
+  if (!media || media.permanentFailure) return;
+  await updateMediaIfPresent({ ...media, status: 'pending', attempts: 0, nextAttemptAt: null, lastError: null });
+  notify();
+  kick();
+}
+
+// ---- the worker --------------------------------------------------------------------------------------------------------------
+
+let running = false;
+let again = false;
+let idle: Promise<void> = Promise.resolve();
+
+/** Starts a worker pass, or - if one is running - asks it for one more pass. Never two at once. */
+export function kick(): Promise<void> {
+  if (running) {
+    again = true;
+    return idle;
+  }
+  running = true; // claimed before anything is awaited
+  idle = (async () => {
+    try {
+      do {
+        again = false;
+        await workOnce();
+      } while (again);
+    } finally {
+      running = false;
+    }
+  })();
+  return idle;
+}
+
+/** Test hook: resolves when the current worker (if any) has finished. */
+export function waitForWasteWorker(): Promise<void> {
+  return idle;
+}
+
+async function workOnce(): Promise<void> {
+  if (!deps.isOnline()) return;
+  const ownerId = getCurrentUserId();
+  if (!ownerId) return;
+  const now = deps.now().getTime();
+
+  const media = (await listMediaForOwner(ownerId)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  for (const m of media) {
+    if (getCurrentUserId() !== ownerId) return;
+    if (m.status === 'ready' || m.status === 'failed') continue;
+    if (m.nextAttemptAt && Date.parse(m.nextAttemptAt) > now) continue;
+    await processMedia(m);
+  }
+
+  for (const draft of await listDrafts(ownerId)) {
+    if (getCurrentUserId() !== ownerId) return;
+    if (draft.submitRequested && !draft.permanentFailure) await submitDraft(draft);
+  }
+}
+
+function backoffIso(attempts: number): string {
+  return new Date(deps.now().getTime() + BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length) - 1]).toISOString();
+}
+
+async function transientFailure(m: WasteMedia, message: string, patch: Partial<WasteMedia> = {}): Promise<void> {
+  const attempts = m.attempts + 1;
+  const giveUp = attempts >= MAX_AUTO_ATTEMPTS;
+  progressById.delete(m.id);
+  await updateMediaIfPresent({
+    ...m,
+    ...patch,
+    status: giveUp ? 'failed' : 'pending',
+    attempts,
+    lastError: giveUp ? `${message} Tried ${attempts} times.` : message,
+    nextAttemptAt: giveUp ? null : backoffIso(attempts),
+  });
+  notify();
+}
+
+async function permanentFailure(m: WasteMedia, message: string): Promise<void> {
+  progressById.delete(m.id);
+  await updateMediaIfPresent({ ...m, status: 'failed', permanentFailure: true, lastError: message, nextAttemptAt: null });
+  notify();
+}
+
+function uploadStatus(err: unknown): number | null {
+  if (err instanceof UploadError) return err.status;
+  const s = (err as { status?: unknown } | null)?.status;
+  return typeof s === 'number' ? s : null;
+}
+
+async function processMedia(start: WasteMedia): Promise<void> {
+  let m: WasteMedia = { ...start, status: 'uploading' };
+  if (!(await updateMediaIfPresent(m))) return;
+  notify();
+
+  // 1. The poster (optional: a poster that can't be stored is simply dropped).
+  if (m.thumbPath && m.thumbnail && !m.thumbUploaded) {
+    try {
+      await deps.uploadSmallFile(m.thumbPath, m.thumbnail, 'image/jpeg');
+      m = { ...m, thumbUploaded: true };
+    } catch (err) {
+      const status = uploadStatus(err);
+      if (status === 400 || status === 413 || status === 415) m = { ...m, thumbPath: null, thumbnail: null };
+      else return transientFailure(m, 'The upload was interrupted. It will carry on by itself.');
+    }
+  }
+
+  // 2. The file itself. `current` carries the resumable-upload URL as soon as the server gives it, so a failure keeps it.
+  // `foundExisting`: the server said a file already exists under this name (HTTP 409) - most likely THIS file, uploaded by an
+  // earlier attempt whose finish was never recorded (the app was closed at that moment). That is NOT taken as proof: the file goes
+  // to the server check below, and only counts as uploaded if it passes AND is exactly this file's size.
+  let foundExisting = false;
+  if (!m.fileUploaded) {
+    let current = m;
+    try {
+      if (m.kind === 'video') {
+        await deps.uploadVideoFile(m.storagePath, m.blob, m.mime, {
+          tusUrl: m.tusUrl,
+          onUploadUrl: (url) => {
+            current = { ...current, tusUrl: url };
+            void updateMediaIfPresent(current);
+          },
+          onProgress: (fraction) => {
+            progressById.set(m.id, fraction);
+            notify();
+          },
+        });
+        m = { ...current, fileUploaded: true, tusUrl: null };
+      } else {
+        await deps.uploadSmallFile(m.storagePath, m.blob, m.mime);
+        m = { ...m, fileUploaded: true };
+      }
+    } catch (err) {
+      if (err instanceof UploadCancelledError) return transientFailure(current, 'The upload was stopped.');
+      const status = uploadStatus(err);
+      if (status === 413) return permanentFailure(current, 'That file is larger than the 150 MB limit.');
+      if (status === 415) return permanentFailure(current, 'That file type isn’t accepted.');
+      if (status === 401 || status === 403) return permanentFailure(current, 'You are not allowed to upload here. Sign out and back in, then try again.');
+      if (status === 409) {
+        foundExisting = true;
+        m = { ...current, fileUploaded: true, tusUrl: null };
+      } else if (status === 404 || status === 410) {
+        // A resumable upload the server no longer knows: start it again from the beginning.
+        return transientFailure(current, 'The upload had to start again.', { tusUrl: null });
+      } else {
+        return transientFailure(current, 'The upload was interrupted. It will carry on by itself.');
+      }
+    }
+  }
+  progressById.delete(m.id);
+  m = { ...m, status: 'checking' };
+  if (!(await updateMediaIfPresent(m))) return;
+  notify();
+
+  // 3. The server checks what was stored (type, size, a video's real length).
+  if (m.thumbPath && m.thumbUploaded) {
+    const thumb = await deps.checkUploadedFile(m.thumbPath).catch(() => ({ result: 'retry', message: 'No connection.' }) as FileCheckOutcome);
+    if (thumb.result === 'retry') return transientFailure(m, 'Waiting to check the file. It will carry on by itself.');
+    if (thumb.result !== 'ok') m = { ...m, thumbPath: null, thumbnail: null, thumbUploaded: false };
+  }
+  const outcome = await deps.checkUploadedFile(m.storagePath).catch(() => ({ result: 'retry', message: 'No connection.' }) as FileCheckOutcome);
+  // The stored file must be exactly this file. A different size means an incomplete or different copy under this name: it is
+  // removed (his own unsent file - best effort) and this file is uploaded again under a fresh name, which can't collide with it.
+  const wrongCopy = outcome.result === 'ok' && outcome.sizeBytes != null && outcome.sizeBytes !== m.sizeBytes;
+  // A found copy the server rejects was not necessarily this file (the server has already removed it): upload this one under a
+  // fresh name and let it be checked on its own merits - if it is itself invalid, that check rejects it for good.
+  if (wrongCopy || (foundExisting && outcome.result === 'rejected')) {
+    if (wrongCopy && deps.isOnline()) await deps.removeFiles([m.storagePath]).catch(() => undefined);
+    return transientFailure(m, 'An earlier, incomplete copy was found. The file is being uploaded again.', {
+      fileUploaded: false,
+      tusUrl: null,
+      storagePath: wasteMediaPath(m.ownerId, m.reportId, m.phase, deps.newId(), m.ext),
+    });
+  }
+  if (outcome.result === 'ok') {
+    await updateMediaIfPresent({
+      ...m,
+      status: 'ready',
+      durationSeconds: outcome.durationSeconds ?? m.durationSeconds,
+      lastError: null,
+      attempts: 0,
+      nextAttemptAt: null,
+    });
+    notify();
+    return;
+  }
+  if (outcome.result === 'rejected') return permanentFailure(m, outcome.reason);
+  if (outcome.result === 'missing') return transientFailure(m, 'The file has to be uploaded again.', { fileUploaded: false, tusUrl: null });
+  return transientFailure(m, 'Waiting to check the file. It will carry on by itself.');
+}
+
+/** A refusal retrying can never fix (the database said no on purpose), as opposed to a dropped connection or a busy server. */
+function isPermanentSubmitError(err: unknown): boolean {
+  if (!(err instanceof WasteRpcError) || !err.code) return false;
+  return !['08', '40', '53', '54', '55', '57', '58'].includes(err.code.slice(0, 2));
+}
+
+async function submitDraft(draft: WasteDraft): Promise<void> {
+  const media = await listMediaForReport(draft.ownerId, draft.reportId);
+  if (media.some((m) => m.status === 'failed')) {
+    const message = 'A photo or video couldn’t be uploaded. Remove it or try it again, then send the report.';
+    if (draft.submitError !== message) {
+      await updateDraftIfPresent({ ...draft, submitError: message });
+      notify();
+    }
+    return;
+  }
+  if (media.some((m) => m.status !== 'ready')) return; // still uploading or checking
+
+  try {
+    await deps.submitReport({
+      reportId: draft.reportId,
+      address: draft.address.trim(),
+      startDate: draft.startDate,
+      endDate: draft.endDate,
+      description: draft.description,
+      media: media.map((m, i) => ({
+        id: m.id,
+        kind: m.kind,
+        phase: m.phase,
+        storagePath: m.storagePath,
+        thumbnailPath: m.thumbPath && m.thumbUploaded ? m.thumbPath : null,
+        sortOrder: i,
+      })),
+    });
+  } catch (err) {
+    const message = err instanceof Error && err.message ? err.message : 'The report could not be sent.';
+    if (isPermanentSubmitError(err)) {
+      await updateDraftIfPresent({ ...draft, submitError: message, permanentFailure: true });
+    } else {
+      await updateDraftIfPresent({ ...draft, submitError: 'No connection to the server. It will be sent by itself.' });
+    }
+    notify();
+    return;
+  }
+
+  // Confirmed by the server: only now is anything removed from the phone.
+  for (const m of media) {
+    await deleteMedia(m.id);
+    progressById.delete(m.id);
+  }
+  await deleteDraft(draft.ownerId, draft.reportId);
+  notify();
+  for (const fn of sentListeners) fn(draft.reportId);
+}
+
+// ---- triggers & status -------------------------------------------------------------------------------------------------------
+
+let started = false;
+/** Wires the retry triggers once for the life of the tab - called by WasteShell on mount. */
+export function startWasteSyncEngine(): void {
+  if (started) return;
+  started = true;
+  window.addEventListener('online', () => {
+    void retryStoppedOnReconnect().then(() => kick());
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void kick();
+  });
+  setInterval(() => void kick(), RETRY_INTERVAL_MS);
+  void kick();
+}
+
+/** Coming back online gives files that stopped after too many attempts (not rejected ones) a fresh round. */
+async function retryStoppedOnReconnect(): Promise<void> {
+  const ownerId = getCurrentUserId();
+  if (!ownerId) return;
+  for (const m of await listMediaForOwner(ownerId)) {
+    if (m.status === 'failed' && !m.permanentFailure) {
+      await updateMediaIfPresent({ ...m, status: 'pending', attempts: 0, nextAttemptAt: null });
+    }
+  }
+}
+
+export interface WasteSyncStatus {
+  online: boolean;
+  /** Files still to upload or check. */
+  uploading: number;
+  /** Files that stopped (rejected, or too many failed attempts). */
+  failed: number;
+  /** Reports sent from this phone but not yet confirmed by the server. */
+  waitingReports: number;
+  /** Of those, reports the server refused. */
+  refusedReports: number;
+}
+
+async function computeStatus(): Promise<WasteSyncStatus> {
+  const online = typeof navigator === 'undefined' ? true : navigator.onLine;
+  const ownerId = getCurrentUserId();
+  if (!ownerId) return { online, uploading: 0, failed: 0, waitingReports: 0, refusedReports: 0 };
+  const [media, drafts] = await Promise.all([listMediaForOwner(ownerId), listDrafts(ownerId)]);
+  const waiting = drafts.filter((d) => d.submitRequested);
+  return {
+    online,
+    uploading: media.filter((m) => m.status !== 'ready' && m.status !== 'failed').length,
+    failed: media.filter((m) => m.status === 'failed').length,
+    waitingReports: waiting.length,
+    refusedReports: waiting.filter((d) => d.permanentFailure).length,
+  };
+}
+
+export function useWasteSyncStatus(): WasteSyncStatus {
+  const [status, setStatus] = useState<WasteSyncStatus>({ online: true, uploading: 0, failed: 0, waitingReports: 0, refusedReports: 0 });
+  // Subscribes to the engine (an external store) and to the browser's online/offline events.
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      void computeStatus().then((s) => {
+        if (!cancelled) setStatus(s);
+      });
+    };
+    refresh();
+    const unsubscribe = subscribeWasteQueue(refresh);
+    window.addEventListener('online', refresh);
+    window.addEventListener('offline', refresh);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      window.removeEventListener('online', refresh);
+      window.removeEventListener('offline', refresh);
+    };
+  }, []);
+  return status;
+}

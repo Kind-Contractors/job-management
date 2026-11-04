@@ -12,7 +12,7 @@
 import { FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 
-export type AppRole = 'manager' | 'technician';
+export type AppRole = 'manager' | 'technician' | 'waste_reporter';
 
 export interface AppUserRow {
   id: string;

@@ -11,6 +11,7 @@ import {
   HiOutlineClipboardDocumentCheck,
   HiOutlinePaperAirplane,
   HiOutlineTableCells,
+  HiOutlineTrash,
   HiOutlineUsers,
   HiOutlineVideoCamera,
 } from 'react-icons/hi2';
@@ -19,6 +20,7 @@ import { listBuildingRows } from '../../repository/buildingsRepository';
 import { listTechnicians } from '../../repository/techniciansRepository';
 import { listUsers } from '../../repository/usersRepository';
 import { listVisitsWithVideosNoReport } from '../../repository/reportVideosRepository';
+import { countUnsentWasteReports } from '../../repository/wasteReportsRepository';
 import { queueCounts, useQueueJobRows } from '../../lib/queueJobs';
 import { buildMonthlyPlan, needsBookingCount, shiftMonthPrefix } from '../../lib/monthlyPlan';
 import { confirmLeave } from '../../lib/unsavedEditsGuard';
@@ -103,6 +105,8 @@ export default function NavRail() {
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: listUsers });
   // Visits that have a video but no report - a technician's video can arrive before the report, and a cancelled job keeps such a visit.
   const { data: videoVisits = [] } = useQuery({ queryKey: ['videosWithoutReport'], queryFn: listVisitsWithVideosNoReport });
+  // Waste reports not yet marked as sent to the client (archived ones are not counted).
+  const { data: unsentWasteReports = 0 } = useQuery({ queryKey: ['wasteReportsUnsentCount'], queryFn: countUnsentWasteReports });
 
   const status = searchParams.get('status');
   const division = searchParams.get('division') ?? 'Both';
@@ -117,6 +121,7 @@ export default function NavRail() {
   const onVideosWithoutReport = pathname === '/videos-without-report';
   const onUsers = pathname === '/users';
   const onHistoricalJobs = pathname === '/historical-jobs';
+  const onWasteReports = pathname === '/waste-reports';
 
   const divisionFiltered = jobRows.filter((j) => division === 'Both' || j.division === division);
 
@@ -174,6 +179,7 @@ export default function NavRail() {
     { key: 'monthlyPlan', label: 'Monthly plan', icon: HiOutlineCalendarDays, active: onMonthlyPlan, count: monthlyPlanToBook, onClick: () => navigate('/monthly-plan') },
     { key: 'matrix', label: 'Month matrix', icon: HiOutlineTableCells, active: onMonthMatrix, count: divisionFiltered.length, onClick: () => navigate('/month-matrix') },
     { key: 'reviews', label: 'Report review', icon: HiOutlineClipboardDocumentCheck, active: onReportReview, count: reviewCount, onClick: () => navigate('/report-review') },
+    { key: 'waste', label: 'Waste reports', icon: HiOutlineTrash, active: onWasteReports, count: unsentWasteReports, onClick: () => navigate('/waste-reports') },
     { key: 'users', label: 'Users', icon: HiOutlineUsers, active: onUsers, count: users.filter((u) => u.isActive).length, onClick: () => navigate('/users') },
     {
       key: 'historical',

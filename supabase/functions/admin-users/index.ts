@@ -122,7 +122,9 @@ async function handleCreate(
 
   if (!firstName) throw new Error('First name is required.');
   if (!email) throw new Error('Email is required.');
-  if (role !== 'manager' && role !== 'technician') throw new Error('Role must be "manager" or "technician".');
+  if (role !== 'manager' && role !== 'technician' && role !== 'waste_reporter') {
+    throw new Error('Role must be "manager", "technician" or "waste_reporter".');
+  }
 
   const displayName = [firstName, lastName].filter(Boolean).join(' ');
   const tempPassword = generateTempPassword();
