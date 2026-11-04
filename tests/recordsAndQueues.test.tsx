@@ -24,6 +24,7 @@ import ReadyForClientPage from '../src/pages/ReadyForClientPage';
 import { BuildingInvoicesList } from '../src/components/buildings/BuildingInvoicesPanel';
 import { AuthContext } from '../src/auth/AuthProvider';
 import type { LocalInvoiceStatus } from '../src/domain/types';
+import { isSearchableRoute } from '../src/components/shell/TopBar';
 
 const src = (...p: string[]) => readFileSync(join(process.cwd(), ...p), 'utf8');
 const SENT = '2026-10-02T09:00:00Z';
@@ -329,4 +330,52 @@ test('NAV: Records has no count badge; Ready for client and Ready for accounts k
   assert.doesNotMatch(nav, /invoiceRecords|deliveredReportRecords/);
   assert.match(nav, /count=\{readyForAccountsCount\}/);
   assert.match(nav, /count=\{readyForClientCount\}/);
+});
+
+// ---- global search, paging, "New" tags -------------------------------------------------------------------------------------------
+test('SEARCH: Records uses the global search box (?q=) - the box is enabled there and the page has no search box of its own', () => {
+  assert.equal(isSearchableRoute('/records'), true);
+  const page = src('src', 'pages', 'RecordsPage.tsx');
+  assert.match(page, /searchParams\.get\('q'\)/);
+  assert.doesNotMatch(page, /type="search"/);
+  const seed = (qc: QueryClient) => {
+    qc.setQueryData(['jobRows'], recordsJobs);
+    qc.setQueryData(['historicalJobRows'], [histJob]);
+    qc.setQueryData(['invoiceRecords'], allStatuses);
+  };
+  // useDebouncedValue starts from the current value, so the first render is already filtered
+  assert.equal((wrap(<RecordsPage />, '/records?q=h1%20house', seed).match(/data-testid="report-record"/g) ?? []).length, 1);
+  assert.equal((wrap(<RecordsPage />, '/records?tab=invoices&q=inv-3', seed).match(/data-testid="invoice-record"/g) ?? []).length, 1);
+});
+
+test('PAGING: Records shows 25 per page with Previous / Next; a short list has no pager', () => {
+  const many = Array.from({ length: 30 }, (_, i) => mapInvoiceRecord(invRow({ id: `p${i}`, xero_invoice_number: `INV-${100 + i}` })));
+  const html = wrap(<RecordsPage />, '/records?tab=invoices', (qc) => {
+    qc.setQueryData(['jobRows'], []);
+    qc.setQueryData(['historicalJobRows'], []);
+    qc.setQueryData(['invoiceRecords'], many);
+  });
+  assert.equal((html.match(/data-testid="invoice-record"/g) ?? []).length, 25);
+  assert.match(html, /1–25 of 30/);
+  assert.match(html, /Page 1 of 2/);
+  assert.match(html, /disabled=""[^>]*>Previous</);
+  assert.doesNotMatch(wrap(<RecordsPage />, '/records', (qc) => { qc.setQueryData(['jobRows'], recordsJobs); qc.setQueryData(['historicalJobRows'], []); qc.setQueryData(['invoiceRecords'], []); }), /data-testid="pager"/);
+  assert.match(src('src', 'components', 'shared', 'Pager.tsx'), /state\.key === resetKey \? state\.page : 0/, 'a new search or filter starts again at page 1');
+});
+
+test('NAV: Monthly plan, Waste reports and Records carry a "New" tag', () => {
+  const nav = src('src', 'components', 'shell', 'NavRail.tsx');
+  assert.match(nav, /const NEW_SECTIONS = new Set\(\['monthlyPlan', 'waste', 'records'\]\);/);
+  for (const key of ['monthlyPlan', 'waste', 'records']) assert.match(nav, new RegExp(`key: '${key}'`));
+  assert.match(nav, /isNew=\{NEW_SECTIONS\.has\(item\.key\)\}/);
+});
+
+test('NAV: Ready for accounts, Ready for client, Report review and Waste reports show their count as a badge (other rows stay plain numbers)', () => {
+  const nav = src('src', 'components', 'shell', 'NavRail.tsx');
+  assert.match(nav, /count=\{readyForAccountsCount\}\s*attention/);
+  assert.match(nav, /count=\{readyForClientCount\}\s*attention/);
+  assert.match(nav, /count: reviewCount, attention: true/);
+  assert.match(nav, /count: unsentWasteReports, attention: true/);
+  assert.equal((nav.match(/attention: true/g) ?? []).length, 2, 'only those two view rows');
+  assert.match(nav, /const badge = attention && \(count \?\? 0\) > 0;/, 'a 0 count is not shown as a badge');
 });

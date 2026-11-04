@@ -44,6 +44,8 @@ function NavItem({
   icon: Icon,
   label,
   count,
+  isNew = false,
+  attention = false,
   collapsed,
 }: {
   active: boolean;
@@ -53,13 +55,18 @@ function NavItem({
   label: string;
   /** Omitted for a row that is not a count of anything (Records is for looking things up, not outstanding work). */
   count?: number;
+  /** A recently added section: a small "New" tag so Luke notices it (see NEW_SECTIONS). */
+  isNew?: boolean;
+  /** Work waiting for Luke: a count above 0 shows as a filled badge instead of a plain number. */
+  attention?: boolean;
   collapsed: boolean;
 }) {
+  const badge = attention && (count ?? 0) > 0;
   if (collapsed) {
     return (
       <div
         onClick={onClick}
-        title={count === undefined ? label : `${label} — ${count}`}
+        title={`${label}${isNew ? ' (new)' : ''}${count === undefined ? '' : ` — ${count}`}`}
         className={[
           'flex cursor-pointer flex-col items-center gap-0.5 border-l-2 py-2 hover:bg-neutral-200',
           active ? 'border-ink bg-neutral-200' : 'border-transparent',
@@ -69,7 +76,15 @@ function NavItem({
           <Icon size={16} />
           {dotClass && <i className={`absolute -top-1 -right-1 block h-1.5 w-1.5 flex-none ${dotClass}`} />}
         </span>
-        {count !== undefined && <span className="font-body text-[9px] text-neutral-500 tabular-nums">{count}</span>}
+        {isNew && <span className="font-heading text-[8px] leading-none font-semibold tracking-[0.08em] text-teal-700 uppercase">New</span>}
+        {count !== undefined &&
+          (badge ? (
+            <span data-testid="nav-badge" className="bg-teal px-1 font-body text-[9px] leading-[13px] font-semibold text-white tabular-nums">
+              {count}
+            </span>
+          ) : (
+            <span className="font-body text-[9px] text-neutral-500 tabular-nums">{count}</span>
+          ))}
       </div>
     );
   }
@@ -78,7 +93,17 @@ function NavItem({
     <div onClick={onClick} title={label} className={navLinkClasses(active)}>
       {dotClass && <i className={`block h-[7px] w-[7px] flex-none ${dotClass}`} />}
       {label}
-      {count !== undefined && <b className="ml-auto font-body text-xs tabular-nums">{count}</b>}
+      {isNew && (
+        <span className="border border-teal-700 bg-teal-100 px-1 font-heading text-[8.5px] leading-[13px] font-semibold tracking-[0.1em] text-teal-700 uppercase">New</span>
+      )}
+      {count !== undefined &&
+        (badge ? (
+          <b data-testid="nav-badge" className="ml-auto min-w-[22px] bg-teal px-1.5 py-px text-center font-body text-[11px] text-white tabular-nums">
+            {count}
+          </b>
+        ) : (
+          <b className="ml-auto font-body text-xs tabular-nums">{count}</b>
+        ))}
     </div>
   );
 }
@@ -89,6 +114,12 @@ function navLinkClasses(active: boolean) {
     active ? 'border-ink bg-neutral-200 font-semibold' : 'border-transparent font-normal',
   ].join(' ');
 }
+
+/**
+ * Sections added recently, tagged "New" in the rail so Luke notices them. Remove a key once it is no longer new -
+ * nothing else depends on this list.
+ */
+const NEW_SECTIONS = new Set(['monthlyPlan', 'waste', 'records']);
 
 export default function NavRail() {
   const { pathname } = useLocation();
@@ -172,14 +203,14 @@ export default function NavRail() {
     void confirmLeave().then((ok) => ok && setSearchParams(next, { replace: true })); // the division filter can drop the open report from the queue
   };
 
-  const viewItems: { key: string; label: string; icon: IconType; active: boolean; count?: number; onClick: () => void }[] = [
+  const viewItems: { key: string; label: string; icon: IconType; active: boolean; count?: number; attention?: boolean; onClick: () => void }[] = [
     { key: 'jobs', label: 'All live jobs', icon: HiOutlineBriefcase, active: onJobs && !status, count: divisionFiltered.length, onClick: () => goToView('client') },
     { key: 'buildings', label: 'Buildings', icon: HiOutlineBuildingOffice2, active: onBuildings, count: buildingRows.length, onClick: () => navigate('/buildings') },
     { key: 'schedule', label: 'Schedule', icon: HiOutlineCalendarDays, active: onThisWeek, count: technicians.length, onClick: () => navigate('/this-week') },
     { key: 'monthlyPlan', label: 'Monthly plan', icon: HiOutlineCalendarDays, active: onMonthlyPlan, count: monthlyPlanToBook, onClick: () => navigate('/monthly-plan') },
     { key: 'matrix', label: 'Month matrix', icon: HiOutlineTableCells, active: onMonthMatrix, count: divisionFiltered.length, onClick: () => navigate('/month-matrix') },
-    { key: 'reviews', label: 'Report review', icon: HiOutlineClipboardDocumentCheck, active: onReportReview, count: reviewCount, onClick: () => navigate('/report-review') },
-    { key: 'waste', label: 'Waste reports', icon: HiOutlineTrash, active: onWasteReports, count: unsentWasteReports, onClick: () => navigate('/waste-reports') },
+    { key: 'reviews', label: 'Report review', icon: HiOutlineClipboardDocumentCheck, active: onReportReview, count: reviewCount, attention: true, onClick: () => navigate('/report-review') },
+    { key: 'waste', label: 'Waste reports', icon: HiOutlineTrash, active: onWasteReports, count: unsentWasteReports, attention: true, onClick: () => navigate('/waste-reports') },
     { key: 'users', label: 'Users', icon: HiOutlineUsers, active: onUsers, count: users.filter((u) => u.isActive).length, onClick: () => navigate('/users') },
     {
       key: 'historical',
@@ -224,6 +255,7 @@ export default function NavRail() {
         icon={HiOutlineBanknotes}
         label="Ready for accounts"
         count={readyForAccountsCount}
+        attention
         collapsed={collapsed}
       />
       <NavItem
@@ -233,6 +265,7 @@ export default function NavRail() {
         icon={HiOutlinePaperAirplane}
         label="Ready for client"
         count={readyForClientCount}
+        attention
         collapsed={collapsed}
       />
       {/* Shown only while something is waiting here. Most of the time no visit has a video without a report, and a
@@ -266,6 +299,8 @@ export default function NavRail() {
           icon={item.icon}
           label={item.label}
           count={item.count}
+          isNew={NEW_SECTIONS.has(item.key)}
+          attention={item.attention}
           collapsed={collapsed}
         />
       ))}
