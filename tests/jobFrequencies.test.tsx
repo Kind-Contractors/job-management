@@ -28,6 +28,7 @@ test('OPTIONS: both new frequencies are offered with their labels, beside their 
     ['six_weekly', '6 weekly'],
     ['monthly', 'Monthly'],
     ['bimonthly', 'Bi-monthly'],
+    ['four_monthly', 'Four-monthly'], // added later for Luke (tests/jobFourMonthly.test.tsx)
     ['quarterly', 'Quarterly'],
     ['biannual', 'Biannual'],
     ['annual', 'Annual'],
@@ -38,7 +39,7 @@ test('OPTIONS: both new frequencies are offered with their labels, beside their 
   const select = html.slice(html.indexOf('Frequency (for pricing)'), html.indexOf('</select>', html.indexOf('Frequency (for pricing)')));
   assert.match(select, /<option value="six_weekly">6 weekly<\/option>/);
   assert.match(select, /<option value="bimonthly">Bi-monthly<\/option>/);
-  assert.equal((select.match(/<option /g) ?? []).length, 11, 'Not set + 10 frequencies');
+  assert.equal((select.match(/<option /g) ?? []).length, 12, 'Not set + 11 frequencies');
   // The job editor and the grid's inline editor build their options from the same list.
   for (const file of ['JobEditor.tsx', 'JobsGrid.tsx']) assert.match(src('src', 'components', 'jobs', file), /Object\.keys\(FREQUENCY_TYPE_LABEL\) as FrequencyType\[\]/);
 });

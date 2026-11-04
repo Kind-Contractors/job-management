@@ -28,7 +28,7 @@ export type FirstDuePattern = 'fixed_date' | 'fixed_weekday' | 'due_month';
 
 /**
  * The cadence each pricing frequency means, in the units `schedules` stores. A faithful restatement of the same
- * model `VISITS_PER_YEAR_BY_TYPE` already encodes (12/4/2/1 a year), not an inference.
+ * model `VISITS_PER_YEAR_BY_TYPE` already encodes (12/6/4/3/2/1 a year for the month cadences), not an inference.
  *
  * `weekly`/`fortnightly`/`six_weekly` map to week units, which `stepMonths` cannot convert to whole months - they are listed
  * here so `isWeekBasedFrequency` has one source, and `buildFirstDueSchedule` refuses them explicitly.
@@ -39,6 +39,7 @@ const INTERVAL_BY_FREQUENCY: Partial<Record<FrequencyType, { unit: ScheduleInter
   six_weekly: { unit: 'week', count: 6 },
   monthly: { unit: 'month', count: 1 },
   bimonthly: { unit: 'month', count: 2 },
+  four_monthly: { unit: 'month', count: 4 },
   quarterly: { unit: 'quarter', count: 1 },
   biannual: { unit: 'month', count: 6 },
   annual: { unit: 'year', count: 1 },
