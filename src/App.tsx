@@ -17,6 +17,7 @@ import UsersPage from './pages/UsersPage';
 import HistoricalJobsPage from './pages/HistoricalJobsPage';
 import VideosWithoutReportPage from './pages/VideosWithoutReportPage';
 import WasteReportsPage from './pages/WasteReportsPage';
+import RecordsPage from './pages/RecordsPage';
 import TechnicianShell from './technician/TechnicianShell';
 import DayViewPage from './technician/DayViewPage';
 import JobFilePage from './technician/JobFilePage';
@@ -93,6 +94,7 @@ export default function App() {
         <Route path="/videos-without-report" element={<VideosWithoutReportPage />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="/historical-jobs" element={<HistoricalJobsPage />} />
+        <Route path="/records" element={<RecordsPage />} />
         <Route path="/waste-reports" element={<WasteReportsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/jobs" replace />} />

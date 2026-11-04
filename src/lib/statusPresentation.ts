@@ -1,5 +1,6 @@
 import type { JobStatus, JobVisitSummary, ReportReviewStatus, VisitStatus } from '../domain/types';
 import type { MonthCellStateKind } from './monthMatrix';
+import { isInvoiceInXero } from './invoiceStatus';
 
 export interface StatusPresentation {
   label: string;
@@ -69,27 +70,44 @@ export function dueColorClass(status: JobStatus, softDate: boolean): string {
 }
 
 /**
- * A report is "ready for accounts" once approved and not yet sent to
- * accounts — a per-visit condition, not a JobStatus (a job can have this
- * true on one visit while its overall status is anything else). The one
- * shared source of truth for this predicate — reused by NavRail's count,
- * AllLiveJobsPage's filter, and VisitRow's inline badge/auto-expand.
+ * A visit is "ready for accounts" - still in the Ready for accounts queue - while its report is approved and its invoice is
+ * not yet in Xero: no invoice at all, or one that is a draft, being sent, or failed. It leaves once the invoice has been
+ * created in Xero ('sent' = created and emailed, or 'in_xero_not_emailed' = created while emailing was off); a sent invoice
+ * is then found in Records. A visit whose invoice is not in Xero yet stays even if its report has since been returned, so an
+ * open draft is never hidden. Per visit, using its own invoice link - never keyed on sent_to_accounts_at, which nothing
+ * writes any more. The one shared source of truth for the queue list, its heading and the rail badge.
  */
 export function isVisitReadyForAccounts(visit: JobVisitSummary): boolean {
-  return visit.reportReviewStatus === 'approved' && !visit.sentToAccountsAt;
+  if (visit.invoiceId) return !isInvoiceInXero(visit.invoiceStatus);
+  return visit.reportReviewStatus === 'approved';
 }
 
 /**
- * A report is "ready for client" - i.e. still in the Ready for client queue - from the moment it is approved until a
- * manager explicitly marks it Completed. It is deliberately NOT keyed on sentToClientAt any more: the report can be
- * downloaded and sent by hand, or emailed through the system, or both, and it stays in the queue either way until
- * the manager decides it is fully dealt with. A report that has been emailed shows a "Sent" badge but is still
- * awaiting completion. The one shared source of truth - reused by NavRail's count, ReadyForClientPage's list and
- * the job lifecycle check.
+ * A report is "ready for client" - still in the Ready for client queue - from the moment it is approved until it has been
+ * delivered: either emailed successfully through the system (Send to client sets sent_to_client_at only on a confirmed send;
+ * a failed attempt leaves it untouched) or marked Completed by a manager (for a report handed over another way). Sent and
+ * Completed stay two separate facts - a successful email never sets Completed. The one shared source of truth for the queue -
+ * reused by NavRail's count and ReadyForClientPage's list and heading. NOT used by the job lifecycle check or the change-client
+ * warning: those keep their own rule, isReportAwaitingCompletion.
  */
 export function isReportReadyForClient(visit: JobVisitSummary): boolean {
   // `?? null`: job rows cached before completion existed have no such field.
+  return visit.reportReviewStatus === 'approved' && (visit.reportCompletedAt ?? null) == null && (visit.sentToClientAt ?? null) == null;
+}
+
+/**
+ * Approved but not yet marked Completed by a manager - whether or not it has been emailed. The rule the job lifecycle check
+ * (closing a job) and the change-building-client warning have always used; kept as it was when Ready for client switched to
+ * "until delivered", so closing a job still needs every approved report marked Completed.
+ */
+export function isReportAwaitingCompletion(visit: JobVisitSummary): boolean {
+  // `?? null`: job rows cached before completion existed have no such field.
   return visit.reportReviewStatus === 'approved' && (visit.reportCompletedAt ?? null) == null;
+}
+
+/** Delivered to the client: emailed successfully through the system, or marked Completed - it has left Ready for client. */
+export function isReportDelivered(visit: JobVisitSummary): boolean {
+  return !!visit.reportId && ((visit.sentToClientAt ?? null) != null || (visit.reportCompletedAt ?? null) != null);
 }
 
 /** True once a manager has marked the visit's report Completed (it has left the Ready for client queue; Reopen puts it back). */

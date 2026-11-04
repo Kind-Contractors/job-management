@@ -86,12 +86,12 @@ const at = (html: string, text: string) => {
 };
 const has = (html: string, text: string) => html.includes(text);
 
-// ---- the queue: approved until completed - however it was delivered ----------------------------------------------
-test('QUEUE: an approved report that was emailed through the system STAYS in Ready for client (with a Sent badge); a never-sent one is there too', () => {
+// ---- the queue: approved until DELIVERED - emailed successfully, or marked Completed (hand delivery) -----------------
+test('QUEUE (approved by Luke): an approved report that was EMAILED leaves Ready for client by itself; a never-sent one is in the queue', () => {
   const html = page();
   assert.ok(has(html, 'Alpha Court'), 'approved, never sent');
-  assert.ok(has(html, 'Bravo House'), 'approved and emailed: still awaiting completion');
-  assert.equal((html.match(/✓ Sent to client/g) ?? []).length, 1, 'only the emailed report carries the Sent badge');
+  assert.ok(!has(html, 'Bravo House'), 'approved and emailed successfully: delivered, no longer in the queue');
+  assert.equal((html.match(/✓ Sent to client/g) ?? []).length, 0, 'nothing in the queue has been emailed');
 });
 
 test('QUEUE: completed reports, reports awaiting review and others are not in the queue', () => {
@@ -101,28 +101,29 @@ test('QUEUE: completed reports, reports awaiting review and others are not in th
   assert.ok(!has(html, 'Delta Plaza'), 'still awaiting review');
 });
 
-test('the header and tabs say "awaiting completion", with live counts for both lists', () => {
+test('the header and tabs say "awaiting delivery" and "sent or completed", with live counts for both lists', () => {
   const html = page();
-  assert.match(html, /2 awaiting completion/);
-  assert.match(html, /Awaiting completion \(2\)/);
-  assert.match(html, /Completed \(2\)/);
+  assert.match(html, /1 awaiting delivery/);
+  assert.match(html, /Awaiting delivery \(1\)/);
+  assert.match(html, /Sent or completed \(3\)/, 'emailed (B), emailed+completed (C) and completed by hand (E)');
   assert.doesNotMatch(html, /awaiting send/);
 });
 
-test('the Completed list shows completed reports, most recent first, with who and when', () => {
+test('the "Sent or completed" list shows delivered reports, most recently delivered first, with how and when', () => {
   const html = page({ initialView: 'completed' });
-  assert.ok(has(html, 'Charlie Mews') && has(html, 'Echo Tower'));
-  assert.ok(!has(html, 'Alpha Court') && !has(html, 'Bravo House'), 'the queue reports are not in this list');
-  assert.ok(at(html, 'Echo Tower') < at(html, 'Charlie Mews'), 'completed 4 Oct before completed 3 Oct');
+  assert.ok(has(html, 'Charlie Mews') && has(html, 'Echo Tower') && has(html, 'Bravo House'));
+  assert.ok(!has(html, 'Alpha Court'), 'the queue report is not in this list');
+  assert.ok(at(html, 'Echo Tower') < at(html, 'Charlie Mews') && at(html, 'Charlie Mews') < at(html, 'Bravo House'), 'delivered 4 Oct, 3 Oct, 2 Oct');
   assert.match(html, /Completed by office@kindcontractors\.co\.uk/);
   assert.match(html, /Completed by luke@kindcontractors\.co\.uk/);
+  assert.equal((html.match(/✓ Sent to client/g) ?? []).length, 2, 'the two emailed reports carry the Sent badge');
 });
 
 test('empty states explain themselves', () => {
   const none = page({ jobRows: [job('jd', 'Delta Plaza', [vD])] });
-  assert.match(none, /No approved reports are waiting to be completed/);
+  assert.match(none, /No approved reports are waiting to be delivered/);
   const noneCompleted = page({ jobRows: [job('ja', 'Alpha Court', [vA])], initialView: 'completed' });
-  assert.match(noneCompleted, /No reports have been marked completed yet/);
+  assert.match(noneCompleted, /No reports have been emailed or marked completed yet/);
 });
 
 // ---- the action bar: Download PDF, Send to client and Completed side by side ------------------------------------------
@@ -130,17 +131,24 @@ test('ACTIONS: an approved report shows Download PDF, Send to client and Complet
   const html = page({ selected: 'va', reports: { va: reportFor('va') } });
   const download = at(html, 'Download PDF');
   const send = at(html, 'Send to client');
-  const completed = at(html, 'Mark this report as fully dealt with');
+  const completed = at(html, 'Mark this report as delivered by hand');
   assert.ok(download < send && send < completed, 'Completed sits beside the two existing actions');
   assert.ok(!has(html, 'Reopen'), 'nothing to reopen on a report that is not completed');
 });
 
-test('ACTIONS: an emailed-but-not-completed report keeps Send to client, and says it is still waiting to be completed', () => {
-  const html = page({ selected: 'vb', reports: { vb: reportFor('vb', { sentToClientAt: SENT, sentToClientBy: 'luke@x' }) }, lastSend: { vb: { id: 's1', status: 'sent', recipientEmail: 'sam@acme.test', sentBy: 'luke@x', errorMessage: null, createdAt: SENT, resendMessageId: 'm1' } } });
-  assert.ok(has(html, 'Send to client'));
-  assert.ok(has(html, 'Mark this report as fully dealt with'));
-  assert.match(html, /Sent to client<\/span> on /);
-  assert.match(html, /stays in the queue until you mark it Completed/);
+test('ACTIONS: an emailed report (not marked Completed) is under "Sent or completed": it says it left the queue and offers Send again', () => {
+  const html = page({ selected: 'vb', initialView: 'completed', reports: { vb: reportFor('vb', { sentToClientAt: SENT, sentToClientBy: 'luke@x' }) }, lastSend: { vb: { id: 's1', status: 'sent', recipientEmail: 'sam@acme.test', sentBy: 'luke@x', errorMessage: null, createdAt: SENT, resendMessageId: 'm1' } } });
+  assert.match(html, /data-testid="emailed-banner"[^>]*><span class="font-semibold">Emailed to the client<\/span> on /);
+  assert.match(html, /It has left the queue\. You can send it again below\./);
+  assert.ok(has(html, '>Send again<'), 'Send again is still possible');
+  assert.ok(!has(html, 'Mark this report as delivered by hand'), 'no "Completed" step is needed for an emailed report');
+  assert.ok(!has(html, '>Reopen<'), 'nothing to reopen: it was never marked Completed');
+});
+
+test('ACTIONS: an emailed report is not reachable from "Awaiting delivery" any more', () => {
+  const html = page({ selected: 'vb', reports: { vb: reportFor('vb', { sentToClientAt: SENT }) } });
+  assert.ok(!has(html, 'Bravo House'));
+  assert.ok(!has(html, '>Send again<'));
 });
 
 test('ACTIONS: a completed report shows who/when and Reopen, keeps Download PDF, and no longer offers Send or Completed', () => {
@@ -151,7 +159,8 @@ test('ACTIONS: a completed report shows who/when and Reopen, keeps Download PDF,
   assert.match(html, /can&#x27;t be returned for correction, or have a technician&#x27;s section sent back, until you reopen it|can’t be returned for correction, or have a technician’s section sent back, until you reopen it/, 'the rule is stated on the banner itself');
   assert.ok(has(html, 'Download PDF'), 'Download PDF is unchanged and still available');
   assert.ok(!has(html, 'Send to client'));
-  assert.ok(!has(html, 'Mark this report as fully dealt with'));
+  assert.ok(!has(html, '>Send again<'), 'a completed report must be reopened before it is sent again');
+  assert.ok(!has(html, 'Mark this report as delivered by hand'));
 });
 
 test('ACTIONS: a report completed by hand says it was delivered by hand', () => {
@@ -232,8 +241,8 @@ test('MESSAGE: while sending, the box, reset link and send button are locked', (
 // ---- the controls ----------------------------------------------------------------------------------------------------------
 test('tabs mark the active list and show both counts', () => {
   const html = renderToStaticMarkup(<ReadyForClientTabs view="completed" awaitingCount={3} completedCount={7} onChange={noop} />);
-  assert.match(html, /aria-pressed="false"[^>]*>Awaiting completion \(3\)/);
-  assert.match(html, /aria-pressed="true"[^>]*>Completed \(7\)/);
+  assert.match(html, /aria-pressed="false"[^>]*>Awaiting delivery \(3\)/);
+  assert.match(html, /aria-pressed="true"[^>]*>Sent or completed \(7\)/);
 });
 
 test('the Completed confirmation tells the manager what will happen and whether it was emailed', () => {
@@ -270,7 +279,7 @@ test('NOTICE: a completed report tells the manager to reopen it before returning
   assert.match(html, /role="note"/);
   assert.match(html, /Completed<\/span> by luke@kindcontractors\.co\.uk/);
   assert.match(html, /reopen it first/);
-  assert.match(html, /Ready for client[\s\S]*Completed[\s\S]*Reopen/);
+  assert.match(html, /Ready for client → Sent or completed → Reopen/);
   assert.match(html, /return this report for correction/);
 });
 
@@ -295,7 +304,7 @@ test('NOTICE: the per-technician section explains why a technician cannot be sen
 
 test('the reopen-first notice names the way back', () => {
   const html = renderToStaticMarkup(<ReopenFirstNotice completedBy="luke@x" completedAt={DONE} />);
-  assert.match(html, /Ready for client[\s\S]*Completed[\s\S]*Reopen/);
+  assert.match(html, /Ready for client → Sent or completed → Reopen/);
 });
 
 // ---- stale cache: job rows persisted before completion existed ---------------------------------------------------------------------
@@ -309,6 +318,6 @@ test('STALE CACHE: the page renders job rows cached before completion existed (n
     html = page({ jobRows: old });
   });
   assert.ok(has(html, 'Old Cache House'), 'an approved, not-completed report is in the queue');
-  assert.match(html, /1 awaiting completion/);
-  assert.match(html, /Completed \(0\)/);
+  assert.match(html, /1 awaiting delivery/);
+  assert.match(html, /Sent or completed \(0\)/);
 });

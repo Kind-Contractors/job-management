@@ -10,7 +10,7 @@
 import type { JobRow } from '../domain/types';
 import type { BuildingClientChange } from '../repository/buildingClientRepository';
 import { hasOpenAccountsWork } from './queueJobs';
-import { isReportReadyForClient } from './statusPresentation';
+import { isReportAwaitingCompletion } from './statusPresentation';
 
 const UNFINISHED_INVOICE = new Set(['draft', 'sending', 'failed']);
 
@@ -38,7 +38,7 @@ export function clientChangeImpact(buildingJobs: JobRow[]): ClientChangeImpact {
       const unfinished = !!visit.invoiceId && UNFINISHED_INVOICE.has(visit.invoiceStatus ?? '');
       if (unfinished) unfinishedInvoices += 1;
       else if (hasOpenAccountsWork(visit)) notYetInvoiced += 1;
-      if (isReportReadyForClient(visit)) reportsAwaitingClient += 1;
+      if (isReportAwaitingCompletion(visit)) reportsAwaitingClient += 1;
     }
   }
   return { unfinishedInvoices, notYetInvoiced, reportsAwaitingClient, jobs: seen.size };

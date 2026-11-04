@@ -197,14 +197,14 @@ test('READY FOR CLIENT: an approved, not-Completed report of a cancelled job is 
   assert.ok(has(html, 'Cancelled Approved'));
   assert.ok(!has(html, 'Cancelled Completed Unbilled'), 'Completed is Completed');
   assert.ok(!has(html, 'Cancelled Awaiting'), 'awaiting review belongs to Report review');
-  assert.match(html, /1 awaiting completion/);
+  assert.match(html, /1 awaiting delivery/);
 });
 
 test('READY FOR CLIENT: the Completed tab never lists a cancelled job\'s finished reports (no historical leak)', () => {
   const html = clientPage([], [closedApprovedDone, closedFinished], 'completed');
   assert.ok(!has(html, 'Cancelled Completed Unbilled'));
   assert.ok(!has(html, 'Cancelled Finished'));
-  assert.match(html, /Completed \(0\)/);
+  assert.match(html, /Sent or completed \(0\)/);
 });
 
 test('READY FOR ACCOUNTS: unbilled approved work of a cancelled job stays - even when the report is Completed - but a finished, sent invoice does not', () => {
@@ -219,7 +219,7 @@ test('QUEUES: with active jobs too, both lists show together and nothing is list
   const active = job('a1', 'Active Approved', [visit('aa', { status: 'completed', reportId: 'r', reportReviewStatus: 'approved' })]);
   const html = clientPage([active], [closedApproved, active]);
   assert.ok(has(html, 'Active Approved') && has(html, 'Cancelled Approved'));
-  assert.match(html, /2 awaiting completion/);
+  assert.match(html, /2 awaiting delivery/);
 });
 
 test('QUEUES: if the closed-job list could not be loaded the queue says so instead of silently showing less', () => {

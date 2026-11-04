@@ -6,7 +6,7 @@ import {
   updateJobLifecycle,
   type ActiveToHistoricalLifecycleStatus,
 } from '../../repository/jobsRepository';
-import { isReportCompleted, isReportReadyForClient } from '../../lib/statusPresentation';
+import { isReportAwaitingCompletion, isReportCompleted } from '../../lib/statusPresentation';
 import { isInvoiceInXero } from '../../lib/invoiceStatus';
 import { backdropDismiss } from '../../lib/dialogHooks';
 
@@ -50,8 +50,8 @@ function isUnresolvedVisit(visit: JobVisitSummary): boolean {
  * A visit whose report is still moving through the review/send/invoice
  * pipeline. A report a manager has marked COMPLETED never blocks (completion is
  * the manager's explicit "this report is fully dealt with"); a report that was
- * only emailed through the system but not yet completed still does (it stays
- * in the Ready for client queue until completed - see isReportReadyForClient).
+ * only emailed through the system but not yet completed still does (see
+ * isReportAwaitingCompletion - the job rule, separate from the Ready for client queue).
  * Deliberately does NOT reuse
  * isVisitReadyForAccounts(): that predicate is keyed on sentToAccountsAt,
  * which nothing has written since the legacy "Send to accounts"
@@ -67,7 +67,7 @@ function isUnresolvedVisit(visit: JobVisitSummary): boolean {
 export function hasIncompleteReportWork(visit: JobVisitSummary): boolean {
   if (isReportCompleted(visit)) return false;
   if (visit.reportReviewStatus === 'awaiting_review' || visit.reportReviewStatus === 'returned_for_correction') return true;
-  if (isReportReadyForClient(visit)) return true;
+  if (isReportAwaitingCompletion(visit)) return true;
   if (visit.reportReviewStatus === 'approved' && (!visit.invoiceId || !isInvoiceInXero(visit.invoiceStatus))) return true;
   return false;
 }

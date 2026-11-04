@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import type { JobRow, JobVisitSummary } from "../domain/types";
-import { isActiveJob, useQueueJobRows } from "../lib/queueJobs";
+import { clientQueueRows, isActiveJob, jobsInDivision, useQueueJobRows } from "../lib/queueJobs";
 import ClosedJobsNotice from "../components/reports/ClosedJobsNotice";
 import ReportVideos from "../components/reports/ReportVideos";
 import {
@@ -17,10 +17,7 @@ import {
   updateReport,
   type ReportPhoto,
 } from "../repository/reportsRepository";
-import {
-  isReportCompleted,
-  isReportReadyForClient,
-} from "../lib/statusPresentation";
+import { isReportDelivered } from "../lib/statusPresentation";
 import { useAuth } from "../auth/AuthProvider";
 import {
   CompleteButton,
@@ -562,15 +559,19 @@ export default function ReadyForClientPage({
   initialView = "awaiting",
   initialSelectedVisitId = null,
 }: {
-  /** Which list to open on. Only tests pass these; the app always opens on "Awaiting completion" with nothing selected. */
+  /** Which list to open on. Tests pass these; the app reads `?view=delivered&visit=<visit id>` (Records' "Open" link) instead. */
   initialView?: QueueView;
   initialSelectedVisitId?: string | null;
 } = {}) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  // The rail's division filter, applied to this list exactly as the rail badge applies it; and Records' deep link.
+  const [searchParams] = useSearchParams();
+  const division = searchParams.get("division") ?? "Both";
+  const urlView: QueueView | null = searchParams.get("view") === "delivered" ? "completed" : null;
 
   const [selectedVisitId, setSelectedVisitId] = useState<string | null>(
-    initialSelectedVisitId,
+    initialSelectedVisitId ?? searchParams.get("visit"),
   );
   const [selectedContactId, setSelectedContactId] = useState<string | null>(
     null,
@@ -590,7 +591,7 @@ export default function ReadyForClientPage({
     videos: PreparedReportVideos;
   } | null>(null);
   // Which list is showing: reports still awaiting completion (the queue), or reports a manager has completed.
-  const [view, setView] = useState<QueueView>(initialView);
+  const [view, setView] = useState<QueueView>(urlView ?? initialView);
   const [confirmingComplete, setConfirmingComplete] = useState(false);
   const [completionError, setCompletionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -601,30 +602,28 @@ export default function ReadyForClientPage({
   // Active jobs plus closed/cancelled jobs whose approved report is still awaiting completion.
   const { jobRows, isLoading, isError, error, closedJobsError, retryClosedJobs } = useQueueJobRows();
 
-  // A report stays in the queue from approval until a manager explicitly marks it Completed - whether it was emailed
-  // through the system, downloaded and sent by hand, or both (see isReportReadyForClient).
+  // A report stays in the queue from approval until it is delivered: emailed successfully through the system (it then leaves
+  // by itself) or marked Completed by a manager (for a report handed over another way) - see isReportReadyForClient. The
+  // queue rows come from the same builder as the rail badge, so the heading and the badge always agree.
   const { awaitingRows, completedRows } = useMemo(() => {
-    const awaiting: ClientReportRow[] = [];
+    const awaiting: ClientReportRow[] = clientQueueRows(jobRows, division);
     const completed: ClientReportRow[] = [];
-    for (const job of jobRows) {
+    for (const job of jobsInDivision(jobRows, division)) {
+      // The "Sent or completed" tab is active jobs only, as before: reports of closed jobs are in Records.
+      if (!isActiveJob(job)) continue;
       for (const visit of job.visits) {
-        if (isReportReadyForClient(visit)) awaiting.push({ job, visit });
-        // The Completed tab is active jobs only: finished reports of closed jobs do not come back into view.
-        else if (isReportCompleted(visit) && isActiveJob(job)) completed.push({ job, visit });
+        if (isReportDelivered(visit)) completed.push({ job, visit });
       }
     }
     // Latest visit date first, same as Ready for accounts.
     awaiting.sort((a, b) =>
       (b.visit.scheduledDate ?? "").localeCompare(a.visit.scheduledDate ?? ""),
     );
-    // Most recently completed first.
-    completed.sort((a, b) =>
-      (b.visit.reportCompletedAt ?? "").localeCompare(
-        a.visit.reportCompletedAt ?? "",
-      ),
-    );
+    // Most recently delivered first (completed or emailed, whichever is later).
+    const deliveredAt = (v: JobVisitSummary) => [v.reportCompletedAt ?? "", v.sentToClientAt ?? ""].sort().pop() ?? "";
+    completed.sort((a, b) => deliveredAt(b.visit).localeCompare(deliveredAt(a.visit)));
     return { awaitingRows: awaiting, completedRows: completed };
-  }, [jobRows]);
+  }, [jobRows, division]);
   const rows = view === "awaiting" ? awaitingRows : completedRows;
 
   const selected = rows.find((r) => r.visit.id === selectedVisitId);
@@ -764,7 +763,7 @@ export default function ReadyForClientPage({
       setCompletionError(null);
       setSelectedVisitId(null);
       setNotice(
-        "Report marked as completed. You can find it under Completed, and Reopen it if needed.",
+        "Report marked as completed. You can find it under Sent or completed, and Reopen it if needed.",
       );
       queryClient.invalidateQueries({ queryKey: ["report", id] });
       queryClient.invalidateQueries({ queryKey: ["jobRows"] });
@@ -777,13 +776,19 @@ export default function ReadyForClientPage({
       ),
   });
 
-  // Reopen: clears completed_at / completed_by and puts the report back in the queue, on the Awaiting completion list.
+  // Reopen: clears completed_at / completed_by only - never the send record. A report delivered by hand goes back to the
+  // Awaiting delivery list; one that was also emailed stays delivered (the email happened), under Sent or completed, where
+  // it can now be returned for correction or sent again.
   const reopenMutation = useMutation({
-    mutationFn: (id: string) => reopenReport(id, actor),
-    onSuccess: (_data, id) => {
+    mutationFn: ({ id }: { id: string; emailed: boolean }) => reopenReport(id, actor),
+    onSuccess: (_data, { id, emailed }) => {
       setCompletionError(null);
-      setView("awaiting");
-      setNotice("Report reopened. It is back in the Ready for client queue.");
+      if (emailed) {
+        setNotice("Report reopened. It was emailed to the client, so it stays under Sent or completed and is not outstanding again.");
+      } else {
+        setView("awaiting");
+        setNotice("Report reopened. It is back in the Ready for client queue.");
+      }
       queryClient.invalidateQueries({ queryKey: ["report", id] });
       queryClient.invalidateQueries({ queryKey: ["jobRows"] });
     },
@@ -934,12 +939,15 @@ export default function ReadyForClientPage({
     queryClient.invalidateQueries({ queryKey: ["clientSend", id] });
     if (result.status === "sent") {
       setShowConfirmDialog(false);
+      // A successful email delivers the report: it leaves "Awaiting delivery" by itself. Follow it to "Sent or completed" so
+      // the manager still sees it (and can send it again from there); it is also in Records.
+      setView("completed");
       // A function that has not been updated yet ignores the message and sends the standard one - never let that pass silently.
-      if (result.messageUsed !== "custom") {
-        setNotice(
-          "The report was emailed, but the server used the standard message instead of yours. Please tell your administrator.",
-        );
-      }
+      setNotice(
+        result.messageUsed !== "custom"
+          ? "The report was emailed, but the server used the standard message instead of yours. Please tell your administrator."
+          : "Emailed to the client. It has left Awaiting delivery and is listed under Sent or completed (and in Records).",
+      );
       queryClient.invalidateQueries({ queryKey: ["jobRows"] });
     } else {
       setSendError(result.error ?? "Failed to send.");
@@ -997,7 +1005,7 @@ export default function ReadyForClientPage({
             Ready for client
           </h1>
           <div className="mt-0.5 text-xs text-neutral-600 tabular-nums">
-            {awaitingRows.length} awaiting completion
+            {awaitingRows.length} awaiting delivery
           </div>
           <ReadyForClientTabs
             view={view}
@@ -1031,8 +1039,8 @@ export default function ReadyForClientPage({
           <div className="flex flex-1 items-center justify-center p-5 text-center">
             <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
               {view === "awaiting"
-                ? "No approved reports are waiting to be completed."
-                : "No reports have been marked completed yet."}
+                ? "No approved reports are waiting to be delivered."
+                : "No reports have been emailed or marked completed yet."}
             </div>
           </div>
         ) : (
@@ -1060,12 +1068,12 @@ export default function ReadyForClientPage({
                       ? ` · ${row.visit.technicianName}`
                       : ""}
                   </div>
-                  {view === "awaiting" && row.visit.sentToClientAt && (
+                  {view === "completed" && row.visit.sentToClientAt && (
                     <div className="mt-1">
                       <SentBadge sentAt={row.visit.sentToClientAt} />
                     </div>
                   )}
-                  {view === "completed" && (
+                  {view === "completed" && row.visit.reportCompletedAt && (
                     <div className="mt-1 text-[11px] text-done-fg">
                       Completed by {row.visit.reportCompletedBy ?? "unknown"} ·{" "}
                       {formatWhen(row.visit.reportCompletedAt)}
@@ -1144,20 +1152,19 @@ export default function ReadyForClientPage({
                   </button>
                 </div>
 
-                {view === "completed" && (
+                {view === "completed" && selected.visit.reportCompletedAt && (
                   <CompletedBanner
                     completedAt={selected.visit.reportCompletedAt ?? null}
                     completedBy={selected.visit.reportCompletedBy ?? null}
                     sentAt={alreadySentAt}
                     pending={reopenMutation.isPending}
-                    onReopen={() => reopenMutation.mutate(reportId!)}
+                    onReopen={() => reopenMutation.mutate({ id: reportId!, emailed: !!alreadySentAt })}
                   />
                 )}
-                {view === "awaiting" && alreadySentAt && (
-                  <div className="mb-3 border border-done bg-done/10 px-3 py-2 text-[12.5px] text-done-fg">
-                    <span className="font-semibold">Sent to client</span> on{" "}
-                    {formatWhen(alreadySentAt)}. This report stays in the queue
-                    until you mark it Completed.
+                {view === "completed" && !selected.visit.reportCompletedAt && alreadySentAt && (
+                  <div data-testid="emailed-banner" className="mb-3 border border-done bg-done/10 px-3 py-2 text-[12.5px] text-done-fg">
+                    <span className="font-semibold">Emailed to the client</span> on{" "}
+                    {formatWhen(alreadySentAt)}. It has left the queue. You can send it again below.
                   </div>
                 )}
 
@@ -1477,6 +1484,21 @@ export default function ReadyForClientPage({
                   >
                     {isGeneratingPdf ? "Generating…" : "Download PDF"}
                   </button>
+                  {view === "completed" && !selected.visit.reportCompletedAt && alreadySentAt && (
+                    // An emailed report (not marked Completed) can be emailed again - the dialog warns it is a second copy.
+                    <button
+                      onClick={openSendDialog}
+                      disabled={!model || !selectedContact?.email}
+                      title={
+                        !selectedContact?.email
+                          ? "Choose a recipient with an email address on file first."
+                          : undefined
+                      }
+                      className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Send again
+                    </button>
+                  )}
                   {view === "awaiting" && (
                     <>
                       <button
