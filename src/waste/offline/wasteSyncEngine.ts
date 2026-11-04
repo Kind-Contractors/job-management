@@ -9,6 +9,14 @@
 // arrives while one runs just asks it for one more pass. Sending a report is therefore never attempted twice at the same time; and
 // even if it were (another tab, a lost reply), the report id chosen on the phone makes the server return the existing report
 // instead of creating a second one.
+//
+// A FILE THAT CAN STILL BE UPLOADED NEVER STOPS FOR GOOD. A dropped connection, a weak signal or the phone suspending the app is
+// retried with growing pauses (at most 10 minutes apart) for as long as it takes; opening the app, coming back to it, coming back
+// online and "Try now" retry at once. Only a file the server will never accept (wrong type, too big, rejected by its check) stops,
+// and the report then says it needs attention and how to fix it. (Before: six failures in about 14 minutes stopped a file until an
+// "online" event, which iOS rarely sends - so a report could sit on "Sending..." indefinitely.) A request that hangs without an
+// answer (or, for a video, no progress) for 2 minutes is abandoned and retried, so it can't hold up every other file and report.
+// That is not a time limit on an upload: a slow video that keeps making progress is never cut off.
 import { useEffect, useState } from 'react';
 import { getCurrentUserId } from '../../auth/currentUser';
 import { preparePhotoForUpload } from '../../technician/offline/photoCompression';
@@ -63,6 +71,8 @@ export interface WasteEngineDeps {
   submitReport: (input: SubmitWasteReportInput) => Promise<{ created: boolean }>;
   preparePhoto: (file: File) => Promise<{ blob: Blob; filename: string }>;
   readVideoMetadata: (file: File) => Promise<VideoMetadata>;
+  /** How long a request may go without an answer (or progress) before it is abandoned and retried. */
+  stallMs: number;
 }
 
 const defaultDeps: WasteEngineDeps = {
@@ -76,6 +86,7 @@ const defaultDeps: WasteEngineDeps = {
   submitReport: submitWasteReport,
   preparePhoto: preparePhotoForUpload,
   readVideoMetadata,
+  stallMs: 120_000,
 };
 let deps: WasteEngineDeps = defaultDeps;
 
@@ -85,8 +96,11 @@ export function setWasteEngineDepsForTests(over: Partial<WasteEngineDeps> | null
 }
 
 const RETRY_INTERVAL_MS = 30_000;
-const MAX_AUTO_ATTEMPTS = 6;
+/** After this many failed attempts in a row the file's note says it keeps trying and to check the signal. */
+const SLOW_RETRY_AFTER = 6;
+/** Pauses between attempts; the last one repeats for as long as the file keeps failing. */
 const BACKOFF_MS = [5_000, 15_000, 60_000, 180_000, 600_000];
+
 
 // ---- change notification -----------------------------------------------------------------------------------------------------
 const listeners = new Set<() => void>();
@@ -138,10 +152,15 @@ function emptyDraft(ownerId: string): WasteDraft {
   };
 }
 
-/** The report being written now: the newest draft not yet sent, or a fresh one. */
-export async function getOrCreateEditingDraft(): Promise<WasteDraft> {
+/**
+ * The report being written now: `preferredReportId` when that draft is on this phone and not sent (the report he chose to open
+ * again to fix it - never silently swapped for a newer one), otherwise the newest draft not yet sent, or a fresh one.
+ */
+export async function getOrCreateEditingDraft(preferredReportId?: string | null): Promise<WasteDraft> {
   const ownerId = requireOwner();
   const editing = (await listDrafts(ownerId)).filter((d) => !d.submitRequested);
+  const preferred = preferredReportId ? editing.find((d) => d.reportId === preferredReportId) : undefined;
+  if (preferred) return preferred;
   if (editing.length > 0) return editing[editing.length - 1];
   const draft = emptyDraft(ownerId);
   await putDraft(draft);
@@ -314,13 +333,35 @@ export async function removeWasteMedia(mediaId: string): Promise<void> {
   if (deps.isOnline()) await deps.removeFiles(paths).catch(() => undefined);
 }
 
-/** "Try again" on a file that stopped after too many failed attempts. */
+/** "Try again" on a file that is waiting to retry (or stopped on an older version of the app): it is tried at once. */
 export async function retryWasteMedia(mediaId: string): Promise<void> {
   const media = await getMedia(mediaId);
-  if (!media || media.permanentFailure) return;
+  if (!media || media.permanentFailure || media.status === 'ready') return;
   await updateMediaIfPresent({ ...media, status: 'pending', attempts: 0, nextAttemptAt: null, lastError: null });
   notify();
   kick();
+}
+
+/**
+ * Tries every file that is waiting to retry at once (rather than at the end of its pause), optionally only one report's. Called when
+ * the app opens, when it comes back to the screen, when the phone comes back online, and by "Try now". Files that stopped on an older
+ * version of the app after too many attempts (status 'failed' but not refused by the server) are given a fresh start too - that is
+ * how a phone left with stopped files recovers by itself. Files the server refused are left alone: they have to be removed.
+ */
+export async function retryWaitingUploads(reportId?: string): Promise<void> {
+  const ownerId = getCurrentUserId();
+  if (!ownerId) return;
+  let changed = false;
+  for (const m of await listMediaForOwner(ownerId)) {
+    if (reportId && m.reportId !== reportId) continue;
+    const waiting = m.status !== 'ready' && m.status !== 'failed' && m.nextAttemptAt != null;
+    const stopped = m.status === 'failed' && !m.permanentFailure;
+    if (!waiting && !stopped) continue;
+    await updateMediaIfPresent(stopped ? { ...m, status: 'pending', attempts: 0, nextAttemptAt: null } : { ...m, nextAttemptAt: null });
+    changed = true;
+  }
+  if (changed) notify();
+  await kick();
 }
 
 // ---- the worker --------------------------------------------------------------------------------------------------------------
@@ -378,19 +419,47 @@ function backoffIso(attempts: number): string {
   return new Date(deps.now().getTime() + BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length) - 1]).toISOString();
 }
 
+/** A failure that a later attempt can fix: the file stays queued and is tried again after a pause - it never stops for good. */
 async function transientFailure(m: WasteMedia, message: string, patch: Partial<WasteMedia> = {}): Promise<void> {
   const attempts = m.attempts + 1;
-  const giveUp = attempts >= MAX_AUTO_ATTEMPTS;
   progressById.delete(m.id);
   await updateMediaIfPresent({
     ...m,
     ...patch,
-    status: giveUp ? 'failed' : 'pending',
+    status: 'pending',
     attempts,
-    lastError: giveUp ? `${message} Tried ${attempts} times.` : message,
-    nextAttemptAt: giveUp ? null : backoffIso(attempts),
+    lastError: attempts >= SLOW_RETRY_AFTER ? `Not uploaded yet after ${attempts} tries - it keeps trying by itself. Check the phone has signal.` : message,
+    nextAttemptAt: backoffIso(attempts),
   });
   notify();
+}
+
+class StalledError extends Error {}
+
+/**
+ * Settles with `work`, or rejects with StalledError once deps.stallMs (2 minutes) pass with no answer and no sign of life (`touch`, called on
+ * progress, restarts the wait). The abandoned request may still finish later; the next attempt then finds the file (409) and the
+ * server check decides whether it is complete (see processMedia), so nothing is counted twice or counted unchecked.
+ */
+function withStallGuard<T>(work: (touch: () => void) => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => reject(new StalledError('stalled')), deps.stallMs);
+    };
+    arm();
+    work(arm).then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
 }
 
 async function permanentFailure(m: WasteMedia, message: string): Promise<void> {
@@ -413,7 +482,9 @@ async function processMedia(start: WasteMedia): Promise<void> {
   // 1. The poster (optional: a poster that can't be stored is simply dropped).
   if (m.thumbPath && m.thumbnail && !m.thumbUploaded) {
     try {
-      await deps.uploadSmallFile(m.thumbPath, m.thumbnail, 'image/jpeg');
+      const thumbPath = m.thumbPath;
+      const thumbnail = m.thumbnail;
+      await withStallGuard(() => deps.uploadSmallFile(thumbPath, thumbnail, 'image/jpeg'));
       m = { ...m, thumbUploaded: true };
     } catch (err) {
       const status = uploadStatus(err);
@@ -431,28 +502,34 @@ async function processMedia(start: WasteMedia): Promise<void> {
     let current = m;
     try {
       if (m.kind === 'video') {
-        await deps.uploadVideoFile(m.storagePath, m.blob, m.mime, {
-          tusUrl: m.tusUrl,
-          onUploadUrl: (url) => {
-            current = { ...current, tusUrl: url };
-            void updateMediaIfPresent(current);
-          },
-          onProgress: (fraction) => {
-            progressById.set(m.id, fraction);
-            notify();
-          },
-        });
+        await withStallGuard((touch) =>
+          deps.uploadVideoFile(m.storagePath, m.blob, m.mime, {
+            tusUrl: m.tusUrl,
+            onUploadUrl: (url) => {
+              touch();
+              current = { ...current, tusUrl: url };
+              void updateMediaIfPresent(current);
+            },
+            onProgress: (fraction) => {
+              touch();
+              progressById.set(m.id, fraction);
+              notify();
+            },
+          }),
+        );
         m = { ...current, fileUploaded: true, tusUrl: null };
       } else {
-        await deps.uploadSmallFile(m.storagePath, m.blob, m.mime);
+        await withStallGuard(() => deps.uploadSmallFile(m.storagePath, m.blob, m.mime));
         m = { ...m, fileUploaded: true };
       }
     } catch (err) {
       if (err instanceof UploadCancelledError) return transientFailure(current, 'The upload was stopped.');
+      if (err instanceof StalledError) return transientFailure(current, 'The connection stopped responding. It will carry on by itself.');
       const status = uploadStatus(err);
       if (status === 413) return permanentFailure(current, 'That file is larger than the 150 MB limit.');
       if (status === 415) return permanentFailure(current, 'That file type isn’t accepted.');
-      if (status === 401 || status === 403) return permanentFailure(current, 'You are not allowed to upload here. Sign out and back in, then try again.');
+      // Not "never": an expired sign-in also answers 401/403 and signing in again fixes it, so the file keeps trying.
+      if (status === 401 || status === 403) return transientFailure(current, 'The upload wasn’t allowed just now. If this keeps happening, sign out and back in.');
       if (status === 409) {
         foundExisting = true;
         m = { ...current, fileUploaded: true, tusUrl: null };
@@ -471,11 +548,13 @@ async function processMedia(start: WasteMedia): Promise<void> {
 
   // 3. The server checks what was stored (type, size, a video's real length).
   if (m.thumbPath && m.thumbUploaded) {
-    const thumb = await deps.checkUploadedFile(m.thumbPath).catch(() => ({ result: 'retry', message: 'No connection.' }) as FileCheckOutcome);
+    const thumbPath = m.thumbPath;
+    const thumb = await withStallGuard(() => deps.checkUploadedFile(thumbPath)).catch(() => ({ result: 'retry', message: 'No connection.' }) as FileCheckOutcome);
     if (thumb.result === 'retry') return transientFailure(m, 'Waiting to check the file. It will carry on by itself.');
     if (thumb.result !== 'ok') m = { ...m, thumbPath: null, thumbnail: null, thumbUploaded: false };
   }
-  const outcome = await deps.checkUploadedFile(m.storagePath).catch(() => ({ result: 'retry', message: 'No connection.' }) as FileCheckOutcome);
+  const storagePath = m.storagePath;
+  const outcome = await withStallGuard(() => deps.checkUploadedFile(storagePath)).catch(() => ({ result: 'retry', message: 'No connection.' }) as FileCheckOutcome);
   // The stored file must be exactly this file. A different size means an incomplete or different copy under this name: it is
   // removed (his own unsent file - best effort) and this file is uploaded again under a fresh name, which can't collide with it.
   const wrongCopy = outcome.result === 'ok' && outcome.sizeBytes != null && outcome.sizeBytes !== m.sizeBytes;
@@ -515,7 +594,7 @@ function isPermanentSubmitError(err: unknown): boolean {
 async function submitDraft(draft: WasteDraft): Promise<void> {
   const media = await listMediaForReport(draft.ownerId, draft.reportId);
   if (media.some((m) => m.status === 'failed')) {
-    const message = 'A photo or video couldn’t be uploaded. Remove it or try it again, then send the report.';
+    const message = 'A photo or video wasn’t accepted. Remove it, then send the report again.';
     if (draft.submitError !== message) {
       await updateDraftIfPresent({ ...draft, submitError: message });
       notify();
@@ -568,32 +647,45 @@ let started = false;
 export function startWasteSyncEngine(): void {
   if (started) return;
   started = true;
-  window.addEventListener('online', () => {
-    void retryStoppedOnReconnect().then(() => kick());
-  });
+  // Coming back online, or back to the app (iOS suspends a page in the background and rarely sends "online"), retries at once.
+  window.addEventListener('online', () => void retryWaitingUploads());
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') void kick();
+    if (document.visibilityState === 'visible') void retryWaitingUploads();
   });
+  window.addEventListener('pageshow', () => void retryWaitingUploads());
   setInterval(() => void kick(), RETRY_INTERVAL_MS);
-  void kick();
+  void retryWaitingUploads();
 }
 
-/** Coming back online gives files that stopped after too many attempts (not rejected ones) a fresh round. */
-async function retryStoppedOnReconnect(): Promise<void> {
-  const ownerId = getCurrentUserId();
-  if (!ownerId) return;
-  for (const m of await listMediaForOwner(ownerId)) {
-    if (m.status === 'failed' && !m.permanentFailure) {
-      await updateMediaIfPresent({ ...m, status: 'pending', attempts: 0, nextAttemptAt: null });
-    }
-  }
+/** How one report's files are getting on - one rule for the sending screen and "My reports". */
+export interface WasteUploadSummary {
+  total: number;
+  ready: number;
+  /** Waiting to retry after a failed attempt (it keeps trying by itself). */
+  retrying: number;
+  /** Refused for good by the server: he has to remove them (the report can't be sent with them). */
+  needsAttention: number;
+  /** The plain-words reasons for those, without repeats. */
+  reasons: string[];
+}
+
+export function summarizeWasteUploads(media: WasteMedia[]): WasteUploadSummary {
+  const refused = media.filter((m) => m.status === 'failed' && m.permanentFailure);
+  return {
+    total: media.length,
+    ready: media.filter((m) => m.status === 'ready').length,
+    // A file left 'failed' (not refused) by an older version of the app is retried when this one starts, so it counts as retrying.
+    retrying: media.filter((m) => (m.status === 'failed' && !m.permanentFailure) || (m.status !== 'ready' && m.status !== 'failed' && m.lastError != null)).length,
+    needsAttention: refused.length,
+    reasons: [...new Set(refused.map((m) => m.lastError ?? 'The file was not accepted.'))],
+  };
 }
 
 export interface WasteSyncStatus {
   online: boolean;
   /** Files still to upload or check. */
   uploading: number;
-  /** Files that stopped (rejected, or too many failed attempts). */
+  /** Files the server refused for good (they have to be removed). */
   failed: number;
   /** Reports sent from this phone but not yet confirmed by the server. */
   waitingReports: number;
@@ -609,8 +701,8 @@ async function computeStatus(): Promise<WasteSyncStatus> {
   const waiting = drafts.filter((d) => d.submitRequested);
   return {
     online,
-    uploading: media.filter((m) => m.status !== 'ready' && m.status !== 'failed').length,
-    failed: media.filter((m) => m.status === 'failed').length,
+    uploading: media.filter((m) => m.status !== 'ready' && !(m.status === 'failed' && m.permanentFailure)).length,
+    failed: media.filter((m) => m.status === 'failed' && m.permanentFailure).length,
     waitingReports: waiting.length,
     refusedReports: waiting.filter((d) => d.permanentFailure).length,
   };

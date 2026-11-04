@@ -14,7 +14,8 @@ import App from '../src/App';
 import { AuthContext, type AuthContextValue } from '../src/auth/AuthProvider';
 import { addDays, checkWasteForm, checkWastePick, emptySections, emptySectionsQuestion, formatWorkDates, londonToday, wasteMediaPath, wasteThumbPath } from '../src/waste/wasteRules';
 import WasteMediaSection from '../src/waste/WasteMediaSection';
-import { MyWasteReportsList } from '../src/waste/MyWasteReportsPage';
+import { MyWasteReportsList, sendingRowLabel } from '../src/waste/MyWasteReportsPage';
+import { summarizeWasteUploads } from '../src/waste/offline/wasteSyncEngine';
 import { sentStateFor } from '../src/waste/WasteReportSentPage';
 import type { WasteDraft, WasteMedia } from '../src/waste/offline/wasteDb';
 
@@ -263,4 +264,46 @@ test('the Sent screen: sending / refused while on the phone; "sent" only once th
   assert.equal(sentStateFor(null, [], null).kind, 'loading');
   assert.equal(sentStateFor(null, [], true).kind, 'sent');
   assert.equal(sentStateFor(null, [], false).kind, 'unknown');
+});
+
+// ---- 2026-11-04: a report blocked by a file no longer says "Sending..." --------------------------------------------------------------
+test('STUCK FIX: My reports says "Sending…" only while it really is on its way; waiting for signal and needing attention are told apart', () => {
+  const d = { reportId: 'r', address: '1 High St', permanentFailure: false } as WasteDraft;
+  const sum = (list: WasteMedia[]) => summarizeWasteUploads(list);
+  assert.deepEqual(sendingRowLabel(d, sum([media({ status: 'ready' }), media({ id: 'm2', status: 'uploading' })])), { text: 'Sending… - 1 of 2 uploaded', attention: false });
+  assert.deepEqual(sendingRowLabel(d, sum([media({ status: 'ready' }), media({ id: 'm2', status: 'pending', lastError: 'Load failed', nextAttemptAt: '2026-11-04T10:00:00Z' })])), {
+    text: 'Waiting for signal - 1 of 2 uploaded. It keeps trying by itself.',
+    attention: false,
+  });
+  const refused = sendingRowLabel(d, sum([media({ status: 'ready' }), media({ id: 'm2', status: 'failed', permanentFailure: true, lastError: 'That file type isn’t accepted.' })]));
+  assert.equal(refused.attention, true);
+  assert.match(refused.text, /^Needs attention/);
+  assert.match(sendingRowLabel({ ...d, permanentFailure: true }, sum([])).text, /Couldn’t be sent/);
+  // an old-version "stopped" file is shown as waiting (the app retries it when it opens), never as "Sending…" with no hint
+  assert.match(sendingRowLabel(d, sum([media({ status: 'failed', permanentFailure: false, lastError: 'Tried 6 times.' })])).text, /^Waiting for signal/);
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <MyWasteReportsList sending={[d]} reports={[]} uploads={{ r: sum([media({ status: 'failed', permanentFailure: true, lastError: 'x' })]) }} />
+    </MemoryRouter>,
+  );
+  assert.match(html, /Needs attention - a photo or video wasn’t accepted\. Tap to fix it\./);
+});
+
+test('STUCK FIX: the sending screen tells "needs attention" (with the reasons and one button to fix it) from "still sending" (with Try now)', () => {
+  const base = { reportId: 'r', submitRequested: true, permanentFailure: false } as WasteDraft;
+  const blocked = sentStateFor(base, [media({ status: 'ready' }), media({ id: 'm2', status: 'failed', permanentFailure: true, lastError: 'That video is 1:05 long. The limit is 60 seconds.' })], null);
+  assert.ok(blocked.kind === 'sending' && blocked.failed === 1 && blocked.uploads.reasons[0].includes('1:05'));
+  const retrying = sentStateFor(base, [media({ status: 'pending', lastError: 'Load failed', nextAttemptAt: '2026-11-04T10:00:00Z' })], null);
+  assert.ok(retrying.kind === 'sending' && retrying.failed === 0 && retrying.uploads.retrying === 1);
+  const page = readFileSync(join(process.cwd(), 'src', 'waste', 'WasteReportSentPage.tsx'), 'utf8');
+  assert.match(page, /Your report needs attention/);
+  assert.match(page, /navigate\(`\/waste\?report=\$\{reportId\}`\)/, 'opens THAT report');
+  assert.match(page, /retryWaitingUploads\(reportId\)/);
+  assert.match(page, /state\.kind === 'sending' && state\.failed === 0/, '"will be sent by itself" is only said when nothing blocks it');
+});
+
+test('STUCK FIX: a file waiting to retry offers "Try again"; a refused one does not (it has to be removed)', () => {
+  const props = { phase: 'before' as const, progressOf: () => null, previewUrl: () => 'blob:x', addError: null, onAdd: () => {}, onRemove: () => {}, onRetry: () => {}, locked: false };
+  assert.match(renderToStaticMarkup(<WasteMediaSection {...props} media={[media({ status: 'pending', lastError: 'Load failed' })]} />), /Waiting to retry[\s\S]*Try again/);
+  assert.doesNotMatch(renderToStaticMarkup(<WasteMediaSection {...props} media={[media({ status: 'failed', permanentFailure: true, lastError: 'No.' })]} />), /Try again/);
 });

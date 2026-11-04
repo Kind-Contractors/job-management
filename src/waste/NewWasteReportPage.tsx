@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { WasteDraft, WasteMedia } from './offline/wasteDb';
 import {
   addWasteMedia,
@@ -36,10 +36,12 @@ export default function NewWasteReportPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const previews = useRef(new Map<string, string>());
 
-  // Loads (or starts) the draft being written on this phone - once per mount.
+  // Loads (or starts) the draft being written on this phone - once per mount. "?report=" opens that report (one he reopened to fix).
+  const [searchParams] = useSearchParams();
+  const requestedReportId = searchParams.get('report');
   useEffect(() => {
     let cancelled = false;
-    getOrCreateEditingDraft()
+    getOrCreateEditingDraft(requestedReportId)
       .then((d) => {
         if (!cancelled) setDraft(d);
       })
@@ -49,6 +51,8 @@ export default function NewWasteReportPage() {
     return () => {
       cancelled = true;
     };
+    // Only the report asked for when the page opened; later changes of the address bar do not swap the draft being typed in.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Follows the upload engine (an external store): this draft's files and their progress.
