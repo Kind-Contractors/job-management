@@ -25,12 +25,15 @@ const TABS: { key: Tab; label: string }[] = [
 const LAST_LOGIN_FORMAT = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
 function roleLabel(role: AppRole): string {
-  return role === 'manager' ? 'Administrator' : 'Technician';
+  if (role === 'manager') return 'Administrator';
+  if (role === 'waste_reporter') return 'Waste reporter';
+  return 'Technician';
 }
 
 const ROLE_DESCRIPTION: Record<AppRole, string> = {
   technician: 'Access to assigned jobs, building information, reports, and photo uploads.',
   manager: 'Access to scheduling, buildings, reports, invoices, and user management.',
+  waste_reporter: 'Can only submit waste-removal reports and see their own submitted reports. No access to jobs, buildings, clients or anything else.',
 };
 
 /** Good-enough shape check (not full RFC 5322) — matches the level of validation used elsewhere in this app; the real authority is still Supabase's own server-side check. */
@@ -209,6 +212,15 @@ function UserFormDrawer({
                   }`}
                 >
                   Administrator
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRole('waste_reporter')}
+                  className={`flex-1 cursor-pointer border-l border-neutral-300 px-2 py-1.5 text-[12.5px] ${
+                    role === 'waste_reporter' ? 'bg-teal font-semibold text-white' : 'text-neutral-700 hover:bg-neutral-100'
+                  }`}
+                >
+                  Waste reporter
                 </button>
               </div>
               <div className="text-[11px] leading-relaxed text-neutral-500">{ROLE_DESCRIPTION[role]}</div>

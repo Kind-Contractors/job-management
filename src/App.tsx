@@ -16,11 +16,16 @@ import ReadyForClientPage from './pages/ReadyForClientPage';
 import UsersPage from './pages/UsersPage';
 import HistoricalJobsPage from './pages/HistoricalJobsPage';
 import VideosWithoutReportPage from './pages/VideosWithoutReportPage';
+import WasteReportsPage from './pages/WasteReportsPage';
 import TechnicianShell from './technician/TechnicianShell';
 import DayViewPage from './technician/DayViewPage';
 import JobFilePage from './technician/JobFilePage';
 import JobReportPage from './technician/JobReportPage';
 import CompletedPage from './technician/CompletedPage';
+import WasteShell from './waste/WasteShell';
+import NewWasteReportPage from './waste/NewWasteReportPage';
+import WasteReportSentPage from './waste/WasteReportSentPage';
+import MyWasteReportsPage from './waste/MyWasteReportsPage';
 
 function AuthLoadingScreen() {
   return (
@@ -55,6 +60,23 @@ export default function App() {
     );
   }
 
+  // A waste reporter gets the waste-report screens and nothing else (the database refuses him everything else as well).
+  if (role === 'waste_reporter') {
+    return (
+      <Routes>
+        <Route element={<WasteShell />}>
+          <Route path="/waste" element={<NewWasteReportPage />} />
+          <Route path="/waste/sent/:reportId" element={<WasteReportSentPage />} />
+          <Route path="/waste/reports" element={<MyWasteReportsPage />} />
+          <Route path="*" element={<Navigate to="/waste" replace />} />
+        </Route>
+      </Routes>
+    );
+  }
+
+  // Only a manager reaches the manager app. Any role this app does not know is refused here, never shown the manager screens.
+  if (role !== 'manager') return <UnauthorizedPage />;
+
   return (
     <Routes>
       <Route element={<AppShell />}>
@@ -71,6 +93,7 @@ export default function App() {
         <Route path="/videos-without-report" element={<VideosWithoutReportPage />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="/historical-jobs" element={<HistoricalJobsPage />} />
+        <Route path="/waste-reports" element={<WasteReportsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/jobs" replace />} />
     </Routes>

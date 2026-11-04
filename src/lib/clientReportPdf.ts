@@ -138,10 +138,42 @@ async function loadBrandImage(url: string): Promise<BrandImage | null> {
   }
 }
 
+/**
+ * The wording around a report's content. A job's client service report uses serviceReportLayout(model) - exactly the wording it has
+ * always had; another kind of report (a waste report) passes its own title, subtitle and facts, and can leave out the specification card.
+ */
+export interface ReportPdfLayout {
+  /** Top right of the page-1 header. */
+  documentTitle: string;
+  /** Small capitals at the top of pages 2+. */
+  runningTitle: string;
+  /** The line under the title, or null for none. */
+  subtitle: string | null;
+  /** The facts strip under the header (photo and video counts are added after these). */
+  facts: [string, string][];
+  /** The "Specification completed as agreed" card. */
+  showSpecStatus: boolean;
+}
+
+/** The client service report's own wording - the default, unchanged. */
+export function serviceReportLayout(model: ClientReportModel): ReportPdfLayout {
+  return {
+    documentTitle: 'Service report',
+    runningTitle: 'SERVICE REPORT',
+    subtitle: `Prepared for ${model.clientName}`,
+    facts: [
+      ['Visit date', model.visitDateLabel],
+      ['Service', model.jobSummary],
+    ],
+    showSpecStatus: true,
+  };
+}
+
 /** Everything the drawing helpers below share — page geometry plus the document itself. */
 interface Ctx {
   doc: jsPDF;
   model: ClientReportModel;
+  layout: ReportPdfLayout;
   logo: BrandImage | null;
   leaf: BrandImage | null;
   marginX: number;
@@ -245,7 +277,7 @@ function drawWarningIcon(ctx: Ctx, x: number, y: number): void {
 
 /** The page-1 header (with its facts strip). Returns the y just below the strip. */
 function drawHeader(ctx: Ctx, photoCount: number, videoCount: number): number {
-  const { doc, model, marginX, pageWidth, contentWidth } = ctx;
+  const { doc, model, layout, marginX, pageWidth, contentWidth } = ctx;
 
   setFont(ctx, 'bold', 28, WHITE);
   const titleLines = wrapClamped(ctx, model.buildingName, contentWidth, 2);
@@ -271,7 +303,7 @@ function drawHeader(ctx: Ctx, photoCount: number, videoCount: number): number {
 
   addBrandImage(ctx, ctx.logo, 'brand-logo', marginX, 30, 56);
   setFont(ctx, 'bold', 12, WHITE);
-  doc.text('Service report', pageWidth - marginX, 52, { align: 'right' });
+  doc.text(layout.documentTitle, pageWidth - marginX, 52, { align: 'right' });
 
   setFont(ctx, 'bold', 11, MEDIUM_GREEN);
   doc.text(fitLine(ctx, model.jobSummary, contentWidth), marginX, kickerY);
@@ -279,14 +311,13 @@ function drawHeader(ctx: Ctx, photoCount: number, videoCount: number): number {
   setFont(ctx, 'bold', 28, WHITE);
   titleLines.forEach((line, i) => doc.text(line, marginX, titleTop + i * titleLineHeight));
 
-  setFont(ctx, 'normal', 12, LIGHT_GREEN);
-  doc.text(fitLine(ctx, `Prepared for ${model.clientName}`, contentWidth), marginX, subtitleY);
+  if (layout.subtitle !== null) {
+    setFont(ctx, 'normal', 12, LIGHT_GREEN);
+    doc.text(fitLine(ctx, layout.subtitle, contentWidth), marginX, subtitleY);
+  }
 
   // Facts strip: only facts the client-safe model really holds.
-  const facts: [string, string][] = [
-    ['Visit date', model.visitDateLabel],
-    ['Service', model.jobSummary],
-  ];
+  const facts: [string, string][] = [...layout.facts];
   if (photoCount > 0) facts.push(['Photos', `${photoCount} ${photoCount === 1 ? 'photo' : 'photos'}`]);
   if (videoCount > 0) facts.push(['Videos', `${videoCount} ${videoCount === 1 ? 'video' : 'videos'}`]);
 
@@ -330,9 +361,9 @@ function drawStatus(ctx: Ctx, y: number): number {
 
 /** A slim running header for pages 2+ of the report, so a continuation page is still recognisably this report. */
 function drawRunningHeader(ctx: Ctx): void {
-  const { doc, model, marginX, pageWidth } = ctx;
+  const { doc, model, layout, marginX, pageWidth } = ctx;
   setFont(ctx, 'bold', 7.5, TEXT_LIGHT);
-  spacedText(ctx, 'SERVICE REPORT', marginX, 34, 1.8);
+  spacedText(ctx, layout.runningTitle, marginX, 34, 1.8);
   setFont(ctx, 'normal', 8.5, TEXT_LIGHT);
   doc.text(fitLine(ctx, model.buildingName, 300), pageWidth - marginX, 34, { align: 'right' });
   doc.setDrawColor(...MEDIUM_GREEN);
@@ -456,6 +487,8 @@ function drawVideoCard(ctx: Ctx, entry: OrderedPhotoEntry<PreparedReportVideo>, 
  * thumbnail. Videos are drawn as a "Videos" section after the photos - thumbnail, play button, "Watch video" - with clickable links; they
  * are never embedded. Omitted/empty means a report with no videos, which renders exactly as before.
  *
+ * `layout` — the wording around the content (see ReportPdfLayout). Omitted means the client service report, exactly as before.
+ *
  * `prepared` — the result of prepareClientReportPhotos(model). Callers that
  * want to warn about skipped photos before proceeding should prepare first
  * and pass it in; if omitted it is prepared here and any skipped photos are
@@ -468,6 +501,7 @@ export async function generateClientReportPdf(
   model: ClientReportModel,
   prepared?: PreparedReportPhotos,
   videos: PreparedReportVideos = NO_VIDEOS,
+  layout: ReportPdfLayout = serviceReportLayout(model),
 ): Promise<Blob> {
   const preparedPhotos = (prepared ?? (await prepareClientReportPhotos(model))).photos;
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
@@ -479,6 +513,7 @@ export async function generateClientReportPdf(
   const ctx: Ctx = {
     doc,
     model,
+    layout,
     logo,
     leaf,
     marginX,
@@ -491,7 +526,8 @@ export async function generateClientReportPdf(
   const { contentWidth, pageBottom } = ctx;
 
   let y = drawHeader(ctx, preparedPhotos.length, videos.videos.length) + 24;
-  y = drawStatus(ctx, y) + 30;
+  if (layout.showSpecStatus) y = drawStatus(ctx, y) + 30;
+  else y += 6;
 
   /** Starts a new report page (with the running header) if `needed` more points won't fit on this one. */
   const ensureSpace = (needed: number) => {

@@ -163,6 +163,6 @@ test('THE CHANGE IS PRESENTATION ONLY: it adds no write, no query and no new imp
   const nav = src('components/shell/NavRail.tsx');
   // No data-layer write. (`next.delete('status')` in this file is URLSearchParams tidying filters, not a database call, so
   // `.delete(` alone would be the wrong thing to forbid.)
-  assert.doesNotMatch(nav, /removeReportVideo|supabase|upsert|createVisit|markVisit|cancelJobWork|from '\.\.\/\.\.\/repository\/(?!reportVideosRepository|jobsRepository|buildingsRepository|techniciansRepository|usersRepository)/);
+  assert.doesNotMatch(nav, /removeReportVideo|supabase|upsert|createVisit|markVisit|cancelJobWork|from '\.\.\/\.\.\/repository\/(?!reportVideosRepository|jobsRepository|buildingsRepository|techniciansRepository|usersRepository|wasteReportsRepository)/);
   assert.equal((nav.match(/listVisitsWithVideosNoReport/g) ?? []).length, 2, 'still one import and one use of the existing query');
 });

@@ -72,3 +72,36 @@ export async function assertManager(req: Request): Promise<SupabaseClient> {
 
   return callerClient;
 }
+
+/**
+ * The same check for the waste-report functions: throws UnauthorizedError unless the request carries a valid session for an ACTIVE
+ * waste reporter (managers and technicians included are refused). Returns that caller's own client and user id.
+ */
+export async function assertWasteReporter(req: Request): Promise<{ client: SupabaseClient; userId: string }> {
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader) {
+    throw new UnauthorizedError('Missing Authorization header.');
+  }
+
+  const callerClient = createCallerClient(authHeader);
+
+  const { data: userData, error: userError } = await callerClient.auth.getUser();
+  if (userError || !userData.user) {
+    throw new UnauthorizedError('Invalid or expired session.');
+  }
+
+  const { data: appUser, error: appUserError } = await callerClient
+    .from('app_users')
+    .select('role, is_active')
+    .eq('id', userData.user.id)
+    .maybeSingle();
+
+  if (appUserError) {
+    throw new Error(`Authorization check failed: ${appUserError.message}`);
+  }
+  if (!appUser?.is_active || appUser.role !== 'waste_reporter') {
+    throw new UnauthorizedError('Not an active waste reporter.');
+  }
+
+  return { client: callerClient, userId: userData.user.id };
+}

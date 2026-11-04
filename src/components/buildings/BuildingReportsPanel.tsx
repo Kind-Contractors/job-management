@@ -237,20 +237,22 @@ interface ReportViewerDialogProps {
   blob: Blob;
   onDownload: () => void;
   onClose: () => void;
+  /** What kind of report it is, shown above the title. Default "Job report". */
+  label?: string;
 }
 
 /**
  * The generated report PDF, shown inside a dialog. Its "Watch video" links open in a new tab, so the report stays open here.
  * Close, a click outside, or Escape returns to the Building screen.
  */
-export function ReportViewerDialog({ title, blob, onDownload, onClose }: ReportViewerDialogProps) {
+export function ReportViewerDialog({ title, blob, onDownload, onClose, label = 'Job report' }: ReportViewerDialogProps) {
   // Closes on a backdrop click only when the press also started on the backdrop (never mid-typing: see backdropDismiss).
   const backdrop = backdropDismiss(onClose);
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={`Job report: ${title}`}
+      aria-label={`${label}: ${title}`}
       className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30"
       {...backdrop}
       onKeyDown={(e) => {
@@ -260,7 +262,7 @@ export function ReportViewerDialog({ title, blob, onDownload, onClose }: ReportV
       <div onClick={(e) => e.stopPropagation()} className="flex h-[90vh] w-[min(960px,95vw)] flex-col border border-neutral-300 bg-white">
         <div className="flex flex-none items-center gap-2 border-b border-divider px-4 py-2.5">
           <div className="min-w-0 flex-1">
-            <div className="font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">Job report</div>
+            <div className="font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">{label}</div>
             <div className="truncate text-[13px] font-semibold text-ink">{title}</div>
           </div>
           <button
@@ -274,7 +276,7 @@ export function ReportViewerDialog({ title, blob, onDownload, onClose }: ReportV
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <PdfDocumentView blob={blob} title={`Job report: ${title}`} />
+          <PdfDocumentView blob={blob} title={`${label}: ${title}`} />
         </div>
       </div>
     </div>
