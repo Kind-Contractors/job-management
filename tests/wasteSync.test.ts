@@ -16,14 +16,17 @@ import {
   listWasteMedia,
   removeWasteMedia,
   requestWasteSubmit,
+  retryWasteMedia,
+  retryWaitingUploads,
   retryWasteSubmit,
   setWasteEngineDepsForTests,
+  summarizeWasteUploads,
   subscribeWasteReportSent,
   updateWasteDraftFields,
   waitForWasteWorker,
   type WasteEngineDeps,
 } from '../src/waste/offline/wasteSyncEngine';
-import { getDraft, listDrafts, listMediaForOwner, deleteDraft, deleteMedia } from '../src/waste/offline/wasteDb';
+import { getDraft, getMedia, listDrafts, listMediaForOwner, deleteDraft, deleteMedia, updateMediaIfPresent } from '../src/waste/offline/wasteDb';
 import { WasteRpcError, type FileCheckOutcome, type SubmitWasteReportInput } from '../src/waste/wasteApi';
 import { UploadError } from '../src/lib/reportVideoUpload';
 
@@ -90,6 +93,7 @@ async function reset(): Promise<void> {
     },
     preparePhoto: async (file) => ({ blob: file, filename: file.name }),
     readVideoMetadata: async () => videoMeta,
+    stallMs: 40,
   };
   setWasteEngineDepsForTests(deps);
 }
@@ -191,7 +195,7 @@ test('a report waits while a file is still being checked, and is not sent with a
   assert.equal(video.permanentFailure, true);
   assert.match(video.lastError ?? '', /1:05/);
   assert.equal(calls.submits.filter((s) => s.reportId === other.reportId).length, 0);
-  assert.match((await getDraft(OWNER, other.reportId))?.submitError ?? '', /couldn’t be uploaded/);
+  assert.match((await getDraft(OWNER, other.reportId))?.submitError ?? '', /wasn’t accepted. Remove it/);
 });
 
 test('three triggers at the same moment still send the report once (one worker, claimed before any waiting)', async () => {
@@ -452,4 +456,221 @@ test('a file of a report already sent elsewhere is refused by the server (423 ->
   const [m] = await listWasteMedia(reportId);
   assert.equal(m.status, 'failed');
   assert.match(m.lastError ?? '', /already been sent/);
+});
+
+// ---- 2026-11-04: uploads stuck on "Sending..." (a report whose files stopped retrying) ------------------------------------------
+// Before this fix six failed attempts (about 14 minutes of a weak signal or a suspended app) STOPPED a file for good; only an
+// "online" event - which iOS rarely sends - restarted it, so the report sat on "Sending..." with nothing uploading.
+
+/** Runs worker passes, moving the clock past every pause, until nothing changes. */
+async function passes(n: number) {
+  for (let i = 0; i < n; i++) {
+    clock += 11 * 60_000;
+    await settle();
+  }
+}
+
+test('STUCK FIX: a file that keeps failing never stops for good - it keeps retrying, then uploads when the signal is back, and the report is sent once', async () => {
+  // Two upload, then the signal goes: every further attempt fails
+  let uploads = 0;
+  smallUpload = async () => {
+    uploads += 1;
+    if (uploads > 2) throw Object.assign(new Error('Load failed'), { status: null });
+  };
+  const reportId = await draftWith();
+  await addWasteMedia(reportId, 'before', 'photo', photo('a.jpg'));
+  await addWasteMedia(reportId, 'before', 'photo', photo('b.jpg', 'image/jpeg', 2000));
+  await addWasteMedia(reportId, 'after', 'photo', photo('c.jpg', 'image/jpeg', 3000));
+  await requestWasteSubmit(reportId);
+  await settle();
+  await passes(12);
+  const waiting = (await listWasteMedia(reportId)).find((m) => m.status !== 'ready')!;
+  assert.equal(waiting.status, 'pending', 'still queued after 12+ failures - not stopped');
+  assert.equal(waiting.permanentFailure, false);
+  assert.ok(waiting.attempts >= 12);
+  assert.match(waiting.lastError ?? '', /keeps trying by itself/);
+  assert.ok(Date.parse(waiting.nextAttemptAt!) - clock <= 10 * 60_000, 'retried at most 10 minutes apart');
+  assert.equal(calls.submits.length, 0, 'never sent while a file is missing');
+  assert.deepEqual(summarizeWasteUploads(await listWasteMedia(reportId)), { total: 3, ready: 2, retrying: 1, needsAttention: 0, reasons: [] });
+
+  // signal back
+  smallUpload = async () => undefined;
+  await passes(1);
+  assert.equal(calls.submits.length, 1, 'sent exactly once');
+  assert.equal(calls.submits[0].media.length, 3, 'all three files, each once');
+  assert.equal(new Set(calls.submits[0].media.map((m) => m.storagePath)).size, 3);
+  assert.equal((await listWasteDrafts()).length, 0, 'the phone forgets it once the server confirmed it');
+});
+
+test('STUCK FIX: a phone left with STOPPED files by the old version recovers by itself when the app opens (retryWaitingUploads)', async () => {
+  const reportId = await draftWith();
+  await addWasteMedia(reportId, 'before', 'photo', photo('a.jpg'));
+  await addWasteMedia(reportId, 'before', 'photo', photo('b.jpg', 'image/jpeg', 2000));
+  smallUpload = async (path) => {
+    if (calls.small.filter((p) => p === path).length === 1 && calls.small.length > 1) throw new Error('Load failed');
+  };
+  await requestWasteSubmit(reportId);
+  await settle();
+  // what the old engine left behind: the second photo 'failed' after six attempts (not refused by the server)
+  const stuck = (await listWasteMedia(reportId)).find((m) => m.status !== 'ready')!;
+  await updateMediaIfPresent({ ...stuck, status: 'failed', permanentFailure: false, attempts: 6, nextAttemptAt: null, lastError: 'The upload was interrupted. It will carry on by itself. Tried 6 times.' });
+  await settle();
+  assert.equal(calls.submits.length, 0, 'blocked while stopped');
+  assert.equal(summarizeWasteUploads(await listWasteMedia(reportId)).retrying, 1, 'shown as waiting, not as needing him');
+
+  smallUpload = async () => undefined;
+  await retryWaitingUploads(); // what the app now does when it opens, comes back to the screen, or comes back online
+  await waitForWasteWorker();
+  assert.equal(calls.submits.length, 1);
+  assert.equal(calls.submits[0].media.length, 2);
+});
+
+test('STUCK FIX: "Try now" / coming back to the app retries a waiting file at once, not at the end of its pause - and only that report when asked', async () => {
+  const a = await draftWith({ address: 'A' });
+  await addWasteMedia(a, 'before', 'photo', photo('a.jpg'));
+  smallUpload = async () => {
+    throw new Error('Load failed');
+  };
+  await requestWasteSubmit(a);
+  await settle();
+  const b = (await getOrCreateEditingDraft()).reportId;
+  await updateWasteDraftFields(b, { address: 'B' });
+  await addWasteMedia(b, 'before', 'photo', photo('b.jpg', 'image/jpeg', 2000));
+  await requestWasteSubmit(b);
+  await settle();
+  const before = calls.small.length;
+  smallUpload = async () => undefined;
+  await retryWaitingUploads(a); // no clock change: the pause has not ended
+  await waitForWasteWorker();
+  assert.equal(calls.submits.map((x) => x.reportId).join(), a, 'report A retried and sent at once');
+  assert.ok(calls.small.length > before);
+  assert.equal((await listWasteMedia(b))[0].status, 'pending', 'report B still waits for its own pause');
+  await retryWaitingUploads();
+  await waitForWasteWorker();
+  assert.deepEqual(calls.submits.map((x) => x.reportId), [a, b]);
+});
+
+test('STUCK FIX: an upload that hangs (no answer, no progress) is abandoned and retried - it does not hold up other files or another report', async () => {
+  const a = await draftWith({ address: 'A' });
+  await addWasteMedia(a, 'before', 'video', new File([new Uint8Array(9)], 'v.mp4', { type: 'video/mp4', lastModified: 3 }));
+  let hang = true;
+  videoUpload = async (_p, o) => {
+    if (hang) return new Promise<void>(() => undefined); // never settles: e.g. iOS suspended the page mid-request
+    o.onUploadUrl('https://tus/upload-2');
+    o.onProgress(1);
+  };
+  await requestWasteSubmit(a);
+  const b = (await getOrCreateEditingDraft()).reportId;
+  await updateWasteDraftFields(b, { address: 'B' });
+  await addWasteMedia(b, 'after', 'photo', photo('b.jpg'));
+  await requestWasteSubmit(b);
+  await settle();
+  assert.deepEqual(calls.submits.map((x) => x.reportId), [b], 'report B is sent although A’s video hung');
+  const video = (await listWasteMedia(a))[0];
+  assert.equal(video.status, 'pending');
+  assert.match(video.lastError ?? '', /stopped responding/);
+  hang = false;
+  await passes(1);
+  assert.deepEqual(calls.submits.map((x) => x.reportId), [b, a]);
+});
+
+test('STUCK FIX: a video that keeps making progress is never cut off by the stall guard (it is not a time limit)', async () => {
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'video', new File([new Uint8Array(9)], 'slow.mp4', { type: 'video/mp4', lastModified: 4 }));
+  videoUpload = async (_p, o) => {
+    o.onUploadUrl('https://tus/slow');
+    for (let i = 1; i <= 6; i++) {
+      await new Promise((r) => setTimeout(r, 15)); // 6 x 15 ms = 90 ms in all, more than the 40 ms stall limit, with progress each time
+      o.onProgress(i / 6);
+    }
+  };
+  await requestWasteSubmit(a);
+  await settle();
+  assert.equal(calls.video.length, 1, 'one attempt, never abandoned');
+  assert.equal(calls.submits.length, 1);
+});
+
+test('STUCK FIX: a hung attempt that finished late is found (409) on the retry, CHECKED by the server and counted once - no duplicate', async () => {
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo('late.jpg', 'image/jpeg', 1234));
+  let first = true;
+  smallUpload = async () => {
+    if (first) {
+      first = false;
+      return new Promise<void>(() => undefined); // abandoned; pretend it reached the server after all
+    }
+    throw Object.assign(new Error('The resource already exists'), { status: 409 });
+  };
+  checkResult = () => ({ result: 'ok', durationSeconds: null, sizeBytes: 1234 });
+  await requestWasteSubmit(a);
+  await settle();
+  await passes(1);
+  assert.equal(calls.submits.length, 1);
+  assert.equal(calls.submits[0].media.length, 1, 'one media row, not two');
+  assert.ok(calls.checks.length >= 1, 'the found copy was checked before it counted');
+});
+
+test('STUCK FIX: a refused file stops (needs attention) with its reason, the report is not sent, and removing it after reopening lets the rest go', async () => {
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo('ok.jpg'));
+  await addWasteMedia(a, 'after', 'video', new File([new Uint8Array(9)], 'long.mp4', { type: 'video/mp4', lastModified: 5 }));
+  checkResult = (path) => (path.endsWith('.mp4') ? { result: 'rejected', reason: 'That video is 1:05 long. The limit is 60 seconds.' } : { result: 'ok', durationSeconds: null });
+  await requestWasteSubmit(a);
+  await settle();
+  const summary = summarizeWasteUploads(await listWasteMedia(a));
+  assert.deepEqual([summary.ready, summary.needsAttention, summary.retrying], [1, 1, 0]);
+  assert.deepEqual(summary.reasons, ['That video is 1:05 long. The limit is 60 seconds.']);
+  assert.equal(calls.submits.length, 0, 'never sent with a refused file');
+  // "Open the report to fix it": unlock, remove the refused file, send again
+  await editWasteDraftAgain(a);
+  const video = (await listWasteMedia(a)).find((m) => m.kind === 'video')!;
+  await removeWasteMedia(video.id);
+  await requestWasteSubmit(a);
+  await settle();
+  assert.equal(calls.submits.length, 1);
+  assert.equal(calls.submits[0].media.length, 1, 'the photo already uploaded is kept and not uploaded again');
+  assert.equal(calls.small.filter((p) => p.endsWith('.jpg') && !p.includes('thumb')).length, 1);
+});
+
+test('STUCK FIX: 401/403 (e.g. an expired sign-in) keeps trying instead of stopping the file for good', async () => {
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo());
+  smallUpload = async () => {
+    throw Object.assign(new Error('jwt expired'), { status: 403 });
+  };
+  await requestWasteSubmit(a);
+  await settle();
+  const m = (await listWasteMedia(a))[0];
+  assert.equal(m.status, 'pending');
+  assert.equal(m.permanentFailure, false);
+  smallUpload = async () => undefined;
+  await passes(1);
+  assert.equal(calls.submits.length, 1);
+});
+
+test('STUCK FIX: "Try again" on a file waiting to retry runs it at once; it is never offered for a refused or uploaded file', async () => {
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo());
+  smallUpload = async () => {
+    throw new Error('Load failed');
+  };
+  await settle();
+  const m = (await listWasteMedia(a))[0];
+  assert.ok(m.nextAttemptAt);
+  smallUpload = async () => undefined;
+  await retryWasteMedia(m.id);
+  await waitForWasteWorker();
+  assert.equal((await getMedia(m.id))?.status, 'ready');
+});
+
+test('STUCK FIX: "Open the report" opens THAT report even when a newer draft exists (it is not swapped for the newest one)', async () => {
+  online = false; // so it stays on the phone, waiting to be sent
+  const a = await draftWith({ address: 'Old report' });
+  await requestWasteSubmit(a);
+  const newer = await getOrCreateEditingDraft();
+  assert.notEqual(newer.reportId, a);
+  await editWasteDraftAgain(a);
+  assert.equal((await getOrCreateEditingDraft(a)).reportId, a, 'the one he chose');
+  assert.equal((await getOrCreateEditingDraft()).reportId, newer.reportId, 'without a choice: the newest, as before');
+  assert.equal((await getOrCreateEditingDraft('not-on-this-phone')).reportId, newer.reportId);
 });

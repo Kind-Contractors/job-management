@@ -3,7 +3,16 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth/AuthProvider';
 import type { WasteDraft, WasteMedia } from './offline/wasteDb';
-import { editWasteDraftAgain, getWasteDraft, listWasteMedia, retryWasteSubmit, subscribeWasteQueue } from './offline/wasteSyncEngine';
+import {
+  editWasteDraftAgain,
+  getWasteDraft,
+  listWasteMedia,
+  retryWaitingUploads,
+  retryWasteSubmit,
+  subscribeWasteQueue,
+  summarizeWasteUploads,
+  type WasteUploadSummary,
+} from './offline/wasteSyncEngine';
 import { listMyWasteReports } from './wasteApi';
 import { formatWorkDates } from './wasteRules';
 import { myWasteReportsKey } from './WasteShell';
@@ -11,7 +20,8 @@ import { myWasteReportsKey } from './WasteShell';
 /** What this screen shows for a report, from the phone's own record and (once that is gone) the server's list. */
 export type SentState =
   | { kind: 'loading' }
-  | { kind: 'sending'; draft: WasteDraft; ready: number; total: number; failed: number }
+  /** failed: files the server refused for good (the report can't be sent until they are removed). */
+  | { kind: 'sending'; draft: WasteDraft; ready: number; total: number; failed: number; uploads: WasteUploadSummary }
   | { kind: 'refused'; draft: WasteDraft }
   | { kind: 'sent' }
   | { kind: 'unknown' };
@@ -20,13 +30,8 @@ export function sentStateFor(draft: WasteDraft | null | undefined, media: WasteM
   if (draft === undefined) return { kind: 'loading' };
   if (draft && draft.submitRequested) {
     if (draft.permanentFailure) return { kind: 'refused', draft };
-    return {
-      kind: 'sending',
-      draft,
-      ready: media.filter((m) => m.status === 'ready').length,
-      total: media.length,
-      failed: media.filter((m) => m.status === 'failed').length,
-    };
+    const uploads = summarizeWasteUploads(media);
+    return { kind: 'sending', draft, ready: uploads.ready, total: uploads.total, failed: uploads.needsAttention, uploads };
   }
   // The phone keeps a report only until the server has confirmed it, so "gone from the phone" + "on the server" means sent.
   if (onServer === null) return { kind: 'loading' };
@@ -76,18 +81,42 @@ export default function WasteReportSentPage() {
     <div className="flex flex-col gap-4 px-4 py-5">
       {state.kind === 'loading' && <p className="text-[13px] text-neutral-500">Checking…</p>}
 
-      {state.kind === 'sending' && (
+      {state.kind === 'sending' && state.failed > 0 && (
+        // Blocked: it will NOT be sent by itself - say so, why, and the one thing to do.
+        <div className="border border-missed bg-missed/10 px-4 py-3" role="alert" data-testid="waste-needs-attention">
+          <h1 className="font-heading text-[19px] font-semibold text-missed-fg">Your report needs attention</h1>
+          <p className="mt-1 text-[13px] text-ink">
+            {state.failed === 1 ? '1 photo or video wasn’t accepted' : `${state.failed} photos or videos weren’t accepted`}, so the report can’t be sent yet. Open
+            the report, remove {state.failed === 1 ? 'it' : 'them'} (add {state.failed === 1 ? 'it' : 'them'} again if needed) and send it again. The {state.ready}{' '}
+            already uploaded are kept.
+          </p>
+          <ul className="mt-1.5 list-disc pl-5 text-[12.5px] text-missed-fg">
+            {state.uploads.reasons.map((r) => (
+              <li key={r}>{r}</li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            onClick={() => void editWasteDraftAgain(reportId).then(() => navigate(`/waste?report=${reportId}`))}
+            className="mt-3 w-full cursor-pointer bg-missed py-2.5 text-[14px] font-semibold text-white"
+          >
+            Open the report to fix it
+          </button>
+        </div>
+      )}
+
+      {state.kind === 'sending' && state.failed === 0 && (
         <div className="border border-due bg-due/10 px-4 py-3" data-testid="waste-sending">
           <h1 className="font-heading text-[19px] font-semibold text-due-fg">Sending your report</h1>
           <p className="mt-1 text-[13px] text-ink">
             {state.total === 0 ? 'Waiting for a connection…' : `${state.ready} of ${state.total} photos and videos uploaded.`} It is saved on this phone and
             will be sent by itself - you can start another report now. Keep the app open until it’s sent if you can.
           </p>
-          {state.failed > 0 && (
-            <div className="mt-2 text-[12.5px] text-missed-fg" role="alert">
-              {state.draft.submitError ?? 'A photo or video couldn’t be uploaded.'}{' '}
-              <button type="button" onClick={() => void editWasteDraftAgain(reportId).then(() => navigate('/waste'))} className="cursor-pointer underline">
-                Open the report
+          {state.uploads.retrying > 0 && (
+            <div className="mt-2 text-[12.5px] text-due-fg" data-testid="waste-retrying">
+              {state.uploads.retrying === 1 ? '1 file is' : `${state.uploads.retrying} files are`} waiting for a better signal. They keep trying by themselves.{' '}
+              <button type="button" onClick={() => void retryWaitingUploads(reportId)} className="cursor-pointer font-semibold underline">
+                Try now
               </button>
             </div>
           )}
