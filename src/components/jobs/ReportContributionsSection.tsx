@@ -98,7 +98,7 @@ export default function ReportContributionsSection({ reportId, reviewStatus, com
 
       {completed && (
         <div role="note" className="border border-done bg-done/10 p-1.5 text-[11px] text-done-fg">
-          This report is Completed, so a technician&rsquo;s section can&rsquo;t be sent back for correction. Reopen it first (Ready for client &rarr; Completed &rarr; Reopen).
+          This report is Completed, so a technician&rsquo;s section can&rsquo;t be sent back for correction. Reopen it first (Ready for client &rarr; Sent or completed &rarr; Reopen).
         </div>
       )}
 

@@ -46,7 +46,7 @@ export function ReportPhotosView(p: ReportPhotosViewProps) {
     <div className="flex flex-col gap-2" data-testid="report-photos">
       {p.completed && (
         <div className="text-[11px] text-neutral-500">
-          This report is Completed, so photos can’t be added, removed, moved or unticked. Reopen it first (Ready for client → Completed → Reopen).
+          This report is Completed, so photos can’t be added, removed, moved or unticked. Reopen it first (Ready for client → Sent or completed → Reopen).
         </div>
       )}
       {p.notice && (

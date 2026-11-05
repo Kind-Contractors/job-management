@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import type { JobRow, JobVisitSummary } from '../domain/types';
-import { isVisitInAccountsQueue, useQueueJobRows, visitNeedsCompletion } from '../lib/queueJobs';
+import { accountsQueueRows, useQueueJobRows, visitNeedsCompletion } from '../lib/queueJobs';
 import { createInvoiceDraft } from '../repository/invoicesRepository';
 import { listBuildingRows } from '../repository/buildingsRepository';
 import { useAuth } from '../auth/AuthProvider';
@@ -59,6 +59,9 @@ function accountsRowPresentation(row: AccountsRow): StatusPresentation {
  */
 export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: { initialSelectedVisitId?: string | null } = {}) {
   const navigate = useNavigate();
+  // The rail's division filter (General / Specialist / Both) - applied to this list exactly as the rail badge applies it.
+  const [searchParams] = useSearchParams();
+  const division = searchParams.get('division') ?? 'Both';
   const { session } = useAuth();
   const actor = session?.user.email ?? 'unknown';
   const queryClient = useQueryClient();
@@ -78,21 +81,14 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
   // Active jobs plus closed/cancelled jobs that still have unbilled or unsent accounting work.
   const { jobRows, isLoading, isError, error, closedJobsError, retryClosedJobs } = useQueueJobRows();
 
-  // A visit belongs on this page once it's approved-and-unbilled, or once it
-  // already has an invoice that still needs attention (draft/sending/failed/
-  // sent) — a sent invoice stays visible so its record doesn't just vanish
-  // from the one place a manager checks this.
-  const rows = useMemo<AccountsRow[]>(() => {
-    const list: AccountsRow[] = [];
-    for (const job of jobRows) {
-      for (const visit of job.visits) {
-        if (isVisitInAccountsQueue(job, visit)) list.push({ job, visit });
-      }
-    }
-    // Most recent first — was oldest-first ascending; only the compare
-    // operands are swapped, everything else about this list is unchanged.
-    return list.sort((a, b) => (b.visit.scheduledDate ?? '').localeCompare(a.visit.scheduledDate ?? ''));
-  }, [jobRows]);
+  // Outstanding accounts work only: approved and not invoiced yet, or an invoice that is not in Xero yet (draft / sending /
+  // failed). Once an invoice has been created in Xero ('sent' or 'in xero, not emailed') the visit leaves this list - its
+  // invoice is in Records. The rows come from the same builder as the rail badge, so the two always agree.
+  const rows = useMemo<AccountsRow[]>(
+    // Most recent first.
+    () => accountsQueueRows(jobRows, division).sort((a, b) => (b.visit.scheduledDate ?? '').localeCompare(a.visit.scheduledDate ?? '')),
+    [jobRows, division],
+  );
 
   const selected = rows.find((r) => r.visit.id === selectedVisitId);
   // Open visit on a cancelled/closed job: the completion form is shown and Create invoice stays disabled until it is completed.
@@ -321,9 +317,23 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
       <div data-testid="accounts-detail" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
         {!selected ? (
           <div className="flex flex-1 items-center justify-center p-5 text-center">
-            <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
-              Select an item on the left
-            </div>
+            {selectedVisitId && !isLoading ? (
+              // The visit that was open has left the queue - most often because its invoice has just been created in Xero.
+              <div data-testid="left-accounts-queue" className="max-w-sm border border-done bg-done/10 p-4 text-left text-[12.5px] text-ink">
+                <div className="font-semibold text-done-fg">No longer waiting for invoicing</div>
+                <p className="mt-1">
+                  This visit has left Ready for accounts - its invoice is in Xero (or it is no longer in this division). The invoice is in{' '}
+                  <Link to="/records?tab=invoices" className="text-teal-700 underline">
+                    Records
+                  </Link>
+                  .
+                </p>
+              </div>
+            ) : (
+              <div className="font-heading text-[11px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
+                Select an item on the left
+              </div>
+            )}
           </div>
         ) : (
           <div className="max-w-[760px] p-5">

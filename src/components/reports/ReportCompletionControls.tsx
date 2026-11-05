@@ -17,7 +17,7 @@ export function formatWhen(iso: string | null | undefined): string {
 
 export type QueueView = 'awaiting' | 'completed';
 
-/** Switches the Ready for client list between reports still awaiting completion and those already completed. */
+/** Switches the Ready for client list between reports still awaiting delivery and those already delivered (emailed or completed). */
 export function ReadyForClientTabs({
   view,
   awaitingCount,
@@ -44,8 +44,8 @@ export function ReadyForClientTabs({
   );
   return (
     <div className="segmented mt-2 flex border border-neutral-300" role="group" aria-label="Show reports">
-      {tab('awaiting', 'Awaiting completion', awaitingCount)}
-      {tab('completed', 'Completed', completedCount)}
+      {tab('awaiting', 'Awaiting delivery', awaitingCount)}
+      {tab('completed', 'Sent or completed', completedCount)}
     </div>
   );
 }
@@ -66,7 +66,7 @@ export function CompleteButton({ disabled, onClick }: { disabled?: boolean; onCl
       type="button"
       onClick={onClick}
       disabled={disabled}
-      title="Mark this report as fully dealt with - it leaves this queue. Works whether you emailed it through the system or sent it by hand."
+      title="Mark this report as delivered by hand - it leaves this queue. A report emailed through the system leaves it by itself."
       className="cursor-pointer border border-teal-700 bg-white px-3 py-1.5 text-xs font-semibold text-teal-700 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-60"
     >
       Completed
@@ -115,7 +115,7 @@ export function CompleteConfirm({
   );
 }
 
-/** Shown on a completed report: who completed it and when, with Reopen to put it back in the queue. */
+/** Shown on a completed report: who completed it and when, with Reopen (back to the queue unless it was also emailed). */
 export function CompletedBanner({
   completedAt,
   completedBy,
@@ -140,7 +140,7 @@ export function CompletedBanner({
         type="button"
         onClick={onReopen}
         disabled={pending}
-        title="Put this report back in the Ready for client queue"
+        title={sentAt ? 'Clear Completed. It was emailed, so it stays delivered and does not go back to the queue' : 'Put this report back in the Ready for client queue'}
         className="ml-auto cursor-pointer border border-done bg-white px-2.5 py-1 text-xs font-semibold text-done-fg hover:bg-done/10 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {pending ? 'Reopening…' : 'Reopen'}
@@ -160,7 +160,7 @@ export function ReopenFirstNotice({ completedBy, completedAt, children }: { comp
   return (
     <div role="note" className="border border-done bg-done/10 p-2 text-[11.5px] text-done-fg">
       <span className="font-semibold">Completed</span> by {completedBy ?? 'unknown'} on {formatWhen(completedAt)}. To return this report for correction,
-      or send a technician&rsquo;s section back, reopen it first: Ready for client &rarr; Completed &rarr; Reopen.
+      or send a technician&rsquo;s section back, reopen it first: Ready for client &rarr; Sent or completed &rarr; Reopen.
       {children}
     </div>
   );

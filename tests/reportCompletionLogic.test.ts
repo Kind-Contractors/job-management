@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import type { JobVisitSummary } from '../src/domain/types';
-import { isReportCompleted, isReportReadyForClient } from '../src/lib/statusPresentation';
+import { isReportAwaitingCompletion, isReportCompleted, isReportDelivered, isReportReadyForClient } from '../src/lib/statusPresentation';
 import { hasIncompleteReportWork } from '../src/components/jobs/JobLifecycleDialog';
 import { mapVisitRow, type SupabaseVisit } from '../src/repository/mapJobRow';
 import { REOPEN_FIRST_MESSAGE, explainCompletionBlock } from '../src/repository/reportsRepository';
@@ -20,13 +20,23 @@ function visit(over: Partial<JobVisitSummary> = {}): JobVisitSummary {
 const SENT = '2026-10-02T09:00:00Z';
 const DONE = '2026-10-03T09:00:00Z';
 
-// ---- the queue rule: approved, until completed - however it was delivered ----------------------------------
+// ---- the queue rule: approved, until DELIVERED - emailed successfully, or marked Completed (hand delivery) ----------
 test('an approved report that was never sent is in the Ready for client queue', () => {
   assert.equal(isReportReadyForClient(visit()), true);
 });
 
-test('KEY RULE: a report EMAILED through the system stays in the queue until it is completed', () => {
-  assert.equal(isReportReadyForClient(visit({ sentToClientAt: SENT })), true);
+test('KEY RULE (approved by Luke): a report EMAILED successfully through the system leaves the queue by itself - without being marked Completed', () => {
+  const emailed = visit({ sentToClientAt: SENT });
+  assert.equal(isReportReadyForClient(emailed), false);
+  assert.equal(isReportCompleted(emailed), false, 'Sent and Completed stay two separate facts: emailing never sets Completed');
+  assert.equal(isReportDelivered(emailed), true);
+});
+
+test('a failed email changes nothing: sent_to_client_at is only set on a confirmed send, so the report stays in the queue', () => {
+  // A failed attempt leaves sentToClientAt untouched (send-client-report writes it only after the provider accepted the email).
+  assert.equal(isReportReadyForClient(visit({ sentToClientAt: null })), true);
+  // and a failed RESEND keeps the earlier successful send: still delivered, still out of the queue
+  assert.equal(isReportReadyForClient(visit({ sentToClientAt: SENT })), false);
 });
 
 test('a COMPLETED report leaves the queue - whether it was emailed or delivered by hand', () => {
@@ -46,11 +56,19 @@ test('isReportCompleted is true only once a completion time is recorded', () => 
   assert.equal(isReportCompleted(visit({ reportCompletedAt: DONE, reportCompletedBy: 'luke@x' })), true);
 });
 
-test('Reopen puts a report straight back in the queue (the same fields, cleared)', () => {
-  const completed = visit({ sentToClientAt: SENT, reportCompletedAt: DONE, reportCompletedBy: 'luke@x' });
+test('Reopen puts a HAND-DELIVERED report straight back in the queue (the same fields, cleared)', () => {
+  const completed = visit({ reportCompletedAt: DONE, reportCompletedBy: 'luke@x' });
   assert.equal(isReportReadyForClient(completed), false);
   const reopened = { ...completed, reportCompletedAt: null, reportCompletedBy: null };
   assert.equal(isReportReadyForClient(reopened), true);
+});
+
+test('Reopen on a report that was ALSO emailed clears Completed but it stays delivered (the email still happened)', () => {
+  const completed = visit({ sentToClientAt: SENT, reportCompletedAt: DONE, reportCompletedBy: 'luke@x' });
+  const reopened = { ...completed, reportCompletedAt: null, reportCompletedBy: null };
+  assert.equal(isReportCompleted(reopened), false);
+  assert.equal(isReportReadyForClient(reopened), false);
+  assert.equal(isReportDelivered(reopened), true);
   assert.equal(reopened.sentToClientAt, SENT, 'reopening never touches the send record');
 });
 
@@ -75,6 +93,13 @@ test('LIFECYCLE: a report that was SENT but not completed still counts as incomp
   assert.equal(hasIncompleteReportWork(visit({ sentToClientAt: SENT })), true);
   // even a fully invoiced and sent one: it is still waiting for the manager to complete it
   assert.equal(hasIncompleteReportWork(visit({ sentToClientAt: SENT, invoiceId: 'inv1', invoiceStatus: 'sent' })), true);
+});
+
+test('LIFECYCLE is unchanged by the queue rule: an emailed report has left Ready for client but still blocks closing the job until Completed', () => {
+  const emailedAndInvoiced = visit({ sentToClientAt: SENT, invoiceId: 'inv1', invoiceStatus: 'in_xero_not_emailed' });
+  assert.equal(isReportReadyForClient(emailedAndInvoiced), false, 'out of the queue');
+  assert.equal(isReportAwaitingCompletion(emailedAndInvoiced), true, 'still awaiting completion');
+  assert.equal(hasIncompleteReportWork(emailedAndInvoiced), true, 'so the job cannot be closed yet');
 });
 
 test('LIFECYCLE: everything that blocked before still blocks', () => {

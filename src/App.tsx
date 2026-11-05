@@ -1,4 +1,7 @@
+import { useEffect } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
+import { noteAuthState } from './lib/appUpdate';
+import UpdateBar from './components/shell/UpdateBar';
 import { useAuth } from './auth/AuthProvider';
 import LoginPage from './pages/LoginPage';
 import UnauthorizedPage from './pages/UnauthorizedPage';
@@ -17,6 +20,7 @@ import UsersPage from './pages/UsersPage';
 import HistoricalJobsPage from './pages/HistoricalJobsPage';
 import VideosWithoutReportPage from './pages/VideosWithoutReportPage';
 import WasteReportsPage from './pages/WasteReportsPage';
+import RecordsPage from './pages/RecordsPage';
 import TechnicianShell from './technician/TechnicianShell';
 import DayViewPage from './technician/DayViewPage';
 import JobFilePage from './technician/JobFilePage';
@@ -39,6 +43,20 @@ function AuthLoadingScreen() {
 
 export default function App() {
   const { status, role } = useAuth();
+  // Who is signed in decides when a new app version may be loaded (lib/appUpdate.ts).
+  useEffect(() => {
+    noteAuthState({ status, role });
+  }, [status, role]);
+
+  return (
+    <>
+      <AppRoutes status={status} role={role} />
+      <UpdateBar />
+    </>
+  );
+}
+
+function AppRoutes({ status, role }: Pick<ReturnType<typeof useAuth>, 'status' | 'role'>) {
 
   if (status === 'loading') return <AuthLoadingScreen />;
   if (status === 'signed_out') return <LoginPage />;
@@ -93,6 +111,7 @@ export default function App() {
         <Route path="/videos-without-report" element={<VideosWithoutReportPage />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="/historical-jobs" element={<HistoricalJobsPage />} />
+        <Route path="/records" element={<RecordsPage />} />
         <Route path="/waste-reports" element={<WasteReportsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/jobs" replace />} />

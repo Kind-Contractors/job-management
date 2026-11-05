@@ -390,6 +390,12 @@ export function kick(): Promise<void> {
   return idle;
 }
 
+/** True while a worker pass is running (files being uploaded, checked or a report sent). Read-only - used so a new app version is
+ * never loaded in the middle of an upload (src/lib/appUpdate.ts). */
+export function isWasteWorkerBusy(): boolean {
+  return running;
+}
+
 /** Test hook: resolves when the current worker (if any) has finished. */
 export function waitForWasteWorker(): Promise<void> {
   return idle;

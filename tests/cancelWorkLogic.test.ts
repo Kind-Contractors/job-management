@@ -158,11 +158,12 @@ test('READY FOR ACCOUNTS on a CANCELLED job: approved with no invoice or an unse
   assert.equal(cj(awaiting), false, 'not approved');
 });
 
-test('READY FOR ACCOUNTS on an ACTIVE job is exactly what it was: approved-and-unbilled, or already invoiced (a sent invoice stays visible)', () => {
+test('READY FOR ACCOUNTS on an ACTIVE job (approved by Luke): approved-and-unbilled stays; an invoice in Xero leaves - the same rule as a cancelled job', () => {
   const aj = (v: any) => isVisitInAccountsQueue(job('x', [v]), v);
   assert.equal(aj(approved), true);
-  assert.equal(aj(approvedDoneSent), true, 'sent invoices stay listed on active jobs, as before');
+  assert.equal(aj(approvedDoneSent), false, 'a sent invoice has left the queue on an active job too (it is in Records)');
   assert.equal(aj(awaiting), false);
+  assert.equal(isVisitInAccountsQueue(job('x', [approvedDoneSent]), approvedDoneSent), isVisitInAccountsQueue(cancelledJob(approvedDoneSent), approvedDoneSent), 'active and closed jobs use one rule');
 });
 
 test('the accounts nav count: active jobs unchanged; cancelled jobs count open accounting work only', () => {

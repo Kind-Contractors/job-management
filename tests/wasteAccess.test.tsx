@@ -50,7 +50,7 @@ test('a waste reporter gets his own shell (New report / My reports) and never th
 
 test('an unknown role is refused - it no longer falls through to the manager screens', () => {
   const html = renderApp('viewer', '/jobs');
-  assert.match(html, /Not set up for access/);
+  assert.match(html, /We couldn’t confirm access/);
   assert.doesNotMatch(html, /Views of the same data/);
   const src = read('src/App.tsx');
   assert.ok(src.indexOf("if (role !== 'manager') return <UnauthorizedPage />") < src.indexOf('<AppShell />'), 'the manager gate comes before the manager routes');

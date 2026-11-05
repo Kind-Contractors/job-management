@@ -186,7 +186,7 @@ test('SEARCH stays DISABLED where the page does not read q — a box that does n
 test('SEARCH: every route on the allowlist has a page that actually reads q', () => {
   const pageFor: Record<string, string> = {
     '/jobs': 'AllLiveJobsPage', '/buildings': 'BuildingsPage', '/this-week': 'ThisWeekPage',
-    '/historical-jobs': 'HistoricalJobsPage', '/monthly-plan': 'MonthlyPlanPage',
+    '/historical-jobs': 'HistoricalJobsPage', '/monthly-plan': 'MonthlyPlanPage', '/records': 'RecordsPage',
   };
   for (const route of SEARCHABLE_ROUTES) {
     assert.ok(pageFor[route], `${route} has no page mapped - extend this test when adding a route`);
