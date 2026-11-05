@@ -286,7 +286,7 @@ test('STUCK FIX: My reports says "Sending…" only while it really is on its way
       <MyWasteReportsList sending={[d]} reports={[]} uploads={{ r: sum([media({ status: 'failed', permanentFailure: true, lastError: 'x' })]) }} />
     </MemoryRouter>,
   );
-  assert.match(html, /Needs attention - a photo or video wasn’t accepted\. Tap to fix it\./);
+  assert.match(html, /Needs attention - a photo or video can’t be sent\. Tap to fix it\./);
 });
 
 test('STUCK FIX: the sending screen tells "needs attention" (with the reasons and one button to fix it) from "still sending" (with Try now)', () => {

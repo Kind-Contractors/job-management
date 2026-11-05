@@ -31,7 +31,7 @@ export interface WasteDraft {
  *  uploading  being sent (videos resume where they stopped)
  *  checking   uploaded; the server is checking it
  *  ready      uploaded and passed the server's check
- *  failed     stopped: rejected by the server (permanentFailure) or too many failed attempts - retry or remove it
+ *  failed     stopped for good: refused by the server, or unreadable on the phone (permanentFailure) - remove it
  */
 export type WasteMediaStatus = 'pending' | 'uploading' | 'checking' | 'ready' | 'failed';
 
@@ -67,6 +67,15 @@ export interface WasteMedia {
   nextAttemptAt: string | null;
   sortOrder: number;
   createdAt: string;
+  // ---- added 2026-11 (optional: records saved before have none, and need no database upgrade) ----
+  /** Why a stopped file stopped: refused by the server, or the phone can no longer read it. */
+  failureKind?: 'refused' | 'unreadable' | null;
+  /** Bytes of a video the server has CONFIRMED (shown after the app is reopened; the upload resumes from the server's own offset). */
+  bytesConfirmed?: number;
+  /** Paused to give another report's video its turn - not a failure. */
+  pausedForTurn?: boolean;
+  /** When lastError happened. */
+  lastErrorAt?: string | null;
 }
 
 interface WasteQueueDB extends DBSchema {

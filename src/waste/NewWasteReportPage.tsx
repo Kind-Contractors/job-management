@@ -11,7 +11,9 @@ import {
   retryWasteMedia,
   subscribeWasteQueue,
   updateWasteDraftFields,
+  uploadBytes,
   uploadProgress,
+  useWasteSyncStatus,
 } from './offline/wasteSyncEngine';
 import { addDays, checkWasteForm, emptySections, emptySectionsQuestion, londonToday, WASTE_LIMITS, WASTE_PHASES, type WasteMediaKind, type WastePhase } from './wasteRules';
 import WasteMediaSection from './WasteMediaSection';
@@ -26,6 +28,7 @@ const input = 'w-full border border-neutral-300 bg-white px-3 py-2.5 text-[15px]
  */
 export default function NewWasteReportPage() {
   const navigate = useNavigate();
+  const sync = useWasteSyncStatus();
   const [draft, setDraft] = useState<WasteDraft | null>(null);
   const [media, setMedia] = useState<WasteMedia[]>([]);
   const [, setTick] = useState(0);
@@ -189,6 +192,8 @@ export default function NewWasteReportPage() {
           phase={phase}
           media={media.filter((m) => m.phase === phase)}
           progressOf={uploadProgress}
+          bytesOf={uploadBytes}
+          online={sync.online}
           previewUrl={previewUrl}
           locked={false}
           addError={addErrors[phase] ?? null}
