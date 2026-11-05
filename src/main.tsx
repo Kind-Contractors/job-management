@@ -7,6 +7,9 @@ import App from './App';
 import { AuthProvider } from './auth/AuthProvider';
 import { UserScopedQueryProvider } from './auth/UserScopedQueryProvider';
 import { removeLegacySharedQueryCache } from './lib/userQueryCache';
+import { setReloadSafetyChecks, startAppUpdates } from './lib/appUpdate';
+import { isWasteWorkerBusy } from './waste/offline/wasteSyncEngine';
+import { hasUnsavedEdits } from './lib/unsavedEditsGuard';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -15,6 +18,11 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 // its stale, cross-user data can't be restored by anything. Only this one key
 // is touched; the IndexedDB offline queue and Supabase's auth token are not.
 removeLegacySharedQueryCache();
+
+// New app versions: registers the service worker and reloads into a new version only when nothing can be lost - never during a
+// waste upload, never over unsaved report edits (see lib/appUpdate.ts).
+setReloadSafetyChecks({ wasteUploadBusy: isWasteWorkerBusy, unsavedEdits: hasUnsavedEdits });
+startAppUpdates();
 
 // Read-side offline access (a previously-fetched job stays viewable after a
 // reload with no connectivity) still comes from the persisted TanStack Query

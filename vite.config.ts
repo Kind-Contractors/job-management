@@ -13,12 +13,17 @@ import { VitePWA } from 'vite-plugin-pwa';
 // (main.tsx) and the IndexedDB write queue (src/technician/offline/),
 // never from this service worker.
 export default defineConfig({
+  // Identifies this build (shown on the access screens; used by src/lib/appUpdate.ts so a reload that did not bring a new
+  // version is never repeated).
+  define: { __APP_BUILD_ID__: JSON.stringify(new Date().toISOString()) },
   plugins: [
     react(),
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      injectRegister: 'auto',
+      // The app registers the service worker itself (src/lib/appUpdate.ts) - same file, same scope - so it knows when a new
+      // version has taken over and can reload safely. The plugin's injected script only registered it and never told the page.
+      injectRegister: false,
       manifest: {
         name: 'Kind Contractors',
         short_name: 'Kind Contractors',
@@ -54,6 +59,12 @@ export default defineConfig({
         // cached or how — Supabase traffic is still never precached (see
         // navigateFallbackDenylist/runtimeCaching below), unchanged.
         maximumFileSizeToCacheInBytes: 3.5 * 1024 * 1024,
+        // Updates pages still running an OLDER version (one that can't update itself) where nothing can be lost - see the file.
+        importScripts: ['sw-update.js'],
+        // A new version takes over at once, as before. The plugin only sets these itself when it injects its own registration
+        // script (injectRegister 'auto'); without them a new version would wait until every tab of the app was closed.
+        skipWaiting: true,
+        clientsClaim: true,
         // Never cache Supabase traffic — the one rule that keeps this PWA
         // shell change from altering any live-data/auth behavior anywhere
         // in the app.

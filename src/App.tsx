@@ -1,4 +1,7 @@
+import { useEffect } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
+import { noteAuthState } from './lib/appUpdate';
+import UpdateBar from './components/shell/UpdateBar';
 import { useAuth } from './auth/AuthProvider';
 import LoginPage from './pages/LoginPage';
 import UnauthorizedPage from './pages/UnauthorizedPage';
@@ -40,6 +43,20 @@ function AuthLoadingScreen() {
 
 export default function App() {
   const { status, role } = useAuth();
+  // Who is signed in decides when a new app version may be loaded (lib/appUpdate.ts).
+  useEffect(() => {
+    noteAuthState({ status, role });
+  }, [status, role]);
+
+  return (
+    <>
+      <AppRoutes status={status} role={role} />
+      <UpdateBar />
+    </>
+  );
+}
+
+function AppRoutes({ status, role }: Pick<ReturnType<typeof useAuth>, 'status' | 'role'>) {
 
   if (status === 'loading') return <AuthLoadingScreen />;
   if (status === 'signed_out') return <LoginPage />;
