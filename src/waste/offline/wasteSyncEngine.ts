@@ -22,6 +22,8 @@ import { getCurrentUserId } from '../../auth/currentUser';
 import { preparePhotoForUpload } from '../../technician/offline/photoCompression';
 import { readVideoMetadata, type VideoMetadata } from '../../lib/videoMetadata';
 import { UploadCancelledError, UploadError } from '../../lib/reportVideoUpload';
+import { UploadPausedError } from '../wasteTus';
+import { otherReportHasWaitingVideo, pickNext, type UploadLane } from './wasteUploadScheduler';
 import {
   checkUploadedFile,
   removeUnsubmittedFiles,
@@ -64,15 +66,19 @@ export interface WasteEngineDeps {
   isOnline: () => boolean;
   now: () => Date;
   newId: () => string;
-  uploadSmallFile: (path: string, blob: Blob, contentType: string) => Promise<void>;
+  uploadSmallFile: (path: string, blob: Blob, contentType: string, signal?: AbortSignal) => Promise<void>;
   uploadVideoFile: (path: string, blob: Blob, contentType: string, options: VideoUploadOptions) => Promise<void>;
   checkUploadedFile: (path: string) => Promise<FileCheckOutcome>;
   removeFiles: (paths: string[]) => Promise<void>;
   submitReport: (input: SubmitWasteReportInput) => Promise<{ created: boolean }>;
   preparePhoto: (file: File) => Promise<{ blob: Blob; filename: string }>;
   readVideoMetadata: (file: File) => Promise<VideoMetadata>;
-  /** How long a request may go without an answer (or progress) before it is abandoned and retried. */
+  /** How long a request may go without an answer (or progress) before it is stopped and retried. */
   stallMs: number;
+  /** How long a video may upload before it gives its turn to another report's waiting video (at a confirmed chunk boundary). */
+  videoTurnMs: number;
+  /** Whether a saved file can still be read from the phone. */
+  isReadable: (blob: Blob) => Promise<boolean>;
 }
 
 const defaultDeps: WasteEngineDeps = {
@@ -87,6 +93,8 @@ const defaultDeps: WasteEngineDeps = {
   preparePhoto: preparePhotoForUpload,
   readVideoMetadata,
   stallMs: 120_000,
+  videoTurnMs: 4 * 60_000,
+  isReadable: (blob) => blobReadable(blob),
 };
 let deps: WasteEngineDeps = defaultDeps;
 
@@ -124,6 +132,11 @@ export function subscribeWasteReportSent(callback: (reportId: string) => void): 
 const progressById = new Map<string, number>();
 export function uploadProgress(mediaId: string): number | null {
   return progressById.get(mediaId) ?? null;
+}
+/** A video's bytes sent so far (including the chunk in flight) and its size, while it uploads. */
+const bytesById = new Map<string, { sent: number; total: number }>();
+export function uploadBytes(mediaId: string): { sent: number; total: number } | null {
+  return bytesById.get(mediaId) ?? null;
 }
 
 function requireOwner(): string {
@@ -232,6 +245,7 @@ export async function retryWasteSubmit(reportId: string): Promise<void> {
 export async function discardWasteDraft(reportId: string): Promise<void> {
   const ownerId = requireOwner();
   const media = await listMediaForReport(ownerId, reportId);
+  for (const m of media) controllers.get(m.id)?.abort(); // stop its uploads first
   for (const m of media) await deleteMedia(m.id);
   await deleteDraft(ownerId, reportId);
   notify();
@@ -326,6 +340,7 @@ export async function removeWasteMedia(mediaId: string): Promise<void> {
   if (!media || media.ownerId !== ownerId) return;
   const draft = await getDraft(ownerId, media.reportId);
   if (draft?.submitRequested) throw new Error('This report has been sent, so its photos and videos can’t be changed.');
+  controllers.get(mediaId)?.abort(); // stop its upload first
   await deleteMedia(mediaId);
   progressById.delete(mediaId);
   notify();
@@ -364,60 +379,143 @@ export async function retryWaitingUploads(reportId?: string): Promise<void> {
   await kick();
 }
 
-// ---- the worker --------------------------------------------------------------------------------------------------------------
+// ---- the worker: two lanes and one sending pass -------------------------------------------------------------------------------
+//
+// PHOTO lane and VIDEO lane run side by side (which file each takes next: ./wasteUploadScheduler.ts). Photos come first; reports take
+// turns; a video that has run for TURN_MS gives up its turn at a confirmed chunk boundary when another report's video is waiting.
+//
+// NO RACES BETWEEN THEM. JavaScript runs one step at a time; clashes could only happen across an `await`. So:
+//   * each lane is ONE loop: started like the old worker (the flag is set before anything is awaited), a trigger while it runs only
+//     asks it for another round - never a second loop;
+//   * a file is CLAIMED (in `claimed`) in the same step it is picked, before any await, and the lanes take different kinds of file -
+//     so no file is ever worked on twice at once. Across browser tabs a per-file lock (Web Locks, where the browser has them) does the
+//     same; a tab that can't get the lock leaves that file alone;
+//   * reports are sent by ONE sending pass only (same pattern as the lanes): the lanes just ask for one, and asks during a pass are
+//     merged into one more round. A report is sent only when every file is 'ready' (uploaded AND checked); the phone forgets it only
+//     after the server confirmed it; and the report id chosen on the phone makes the server return the existing report if it ever
+//     arrives twice;
+//   * each lane writes only the file it holds, through updateMediaIfPresent (a removed file is never brought back);
+//   * removing a file (or discarding a draft) stops its upload first (its AbortController).
 
-let running = false;
-let again = false;
-let idle: Promise<void> = Promise.resolve();
+interface LaneState {
+  running: boolean;
+  again: boolean;
+  done: Promise<void>;
+  lastServedReport: string | null;
+}
+const lanes: Record<UploadLane, LaneState> = {
+  photo: { running: false, again: false, done: Promise.resolve(), lastServedReport: null },
+  video: { running: false, again: false, done: Promise.resolve(), lastServedReport: null },
+};
+/** Files being worked on now (claimed in the same step they are picked). */
+const claimed = new Set<string>();
+/** The running upload of each claimed file - aborted to pause it (stall) or when the file is removed. */
+const controllers = new Map<string, AbortController>();
+/** The owner's files as last read - lets a running video decide, between chunks, whether another report is waiting. */
+let snapshot: WasteMedia[] = [];
 
-/** Starts a worker pass, or - if one is running - asks it for one more pass. Never two at once. */
+let submitting = false;
+let submitAgain = false;
+let submitDone: Promise<void> = Promise.resolve();
+
+/** Starts both lanes and a sending pass (each only if not already running; otherwise it is asked for one more round). */
 export function kick(): Promise<void> {
-  if (running) {
-    again = true;
-    return idle;
+  startLane('photo');
+  startLane('video');
+  requestSubmitPass();
+  return waitForWasteWorker();
+}
+
+function startLane(lane: UploadLane): void {
+  const state = lanes[lane];
+  if (state.running) {
+    state.again = true;
+    return;
   }
-  running = true; // claimed before anything is awaited
-  idle = (async () => {
+  state.running = true; // claimed before anything is awaited
+  state.done = (async () => {
     try {
       do {
-        again = false;
-        await workOnce();
-      } while (again);
+        state.again = false;
+        await runLane(lane);
+      } while (state.again);
     } finally {
-      running = false;
+      state.running = false;
     }
   })();
-  return idle;
 }
 
-/** True while a worker pass is running (files being uploaded, checked or a report sent). Read-only - used so a new app version is
- * never loaded in the middle of an upload (src/lib/appUpdate.ts). */
+/** True while either lane or a sending pass is working. Read-only - a new app version is never loaded meanwhile (lib/appUpdate.ts). */
 export function isWasteWorkerBusy(): boolean {
-  return running;
+  return lanes.photo.running || lanes.video.running || submitting;
 }
 
-/** Test hook: resolves when the current worker (if any) has finished. */
-export function waitForWasteWorker(): Promise<void> {
-  return idle;
+/** Test hook (and app-update): resolves once both lanes and the sending pass are idle. */
+export async function waitForWasteWorker(): Promise<void> {
+  for (let i = 0; i < 1000 && isWasteWorkerBusy(); i++) {
+    await Promise.all([lanes.photo.done, lanes.video.done, submitDone]);
+  }
 }
 
-async function workOnce(): Promise<void> {
+/** Runs `fn` only if no other tab of this app holds `name` (Web Locks); where the browser has no Web Locks it just runs. */
+async function exclusively(name: string, fn: () => Promise<void>): Promise<void> {
+  const locks = (typeof navigator !== 'undefined' ? (navigator as Navigator & { locks?: LockManager }).locks : undefined) ?? undefined;
+  if (!locks?.request) return fn();
+  await locks.request(name, { ifAvailable: true }, async (lock) => {
+    if (lock) await fn();
+  });
+}
+
+const MAX_ITEMS_PER_ROUND = 500; // a safety net only: every item leaves the queue or waits out a pause
+
+async function runLane(lane: UploadLane): Promise<void> {
+  const state = lanes[lane];
+  const ownerId = getCurrentUserId();
+  if (!ownerId) return;
+  for (let i = 0; i < MAX_ITEMS_PER_ROUND; i++) {
+    if (!deps.isOnline() || getCurrentUserId() !== ownerId) return;
+    const [media, drafts] = await Promise.all([listMediaForOwner(ownerId), listDrafts(ownerId)]);
+    snapshot = media;
+    const next = pickNext(lane, media, drafts.map((d) => d.reportId), state.lastServedReport, deps.now().getTime(), claimed);
+    if (!next) return;
+    claimed.add(next.id); // same step as the pick: the other lane, and the next pick, can't take it
+    state.lastServedReport = next.reportId;
+    try {
+      await exclusively(`kc-waste-media-${next.id}`, () => processMedia(next, lane));
+    } finally {
+      claimed.delete(next.id);
+      controllers.delete(next.id);
+    }
+    requestSubmitPass();
+    if (lane === 'photo') startLane('video'); // a video may start once no photo is waiting
+  }
+}
+
+function requestSubmitPass(): void {
+  if (submitting) {
+    submitAgain = true;
+    return;
+  }
+  submitting = true; // claimed before anything is awaited
+  submitDone = (async () => {
+    try {
+      do {
+        submitAgain = false;
+        await submitPassOnce();
+      } while (submitAgain);
+    } finally {
+      submitting = false;
+    }
+  })();
+}
+
+async function submitPassOnce(): Promise<void> {
   if (!deps.isOnline()) return;
   const ownerId = getCurrentUserId();
   if (!ownerId) return;
-  const now = deps.now().getTime();
-
-  const media = (await listMediaForOwner(ownerId)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  for (const m of media) {
-    if (getCurrentUserId() !== ownerId) return;
-    if (m.status === 'ready' || m.status === 'failed') continue;
-    if (m.nextAttemptAt && Date.parse(m.nextAttemptAt) > now) continue;
-    await processMedia(m);
-  }
-
   for (const draft of await listDrafts(ownerId)) {
     if (getCurrentUserId() !== ownerId) return;
-    if (draft.submitRequested && !draft.permanentFailure) await submitDraft(draft);
+    if (draft.submitRequested && !draft.permanentFailure) await exclusively(`kc-waste-submit-${draft.reportId}`, () => submitDraft(draft));
   }
 }
 
@@ -433,8 +531,10 @@ async function transientFailure(m: WasteMedia, message: string, patch: Partial<W
     ...m,
     ...patch,
     status: 'pending',
+    pausedForTurn: false,
     attempts,
     lastError: attempts >= SLOW_RETRY_AFTER ? `Not uploaded yet after ${attempts} tries - it keeps trying by itself. Check the phone has signal.` : message,
+    lastErrorAt: deps.now().toISOString(),
     nextAttemptAt: backoffIso(attempts),
   });
   notify();
@@ -443,35 +543,55 @@ async function transientFailure(m: WasteMedia, message: string, patch: Partial<W
 class StalledError extends Error {}
 
 /**
- * Settles with `work`, or rejects with StalledError once deps.stallMs (2 minutes) pass with no answer and no sign of life (`touch`, called on
- * progress, restarts the wait). The abandoned request may still finish later; the next attempt then finds the file (409) and the
- * server check decides whether it is complete (see processMedia), so nothing is counted twice or counted unchecked.
+ * Settles with `work`, or - once deps.stallMs (2 minutes) pass with no answer and no sign of life (`touch`, called on progress,
+ * restarts the wait) - STOPS it (aborts `controller`: the request is really cancelled, a video stays resumable on the server) and
+ * rejects with StalledError. So an abandoned request never keeps using the connection beside the retry. Should a cancelled photo have
+ * reached the server after all, the retry gets a 409 and the server check decides (C1).
  */
-function withStallGuard<T>(work: (touch: () => void) => Promise<T>): Promise<T> {
+function withStallGuard<T>(controller: AbortController, work: (touch: () => void, signal: AbortSignal) => Promise<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let stalled = false;
     const arm = () => {
       clearTimeout(timer);
-      timer = setTimeout(() => reject(new StalledError('stalled')), deps.stallMs);
+      timer = setTimeout(() => {
+        stalled = true;
+        reject(new StalledError('stalled'));
+        controller.abort();
+      }, deps.stallMs);
     };
     arm();
-    work(arm).then(
+    work(arm, controller.signal).then(
       (v) => {
         clearTimeout(timer);
-        resolve(v);
+        if (!stalled) resolve(v);
       },
       (err: unknown) => {
         clearTimeout(timer);
-        reject(err);
+        if (!stalled) reject(err);
       },
     );
   });
 }
 
-async function permanentFailure(m: WasteMedia, message: string): Promise<void> {
+async function permanentFailure(m: WasteMedia, message: string, failureKind: 'refused' | 'unreadable' = 'refused'): Promise<void> {
   progressById.delete(m.id);
-  await updateMediaIfPresent({ ...m, status: 'failed', permanentFailure: true, lastError: message, nextAttemptAt: null });
+  await updateMediaIfPresent({ ...m, status: 'failed', permanentFailure: true, failureKind, pausedForTurn: false, lastError: message, lastErrorAt: deps.now().toISOString(), nextAttemptAt: null });
   notify();
+}
+
+export const UNREADABLE_MESSAGE = 'This file can’t be read from your phone. Remove it and add it again.';
+
+/** True when the saved file can still be read from the phone's storage (its first and last byte). */
+export async function blobReadable(blob: Blob | null | undefined): Promise<boolean> {
+  try {
+    if (!blob || blob.size === 0) return false;
+    await blob.slice(0, 1).arrayBuffer();
+    if (blob.size > 1) await blob.slice(blob.size - 1).arrayBuffer();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function uploadStatus(err: unknown): number | null {
@@ -480,21 +600,27 @@ function uploadStatus(err: unknown): number | null {
   return typeof s === 'number' ? s : null;
 }
 
-async function processMedia(start: WasteMedia): Promise<void> {
-  let m: WasteMedia = { ...start, status: 'uploading' };
+async function processMedia(start: WasteMedia, lane: UploadLane): Promise<void> {
+  // A file the phone can no longer read can never upload: say so, instead of retrying it as if the network had failed.
+  if (!(await deps.isReadable(start.blob))) return permanentFailure(start, UNREADABLE_MESSAGE, 'unreadable');
+
+  let m: WasteMedia = { ...start, status: 'uploading', pausedForTurn: false };
   if (!(await updateMediaIfPresent(m))) return;
   notify();
+  const controller = new AbortController();
+  controllers.set(m.id, controller);
 
   // 1. The poster (optional: a poster that can't be stored is simply dropped).
   if (m.thumbPath && m.thumbnail && !m.thumbUploaded) {
     try {
       const thumbPath = m.thumbPath;
       const thumbnail = m.thumbnail;
-      await withStallGuard(() => deps.uploadSmallFile(thumbPath, thumbnail, 'image/jpeg'));
+      await withStallGuard(controller, (_touch, signal) => deps.uploadSmallFile(thumbPath, thumbnail, 'image/jpeg', signal));
       m = { ...m, thumbUploaded: true };
     } catch (err) {
       const status = uploadStatus(err);
       if (status === 400 || status === 413 || status === 415) m = { ...m, thumbPath: null, thumbnail: null };
+      else if (err instanceof StalledError) return transientFailure(m, 'The connection stopped responding. It will carry on by itself.');
       else return transientFailure(m, 'The upload was interrupted. It will carry on by itself.');
     }
   }
@@ -506,31 +632,54 @@ async function processMedia(start: WasteMedia): Promise<void> {
   let foundExisting = false;
   if (!m.fileUploaded) {
     let current = m;
+    const turnStartedAt = deps.now().getTime();
     try {
       if (m.kind === 'video') {
-        await withStallGuard((touch) =>
+        await withStallGuard(controller, (touch, signal) =>
           deps.uploadVideoFile(m.storagePath, m.blob, m.mime, {
             tusUrl: m.tusUrl,
+            signal,
             onUploadUrl: (url) => {
               touch();
               current = { ...current, tusUrl: url };
               void updateMediaIfPresent(current);
             },
-            onProgress: (fraction) => {
+            onProgress: (sent, total) => {
               touch();
-              progressById.set(m.id, fraction);
+              progressById.set(m.id, total > 0 ? sent / total : 0);
+              bytesById.set(m.id, { sent, total });
               notify();
             },
+            onChunkComplete: (accepted) => {
+              touch();
+              current = { ...current, bytesConfirmed: accepted };
+              void updateMediaIfPresent(current);
+            },
+            // Only after its turn, and only if another report's video is waiting - never interrupts a video for nothing.
+            pauseAtChunkBoundary: () =>
+              lane === 'video' &&
+              deps.now().getTime() - turnStartedAt >= deps.videoTurnMs &&
+              otherReportHasWaitingVideo(snapshot, m.reportId, deps.now().getTime(), claimed),
           }),
         );
         m = { ...current, fileUploaded: true, tusUrl: null };
       } else {
-        await withStallGuard(() => deps.uploadSmallFile(m.storagePath, m.blob, m.mime));
+        await withStallGuard(controller, (_touch, signal) => deps.uploadSmallFile(m.storagePath, m.blob, m.mime, signal));
         m = { ...m, fileUploaded: true };
       }
     } catch (err) {
-      if (err instanceof UploadCancelledError) return transientFailure(current, 'The upload was stopped.');
+      if (err instanceof UploadPausedError && err.reason === 'turn') {
+        // Its turn is over, not a failure: it carries on from the server's confirmed offset when its report's turn comes round.
+        progressById.delete(m.id);
+        bytesById.delete(m.id);
+        await updateMediaIfPresent({ ...current, status: 'pending', pausedForTurn: true, nextAttemptAt: null });
+        notify();
+        return;
+      }
       if (err instanceof StalledError) return transientFailure(current, 'The connection stopped responding. It will carry on by itself.');
+      if (err instanceof UploadPausedError || err instanceof UploadCancelledError || (err as { name?: string } | null)?.name === 'AbortError') {
+        return transientFailure(current, 'The upload was stopped.');
+      }
       const status = uploadStatus(err);
       if (status === 413) return permanentFailure(current, 'That file is larger than the 150 MB limit.');
       if (status === 415) return permanentFailure(current, 'That file type isn’t accepted.');
@@ -541,13 +690,16 @@ async function processMedia(start: WasteMedia): Promise<void> {
         m = { ...current, fileUploaded: true, tusUrl: null };
       } else if (status === 404 || status === 410) {
         // A resumable upload the server no longer knows: start it again from the beginning.
-        return transientFailure(current, 'The upload had to start again.', { tusUrl: null });
+        return transientFailure(current, 'The upload had to start again.', { tusUrl: null, bytesConfirmed: 0 });
       } else {
+        // No answer from the server: the network - unless the phone can no longer read the file, which no retry can fix.
+        if (status == null && !(await deps.isReadable(current.blob))) return permanentFailure(current, UNREADABLE_MESSAGE, 'unreadable');
         return transientFailure(current, 'The upload was interrupted. It will carry on by itself.');
       }
     }
   }
   progressById.delete(m.id);
+  bytesById.delete(m.id);
   m = { ...m, status: 'checking' };
   if (!(await updateMediaIfPresent(m))) return;
   notify();
@@ -555,12 +707,12 @@ async function processMedia(start: WasteMedia): Promise<void> {
   // 3. The server checks what was stored (type, size, a video's real length).
   if (m.thumbPath && m.thumbUploaded) {
     const thumbPath = m.thumbPath;
-    const thumb = await withStallGuard(() => deps.checkUploadedFile(thumbPath)).catch(() => ({ result: 'retry', message: 'No connection.' }) as FileCheckOutcome);
+    const thumb = await withStallGuard(controller, () => deps.checkUploadedFile(thumbPath)).catch(() => ({ result: 'retry', message: 'No connection.' }) as FileCheckOutcome);
     if (thumb.result === 'retry') return transientFailure(m, 'Waiting to check the file. It will carry on by itself.');
     if (thumb.result !== 'ok') m = { ...m, thumbPath: null, thumbnail: null, thumbUploaded: false };
   }
   const storagePath = m.storagePath;
-  const outcome = await withStallGuard(() => deps.checkUploadedFile(storagePath)).catch(() => ({ result: 'retry', message: 'No connection.' }) as FileCheckOutcome);
+  const outcome = await withStallGuard(controller, () => deps.checkUploadedFile(storagePath)).catch(() => ({ result: 'retry', message: 'No connection.' }) as FileCheckOutcome);
   // The stored file must be exactly this file. A different size means an incomplete or different copy under this name: it is
   // removed (his own unsent file - best effort) and this file is uploaded again under a fresh name, which can't collide with it.
   const wrongCopy = outcome.result === 'ok' && outcome.sizeBytes != null && outcome.sizeBytes !== m.sizeBytes;
@@ -571,6 +723,7 @@ async function processMedia(start: WasteMedia): Promise<void> {
     return transientFailure(m, 'An earlier, incomplete copy was found. The file is being uploaded again.', {
       fileUploaded: false,
       tusUrl: null,
+      bytesConfirmed: 0,
       storagePath: wasteMediaPath(m.ownerId, m.reportId, m.phase, deps.newId(), m.ext),
     });
   }
@@ -580,14 +733,16 @@ async function processMedia(start: WasteMedia): Promise<void> {
       status: 'ready',
       durationSeconds: outcome.durationSeconds ?? m.durationSeconds,
       lastError: null,
+      lastErrorAt: null,
       attempts: 0,
       nextAttemptAt: null,
+      bytesConfirmed: m.sizeBytes,
     });
     notify();
     return;
   }
   if (outcome.result === 'rejected') return permanentFailure(m, outcome.reason);
-  if (outcome.result === 'missing') return transientFailure(m, 'The file has to be uploaded again.', { fileUploaded: false, tusUrl: null });
+  if (outcome.result === 'missing') return transientFailure(m, 'The file has to be uploaded again.', { fileUploaded: false, tusUrl: null, bytesConfirmed: 0 });
   return transientFailure(m, 'Waiting to check the file. It will carry on by itself.');
 }
 
@@ -599,15 +754,16 @@ function isPermanentSubmitError(err: unknown): boolean {
 
 async function submitDraft(draft: WasteDraft): Promise<void> {
   const media = await listMediaForReport(draft.ownerId, draft.reportId);
-  if (media.some((m) => m.status === 'failed')) {
-    const message = 'A photo or video wasn’t accepted. Remove it, then send the report again.';
+  if (media.some((m) => m.status === 'failed' && m.permanentFailure)) {
+    const message = 'A photo or video can’t be sent. Remove it, then send the report again.';
     if (draft.submitError !== message) {
       await updateDraftIfPresent({ ...draft, submitError: message });
       notify();
     }
     return;
   }
-  if (media.some((m) => m.status !== 'ready')) return; // still uploading or checking
+  // Never with a file still missing: every file must have been uploaded AND passed the server check.
+  if (media.some((m) => m.status !== 'ready')) return;
 
   try {
     await deps.submitReport({
@@ -640,6 +796,7 @@ async function submitDraft(draft: WasteDraft): Promise<void> {
   for (const m of media) {
     await deleteMedia(m.id);
     progressById.delete(m.id);
+    bytesById.delete(m.id);
   }
   await deleteDraft(draft.ownerId, draft.reportId);
   notify();
@@ -660,7 +817,26 @@ export function startWasteSyncEngine(): void {
   });
   window.addEventListener('pageshow', () => void retryWaitingUploads());
   setInterval(() => void kick(), RETRY_INTERVAL_MS);
-  void retryWaitingUploads();
+  void recoverAfterRestart().then(() => retryWaitingUploads());
+}
+
+/**
+ * A new page can't have an upload running: a file left 'uploading' or 'checking' (the app was closed, reloaded or killed in the
+ * middle) goes back to waiting, so it never shows a stale "Uploading…". A video keeps its resumable upload URL and carries on from
+ * the server's confirmed offset. Called once when the engine starts.
+ */
+export async function recoverAfterRestart(): Promise<void> {
+  const ownerId = getCurrentUserId();
+  if (!ownerId) return;
+  let changed = false;
+  for (const m of await listMediaForOwner(ownerId)) {
+    if (claimed.has(m.id)) continue;
+    if (m.status === 'uploading' || m.status === 'checking' || m.pausedForTurn) {
+      await updateMediaIfPresent({ ...m, status: 'pending', pausedForTurn: false });
+      changed = true;
+    }
+  }
+  if (changed) notify();
 }
 
 /** How one report's files are getting on - one rule for the sending screen and "My reports". */

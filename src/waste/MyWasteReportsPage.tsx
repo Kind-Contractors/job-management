@@ -13,7 +13,7 @@ const SENT_FORMAT = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 's
 /** What a report still on its way says in the list - "Sending…" only while it really is on its way. */
 export function sendingRowLabel(draft: WasteDraft, uploads: WasteUploadSummary | undefined): { text: string; attention: boolean } {
   if (draft.permanentFailure) return { text: 'Couldn’t be sent - tap to see why', attention: true };
-  if (uploads && uploads.needsAttention > 0) return { text: 'Needs attention - a photo or video wasn’t accepted. Tap to fix it.', attention: true };
+  if (uploads && uploads.needsAttention > 0) return { text: 'Needs attention - a photo or video can’t be sent. Tap to fix it.', attention: true };
   const counted = uploads && uploads.total > 0 ? ` - ${uploads.ready} of ${uploads.total} uploaded` : '';
   if (uploads && uploads.retrying > 0) return { text: `Waiting for signal${counted}. It keeps trying by itself.`, attention: false };
   return { text: `Sending…${counted}`, attention: false };

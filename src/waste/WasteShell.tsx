@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../auth/AuthProvider';
 import ChangePasswordDialog from '../auth/ChangePasswordDialog';
 import { startWasteSyncEngine, subscribeWasteReportSent, useWasteSyncStatus } from './offline/wasteSyncEngine';
 import { getMyDisplayName } from './wasteApi';
+import { askToKeepStoredData, getWakeLockState, keepScreenAwake, subscribeWakeLock, type WakeLockState } from './wakeLock';
 import kindContractorsLogo from '../assets/kind_Contractors_logo.png';
 
 /** The query key of his own submitted reports (scoped to the signed-in user, like every per-user cache entry). */
@@ -29,7 +30,17 @@ export default function WasteShell() {
   // Starts the upload/send engine once for the life of the session (it keeps working whichever waste screen is open).
   useEffect(() => {
     startWasteSyncEngine();
+    // Best effort: ask the browser to keep this site's drafts and queued files even when the phone runs short of space.
+    void askToKeepStoredData();
   }, []);
+
+  // While files are uploading the screen is kept on where the phone allows it (uploads pause when the phone locks or the app is in
+  // the background - nothing a web app can change). Uploads never depend on it.
+  const uploadingNow = sync.online && sync.uploading > 0;
+  useEffect(() => {
+    keepScreenAwake(uploadingNow);
+  }, [uploadingNow]);
+  const wakeLock = useSyncExternalStore(subscribeWakeLock, getWakeLockState, getWakeLockState);
 
   // A report confirmed by the server shows up in "My reports" straight away.
   useEffect(() => {
@@ -74,9 +85,20 @@ export default function WasteShell() {
               My reports{sync.waitingReports > 0 && ` (${sync.waitingReports} sending)`}
             </NavLink>
           </nav>
+          {uploadingNow && <KeepOpenNotice wakeLock={wakeLock} />}
           <Outlet />
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Shown while files upload: uploads only move while this screen is open. */
+export function KeepOpenNotice({ wakeLock }: { wakeLock: WakeLockState }) {
+  return (
+    <div data-testid="waste-keep-open" className="border-b border-due bg-due/10 px-4 py-2 text-[12px] text-due-fg">
+      Uploading - keep this screen open until it’s finished. Uploads pause when the phone locks or you switch apps.
+      {wakeLock === 'on' ? ' The screen will stay on meanwhile.' : ' Turn off Auto-Lock while it uploads if you can.'}
     </div>
   );
 }

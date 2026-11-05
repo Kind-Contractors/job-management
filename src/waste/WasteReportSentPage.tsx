@@ -86,7 +86,7 @@ export default function WasteReportSentPage() {
         <div className="border border-missed bg-missed/10 px-4 py-3" role="alert" data-testid="waste-needs-attention">
           <h1 className="font-heading text-[19px] font-semibold text-missed-fg">Your report needs attention</h1>
           <p className="mt-1 text-[13px] text-ink">
-            {state.failed === 1 ? '1 photo or video wasn’t accepted' : `${state.failed} photos or videos weren’t accepted`}, so the report can’t be sent yet. Open
+            {state.failed === 1 ? '1 photo or video can’t be sent' : `${state.failed} photos or videos can’t be sent`}, so the report can’t be sent yet. Open
             the report, remove {state.failed === 1 ? 'it' : 'them'} (add {state.failed === 1 ? 'it' : 'them'} again if needed) and send it again. The {state.ready}{' '}
             already uploaded are kept.
           </p>
