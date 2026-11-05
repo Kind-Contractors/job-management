@@ -1,0 +1,104 @@
+// The waste reporter's own resumable (TUS) upload of one video - deliberately separate from the shared Job Reports uploader
+// (src/lib/reportVideoUpload.ts), which stays exactly as it is.
+//
+// The difference that matters: this one can be PAUSED. Pausing stops the request in flight but keeps the upload on the server
+// (tus abort(false) - the shared uploader's cancel also deletes it), so the next attempt asks the server how far it got (a HEAD
+// with the saved upload URL) and carries on from that confirmed offset. Two kinds of pause:
+//   * `signal` aborted - at once (a request that stopped making progress, or the file is being removed): the chunk in flight is
+//     resent next time (at most 6 MB);
+//   * `pauseAtChunkBoundary()` true - checked each time the server has CONFIRMED a chunk, before the next one starts: nothing is
+//     lost (used to give another report's video its turn).
+// A paused upload rejects with UploadPausedError; it is not a failure.
+import { UploadError } from '../lib/reportVideoUpload';
+
+export class UploadPausedError extends Error {
+  readonly reason: 'signal' | 'turn';
+  constructor(reason: 'signal' | 'turn') {
+    super(reason === 'turn' ? 'Paused to give another report a turn.' : 'Upload paused.');
+    this.name = 'UploadPausedError';
+    this.reason = reason;
+  }
+}
+
+export interface WasteTusArgs {
+  endpoint: string;
+  apiKey: string;
+  bucket: string;
+  objectName: string;
+  file: Blob;
+  contentType: string;
+  /** Read fresh before every request, so a long upload survives a token refresh. */
+  getAccessToken: () => Promise<string>;
+  /** The saved upload URL of an earlier attempt of THIS file, to resume from the server's confirmed offset. */
+  uploadUrl: string | null;
+  onUploadUrl: (url: string) => void;
+  onProgress: (bytesSent: number, bytesTotal: number) => void;
+  /** The server confirmed everything up to `bytesAccepted`. */
+  onChunkComplete?: (bytesAccepted: number, bytesTotal: number) => void;
+  signal?: AbortSignal;
+  pauseAtChunkBoundary?: () => boolean;
+}
+
+const CHUNK_BYTES = 6 * 1024 * 1024; // Supabase requires exactly 6 MB chunks
+
+export async function wasteResumableUpload(args: WasteTusArgs): Promise<void> {
+  const { Upload } = await import('tus-js-client');
+  return new Promise<void>((resolve, reject) => {
+    if (args.signal?.aborted) {
+      reject(new UploadPausedError('signal'));
+      return;
+    }
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+    const upload: InstanceType<typeof Upload> = new Upload(args.file, {
+      endpoint: args.endpoint,
+      uploadUrl: args.uploadUrl ?? null,
+      // The engine retries with its own pauses; tus only covers a brief blip within one attempt.
+      retryDelays: [0, 3000, 5000],
+      chunkSize: CHUNK_BYTES,
+      uploadDataDuringCreation: true,
+      storeFingerprintForResuming: false,
+      removeFingerprintOnSuccess: true,
+      headers: { apikey: args.apiKey },
+      metadata: { bucketName: args.bucket, objectName: args.objectName, contentType: args.contentType, cacheControl: '3600' },
+      onBeforeRequest: async (req) => {
+        req.setHeader('authorization', `Bearer ${await args.getAccessToken()}`);
+      },
+      onUploadUrlAvailable: () => {
+        if (upload.url) args.onUploadUrl(upload.url);
+      },
+      onProgress: (sent, total) => args.onProgress(sent, total),
+      onChunkComplete: (_chunk, accepted, total) => {
+        args.onChunkComplete?.(accepted, total);
+        // tus checks for an abort before it starts the next chunk, so this pauses exactly at the confirmed offset.
+        if (accepted < total && args.pauseAtChunkBoundary?.()) {
+          void upload.abort(false);
+          settle(() => reject(new UploadPausedError('turn')));
+        }
+      },
+      onError: (error) => {
+        const response = (error as { originalResponse?: { getStatus(): number; getBody(): string } }).originalResponse;
+        const status = response ? response.getStatus() : null;
+        let detail = '';
+        try {
+          const body = response?.getBody();
+          detail = body ? ((JSON.parse(body) as { message?: string }).message ?? body) : '';
+        } catch {
+          detail = response?.getBody() ?? '';
+        }
+        settle(() => reject(new UploadError(detail || error.message, status)));
+      },
+      onSuccess: () => settle(() => resolve()),
+    });
+    args.signal?.addEventListener('abort', () => {
+      // Stops the request; the upload stays on the server so it can be resumed (never abort(true) here).
+      void upload.abort(false);
+      settle(() => reject(new UploadPausedError('signal')));
+    });
+    upload.start();
+  });
+}

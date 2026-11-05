@@ -2,7 +2,8 @@
 // what he may do is decided by the database and the bucket policies (migration 20261103100000_waste_reports), never by this code.
 import { FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
-import { resumableEndpoint, resumableUpload } from '../lib/reportVideoUpload';
+import { resumableEndpoint } from '../lib/reportVideoUpload';
+import { wasteResumableUpload } from './wasteTus';
 import { WASTE_BUCKET, type WasteMediaKind, type WastePhase } from './wasteRules';
 
 /** A database refusal (with its Postgres code) or a failed call - the code tells a permanent refusal from a dropped connection. */
@@ -21,25 +22,56 @@ export async function currentAccessToken(): Promise<string> {
   return data.session.access_token;
 }
 
-/** A photo or a video poster: one ordinary request. A file already there from an earlier attempt counts as uploaded. */
-export async function uploadSmallFile(path: string, blob: Blob, contentType: string): Promise<void> {
-  const { error } = await supabase.storage.from(WASTE_BUCKET).upload(path, blob, { upsert: false, contentType });
-  if (!error) return;
-  const status = Number((error as { statusCode?: string | number }).statusCode ?? NaN);
-  if (status === 409 || /already exists|duplicate/i.test(error.message)) return;
-  throw Object.assign(new Error(error.message), { status: Number.isFinite(status) ? status : null });
+/**
+ * A photo or a video poster: one ordinary request - the same request the Supabase client makes (form data with cacheControl and the
+ * file, x-upsert false, the user's own token), but one that can be CANCELLED with `signal`, so a request that stopped responding is
+ * really stopped instead of carrying on beside the retry. What may be uploaded is decided by the bucket policies, exactly as before.
+ * A file already there from an earlier attempt (409) counts as uploaded here; the server check then decides (C1).
+ */
+export async function uploadSmallFile(path: string, blob: Blob, contentType: string, signal?: AbortSignal): Promise<void> {
+  const base = import.meta.env.VITE_SUPABASE_URL as string;
+  const apiKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+  const token = await currentAccessToken();
+  const body = new FormData();
+  body.append('cacheControl', '3600');
+  // The stored type comes from the file part, as with the Supabase client; slice() only relabels it (no copy).
+  body.append('', blob.type === contentType ? blob : blob.slice(0, blob.size, contentType));
+  const url = `${base.replace(/\/$/, '')}/storage/v1/object/${WASTE_BUCKET}/${path.split('/').map(encodeURIComponent).join('/')}`;
+  const res = await fetch(url, { method: 'POST', headers: { apikey: apiKey, Authorization: `Bearer ${token}`, 'x-upsert': 'false' }, body, signal });
+  if (res.ok) return;
+  let detail: { statusCode?: string | number; message?: string; error?: string } = {};
+  try {
+    detail = (await res.json()) as typeof detail;
+  } catch {
+    detail = {};
+  }
+  // Storage reports its own status in the body (a duplicate comes back as statusCode "409" on an HTTP 400).
+  const status = Number(detail.statusCode ?? res.status);
+  const message = detail.message ?? detail.error ?? `Upload failed (HTTP ${res.status}).`;
+  if (status === 409 || /already exists|duplicate/i.test(message)) return;
+  throw Object.assign(new Error(message), { status: Number.isFinite(status) ? status : null });
 }
 
 export interface VideoUploadOptions {
   tusUrl: string | null;
   onUploadUrl: (url: string) => void;
-  onProgress: (fraction: number) => void;
+  /** Bytes sent so far (including the chunk in flight) and the file's size. */
+  onProgress: (bytesSent: number, bytesTotal: number) => void;
+  /** Bytes the server has confirmed. */
+  onChunkComplete?: (bytesAccepted: number, bytesTotal: number) => void;
+  /** Pauses at once (the upload stays on the server, resumable). */
   signal?: AbortSignal;
+  /** Asked after each confirmed chunk: true pauses there (nothing lost). */
+  pauseAtChunkBoundary?: () => boolean;
 }
 
-/** A video: resumable (TUS), so a dropped connection carries on from the last accepted 6 MB chunk instead of starting again. */
+/**
+ * A video: resumable (TUS), so a dropped connection carries on from the last confirmed 6 MB chunk instead of starting again. Uses the
+ * waste reporter's own uploader (./wasteTus.ts), which can PAUSE without deleting the upload from the server; the shared Job Reports
+ * uploader is not used here and is unchanged.
+ */
 export async function uploadVideoFile(path: string, blob: Blob, contentType: string, options: VideoUploadOptions): Promise<void> {
-  await resumableUpload({
+  await wasteResumableUpload({
     endpoint: resumableEndpoint(import.meta.env.VITE_SUPABASE_URL as string),
     apiKey: import.meta.env.VITE_SUPABASE_ANON_KEY as string,
     bucket: WASTE_BUCKET,
@@ -49,8 +81,10 @@ export async function uploadVideoFile(path: string, blob: Blob, contentType: str
     getAccessToken: currentAccessToken,
     uploadUrl: options.tusUrl,
     onUploadUrl: options.onUploadUrl,
-    onProgress: (sent, total) => options.onProgress(total > 0 ? sent / total : 0),
+    onProgress: options.onProgress,
+    onChunkComplete: options.onChunkComplete,
     signal: options.signal,
+    pauseAtChunkBoundary: options.pauseAtChunkBoundary,
   });
 }
 

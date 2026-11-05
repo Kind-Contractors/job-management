@@ -16,8 +16,11 @@ import {
   listWasteMedia,
   removeWasteMedia,
   requestWasteSubmit,
+  isWasteWorkerBusy,
+  recoverAfterRestart,
   retryWasteMedia,
   retryWaitingUploads,
+  UNREADABLE_MESSAGE,
   retryWasteSubmit,
   setWasteEngineDepsForTests,
   summarizeWasteUploads,
@@ -27,7 +30,8 @@ import {
   type WasteEngineDeps,
 } from '../src/waste/offline/wasteSyncEngine';
 import { getDraft, getMedia, listDrafts, listMediaForOwner, deleteDraft, deleteMedia, updateMediaIfPresent } from '../src/waste/offline/wasteDb';
-import { WasteRpcError, type FileCheckOutcome, type SubmitWasteReportInput } from '../src/waste/wasteApi';
+import { WasteRpcError, type FileCheckOutcome, type SubmitWasteReportInput, type VideoUploadOptions } from '../src/waste/wasteApi';
+import { UploadPausedError } from '../src/waste/wasteTus';
 import { UploadError } from '../src/lib/reportVideoUpload';
 
 const OWNER = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -44,8 +48,13 @@ interface Calls {
 let calls: Calls;
 let checkResult: (path: string) => FileCheckOutcome;
 let submitImpl: (input: SubmitWasteReportInput) => Promise<{ created: boolean }>;
-let smallUpload: (path: string) => Promise<void>;
-let videoUpload: (path: string, opts: { tusUrl: string | null; onUploadUrl: (u: string) => void; onProgress: (f: number) => void }) => Promise<void>;
+let smallUpload: (path: string, signal?: AbortSignal) => Promise<void>;
+let videoUpload: (path: string, opts: VideoUploadOptions) => Promise<void>;
+let baseDeps: Partial<WasteEngineDeps> = {};
+/** Extra engine settings for one test, on top of the fakes. */
+function useDeps(over: Partial<WasteEngineDeps>) {
+  setWasteEngineDepsForTests({ ...baseDeps, ...over });
+}
 let online = true;
 let videoMeta: { durationSeconds: number | null; thumbnail: Blob | null };
 
@@ -68,13 +77,13 @@ async function reset(): Promise<void> {
     o.onUploadUrl('https://tus/upload-1');
     o.onProgress(1);
   };
-  const deps: Partial<WasteEngineDeps> = {
+  baseDeps = {
     isOnline: () => online,
     now: () => new Date(clock),
     newId: () => `0000000${++ids}`.slice(-8) + '-0000-4000-8000-000000000000',
-    uploadSmallFile: async (path) => {
+    uploadSmallFile: async (path, _b, _t, signal) => {
       calls.small.push(path);
-      await smallUpload(path);
+      await smallUpload(path, signal);
     },
     uploadVideoFile: async (path, _b, _t, opts) => {
       calls.video.push({ path, tusUrl: opts.tusUrl });
@@ -94,8 +103,10 @@ async function reset(): Promise<void> {
     preparePhoto: async (file) => ({ blob: file, filename: file.name }),
     readVideoMetadata: async () => videoMeta,
     stallMs: 40,
+    videoTurnMs: 60_000,
+    isReadable: async () => true,
   };
-  setWasteEngineDepsForTests(deps);
+  setWasteEngineDepsForTests(baseDeps);
 }
 
 beforeEach(reset);
@@ -195,7 +206,7 @@ test('a report waits while a file is still being checked, and is not sent with a
   assert.equal(video.permanentFailure, true);
   assert.match(video.lastError ?? '', /1:05/);
   assert.equal(calls.submits.filter((s) => s.reportId === other.reportId).length, 0);
-  assert.match((await getDraft(OWNER, other.reportId))?.submitError ?? '', /wasn’t accepted. Remove it/);
+  assert.match((await getDraft(OWNER, other.reportId))?.submitError ?? '', /can’t be sent. Remove it/);
 });
 
 test('three triggers at the same moment still send the report once (one worker, claimed before any waiting)', async () => {
@@ -673,4 +684,261 @@ test('STUCK FIX: "Open the report" opens THAT report even when a newer draft exi
   assert.equal((await getOrCreateEditingDraft(a)).reportId, a, 'the one he chose');
   assert.equal((await getOrCreateEditingDraft()).reportId, newer.reportId, 'without a choice: the newest, as before');
   assert.equal((await getOrCreateEditingDraft('not-on-this-phone')).reportId, newer.reportId);
+});
+
+// ---- 2026-11-06: two lanes, fair turns, real pauses, unreadable files ------------------------------------------------------------
+const deferred = () => {
+  let release!: () => void;
+  const promise = new Promise<void>((r) => (release = r));
+  return { promise, release };
+};
+const vid = (name: string, lastModified = 7) => new File([new Uint8Array(9)], name, { type: 'video/mp4', lastModified });
+
+test('LANES: a slow video does not hold up photos - another report\'s photos upload and that report is SENT while the video is still going', async () => {
+  const gate = deferred();
+  videoUpload = async (_p, o) => {
+    o.onUploadUrl('https://tus/a');
+    o.onProgress(1, 10);
+    await gate.promise; // a slow video
+  };
+  useDeps({ stallMs: 60_000 });
+  const a = await draftWith({ address: 'A' });
+  await addWasteMedia(a, 'before', 'video', vid('a.mp4'));
+  await requestWasteSubmit(a);
+  const b = (await getOrCreateEditingDraft()).reportId;
+  await updateWasteDraftFields(b, { address: 'B' });
+  await addWasteMedia(b, 'before', 'photo', photo('b1.jpg'));
+  await addWasteMedia(b, 'after', 'photo', photo('b2.jpg', 'image/jpeg', 1001));
+  await requestWasteSubmit(b);
+  for (let i = 0; i < 50 && !calls.submits.some((x) => x.reportId === b); i++) await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(calls.submits.map((x) => x.reportId), [b], 'B sent while A\'s video is still uploading');
+  assert.equal(isWasteWorkerBusy(), true, 'the video lane is still working (a new app version would wait)');
+  gate.release();
+  await settle();
+  assert.deepEqual(calls.submits.map((x) => x.reportId), [b, a]);
+  assert.equal(isWasteWorkerBusy(), false);
+});
+
+test('PHOTOS FIRST: a video is only started once no photo is waiting', async () => {
+  const order: string[] = [];
+  smallUpload = async (path) => void order.push(`photo:${path.slice(-12)}`);
+  videoUpload = async (path, o) => {
+    order.push(`video:${path.slice(-12)}`);
+    o.onUploadUrl('https://tus/x');
+  };
+  online = false; // queue everything first
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'video', vid('first.mp4'));
+  await addWasteMedia(a, 'before', 'photo', photo('p1.jpg'));
+  await addWasteMedia(a, 'after', 'photo', photo('p2.jpg', 'image/jpeg', 1002));
+  online = true;
+  await settle();
+  const firstVideo = order.findIndex((x) => x.startsWith('video:'));
+  assert.ok(firstVideo > order.lastIndexOf(order.filter((x) => x.startsWith('photo:')).at(-1)!), `photos before the video: ${order.join(', ')}`);
+});
+
+test('FAIR TURNS: two reports\' photos are uploaded in turns, not one report after the other', async () => {
+  const order: string[] = [];
+  smallUpload = async (path) => void order.push(path.split('/')[1]);
+  online = false;
+  const a = await draftWith({ address: 'A' });
+  for (let i = 0; i < 3; i++) await addWasteMedia(a, 'before', 'photo', photo(`a${i}.jpg`, 'image/jpeg', 1000 + i));
+  const b = (await getOrCreateEditingDraft()).reportId;
+  await updateWasteDraftFields(b, { address: 'B' });
+  for (let i = 0; i < 3; i++) await addWasteMedia(b, 'before', 'photo', photo(`b${i}.jpg`, 'image/jpeg', 2000 + i));
+  online = true;
+  await settle();
+  assert.deepEqual(order.slice(0, 4), [a, b, a, b], 'A, B, A, B');
+});
+
+test('VIDEO TURN: after its turn, a video pauses at a CONFIRMED chunk boundary when another report has a video waiting; each resumes from its confirmed offset and both finish', async () => {
+  const offset = new Map<string, number>(); // what the fake server has confirmed per upload
+  const turns: string[] = [];
+  videoUpload = async (path, o) => {
+    const report = path.split('/')[1];
+    const url = o.tusUrl ?? `https://tus/${report}`;
+    if (!o.tusUrl) o.onUploadUrl(url);
+    let done = offset.get(url) ?? 0; // resumes from the server's confirmed offset
+    turns.push(`${report}@${done}`);
+    while (done < 18) {
+      done += 6; // one 6 MB chunk confirmed
+      offset.set(url, done);
+      o.onChunkComplete?.(done, 18);
+      clock += 61_000; // longer than this test's 60 s turn
+      if (done < 18 && o.pauseAtChunkBoundary?.()) throw new UploadPausedError('turn');
+    }
+  };
+  online = false;
+  const a = await draftWith({ address: 'A' });
+  await addWasteMedia(a, 'before', 'video', vid('a.mp4', 1));
+  await requestWasteSubmit(a);
+  const b = (await getOrCreateEditingDraft()).reportId;
+  await updateWasteDraftFields(b, { address: 'B' });
+  await addWasteMedia(b, 'before', 'video', vid('b.mp4', 2));
+  await requestWasteSubmit(b);
+  online = true;
+  await settle();
+  // A starts; each turn ends at a confirmed chunk and the other report goes; nothing is ever sent twice or from the start again
+  const ta = turns.filter((t) => t.startsWith(`${a}@`)).map((t) => Number(t.split('@')[1]));
+  const tb = turns.filter((t) => t.startsWith(`${b}@`)).map((t) => Number(t.split('@')[1]));
+  assert.deepEqual(turns.map((t) => (t.startsWith(`${a}@`) ? 'A' : 'B')), ['A', 'B', 'A', 'B', 'A', 'B'], 'the two reports take turns');
+  assert.ok(ta.length >= 2 && tb.length >= 2, `both took turns: ${turns.join(' ')}`);
+  for (const offs of [ta, tb]) for (let i = 1; i < offs.length; i++) assert.ok(offs[i] > offs[i - 1], `resumed further each time: ${offs.join(',')}`);
+  assert.deepEqual(calls.submits.map((x) => x.reportId).sort(), [a, b].sort(), 'both sent, once each');
+  for (const v of calls.video.slice(2)) assert.ok(v.tusUrl, 'every resumed turn reuses its upload');
+});
+
+test('VIDEO TURN: a video is never paused when no other report is waiting, however long it takes', async () => {
+  let asked = 0;
+  videoUpload = async (_p, o) => {
+    o.onUploadUrl('https://tus/only');
+    for (let i = 1; i <= 5; i++) {
+      clock += 120_000;
+      o.onChunkComplete?.(i * 6, 30);
+      if (o.pauseAtChunkBoundary?.()) throw new UploadPausedError('turn');
+      asked += 1;
+    }
+  };
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'video', vid('long.mp4'));
+  await requestWasteSubmit(a);
+  await settle();
+  assert.equal(asked, 5);
+  assert.equal(calls.video.length, 1, 'one uninterrupted upload');
+  assert.equal(calls.submits.length, 1);
+});
+
+test('STALL: a photo request that stops answering is really CANCELLED (its signal aborted), not left running beside the retry', async () => {
+  let aborted = false;
+  let first = true;
+  smallUpload = async (_p, signal) => {
+    if (!first) return;
+    first = false;
+    await new Promise<void>((_r, reject) => signal?.addEventListener('abort', () => {
+      aborted = true;
+      reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    }));
+  };
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo());
+  await settle();
+  assert.equal(aborted, true, 'the hung request was stopped');
+  const m = (await listWasteMedia(a))[0];
+  assert.match(m.lastError ?? '', /stopped responding/);
+  await passes(1);
+  assert.equal((await listWasteMedia(a))[0].status, 'ready');
+});
+
+test('STALL: a video that stops making progress is paused for real (signal aborted -> the server keeps its upload) and resumes with the same upload URL', async () => {
+  let aborted = false;
+  let first = true;
+  videoUpload = async (_p, o) => {
+    o.onUploadUrl('https://tus/stall');
+    if (!first) return;
+    first = false;
+    await new Promise<void>((_r, reject) => o.signal?.addEventListener('abort', () => {
+      aborted = true;
+      reject(new UploadPausedError('signal'));
+    }));
+  };
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'video', vid('stall.mp4'));
+  await settle();
+  assert.equal(aborted, true);
+  await passes(1);
+  assert.equal(calls.video.length, 2);
+  assert.equal(calls.video[1].tusUrl, 'https://tus/stall');
+});
+
+test('UNREADABLE: a file the phone can no longer read stops at once with a clear message - it is never retried as a network failure', async () => {
+  useDeps({ isReadable: async () => false });
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo());
+  await requestWasteSubmit(a);
+  await settle();
+  await passes(3);
+  const m = (await listWasteMedia(a))[0];
+  assert.equal(m.status, 'failed');
+  assert.equal(m.permanentFailure, true);
+  assert.equal(m.failureKind, 'unreadable');
+  assert.equal(m.lastError, UNREADABLE_MESSAGE);
+  assert.equal(calls.small.length, 0, 'never uploaded');
+  assert.equal(calls.submits.length, 0, 'the report is not sent without it');
+  assert.equal(summarizeWasteUploads(await listWasteMedia(a)).needsAttention, 1);
+});
+
+test('UNREADABLE: a failure with no answer is checked against the file - unreadable stops for good, readable keeps retrying', async () => {
+  let readable = true;
+  useDeps({ isReadable: async () => readable });
+  smallUpload = async () => {
+    readable = false; // the file vanished from the phone's storage mid-upload
+    throw new TypeError('Load failed');
+  };
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo());
+  await settle();
+  const m = (await listWasteMedia(a))[0];
+  assert.equal(m.failureKind, 'unreadable');
+  assert.equal(m.status, 'failed');
+});
+
+test('RESTART: a file left "uploading" or "checking" by a closed app goes back to waiting (no stale "Uploading…"); a video keeps its resume URL', async () => {
+  online = false;
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'video', vid('v.mp4'));
+  await addWasteMedia(a, 'before', 'photo', photo());
+  const [v, p] = (await listWasteMedia(a)).sort((x, y) => x.kind.localeCompare(y.kind)).reverse();
+  await updateMediaIfPresent({ ...v, status: 'uploading', tusUrl: 'https://tus/keep', pausedForTurn: true });
+  await updateMediaIfPresent({ ...p, status: 'checking' });
+  await recoverAfterRestart();
+  const after = await listWasteMedia(a);
+  assert.deepEqual(after.map((m) => m.status).sort(), ['pending', 'pending']);
+  assert.equal(after.find((m) => m.kind === 'video')!.tusUrl, 'https://tus/keep');
+  assert.equal(after.find((m) => m.kind === 'video')!.pausedForTurn, false);
+});
+
+test('ONE SENDING PASS: a report whose photo and video finish in the two lanes at the same moment is sent exactly once', async () => {
+  const gate = deferred();
+  smallUpload = async () => gate.promise;
+  videoUpload = async (_p, o) => {
+    o.onUploadUrl('https://tus/s');
+    await gate.promise;
+  };
+  useDeps({ stallMs: 60_000 });
+  online = false;
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo());
+  await addWasteMedia(a, 'after', 'video', vid('s.mp4'));
+  await requestWasteSubmit(a);
+  online = true;
+  void kick();
+  void kick();
+  await new Promise((r) => setTimeout(r, 20));
+  gate.release();
+  await settle();
+  void kick();
+  await settle();
+  assert.equal(calls.submits.length, 1);
+  assert.equal(calls.submits[0].media.length, 2);
+});
+
+test('REMOVE while uploading: the upload is stopped first (its signal aborted), then the file is gone', async () => {
+  let aborted = false;
+  const started = deferred();
+  smallUpload = async (_p, signal) => {
+    started.release();
+    await new Promise<void>((_r, reject) => signal?.addEventListener('abort', () => {
+      aborted = true;
+      reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    }));
+  };
+  useDeps({ stallMs: 60_000 });
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo());
+  await started.promise;
+  const m = (await listWasteMedia(a))[0];
+  await removeWasteMedia(m.id);
+  await settle();
+  assert.equal(aborted, true);
+  assert.equal((await listWasteMedia(a)).length, 0, 'not brought back by the stopped upload');
 });
