@@ -45,11 +45,11 @@ test('TILE: a video paused for another report says so, with what the server alre
   assert.equal(d.canRetry, false);
 });
 
-test('TILE: an unreadable file says exactly what to do; a refused one says why; neither offers Try again', () => {
+test('TILE: an unreadable file says what to do AND offers Try again (it is read again); a refused one says why and does not', () => {
   const unreadable = describeWasteMedia(media({ status: 'failed', permanentFailure: true, failureKind: 'unreadable', lastError: 'This file can’t be read from your phone. Remove it and add it again.' }), live());
   assert.equal(unreadable.label, 'Can’t be read');
-  assert.equal(unreadable.detail, 'This file can’t be read from your phone. Remove it and add it again.');
-  assert.equal(unreadable.canRetry, false);
+  assert.match(unreadable.detail!, /^This file can’t be read from your phone\. Remove it and add it again\. If you think the file is fine, tap Try again\./);
+  assert.equal(unreadable.canRetry, true);
   const refused = describeWasteMedia(media({ status: 'failed', permanentFailure: true, failureKind: 'refused', lastError: 'That video is 61.00 seconds long. The limit is 60 seconds.' }), live());
   assert.equal(refused.label, 'Not accepted');
   assert.match(refused.detail!, /61\.00 seconds.*Remove it to send the report\./);
@@ -120,4 +120,17 @@ test('GUARD: the 60-second and 150 MB limits are unchanged', () => {
   const rules = src('src', 'waste', 'wasteRules.ts');
   assert.match(rules, /maxVideoBytes: 157_286_400/);
   assert.match(rules, /maxVideoSeconds: 60,/);
+});
+
+test('TILE: after many attempts the real reason stays, the count is apart, and the technical detail is in brackets', () => {
+  const d = describeWasteMedia(media({ attempts: 7, lastError: 'The server couldn’t take the file just now (error 503).', lastErrorDetail: 'HTTP 503: Service Unavailable', lastErrorAt: '2026-11-09T09:48:00Z' }), live());
+  assert.equal(d.label, 'Waiting to retry · attempt 7');
+  assert.match(d.detail!, /^The server couldn’t take the file just now \(error 503\)\. at 09:48 Tried 7 times - it keeps trying by itself; check the phone has signal\. \(Details: HTTP 503: Service Unavailable\)$/);
+});
+
+test('TILE: a file that can\'t be read just now says so, offers Try again, and is not shown as an upload attempt', () => {
+  const d = describeWasteMedia(media({ readFailures: 1, lastError: 'This file couldn’t be read from your phone just now. It will be checked again.', lastErrorDetail: 'Reading the saved file failed' }), live());
+  assert.equal(d.label, 'Can’t read it just now');
+  assert.equal(d.canRetry, true);
+  assert.match(d.detail!, /checked again/);
 });

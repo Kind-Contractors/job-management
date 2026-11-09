@@ -76,6 +76,13 @@ export interface WasteMedia {
   pausedForTurn?: boolean;
   /** When lastError happened. */
   lastErrorAt?: string | null;
+  /** The technical detail behind lastError (HTTP status, browser message) - for troubleshooting; shown in small print. */
+  lastErrorDetail?: string | null;
+  /** Failed readability checks in a row, and when the first of them happened (a file is only given up after several, over time). */
+  readFailures?: number;
+  firstReadFailureAt?: string | null;
+  /** Why a video's optional preview image was skipped (the video itself was sent without it). */
+  posterSkipped?: string | null;
 }
 
 interface WasteQueueDB extends DBSchema {

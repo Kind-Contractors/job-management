@@ -115,7 +115,7 @@ export default function WasteReportSentPage() {
           {state.uploads.retrying > 0 && (
             <div className="mt-2 text-[12.5px] text-due-fg" data-testid="waste-retrying">
               {state.uploads.retrying === 1 ? '1 file is' : `${state.uploads.retrying} files are`} waiting for a better signal. They keep trying by themselves.{' '}
-              <button type="button" onClick={() => void retryWaitingUploads(reportId)} className="cursor-pointer font-semibold underline">
+              <button type="button" onClick={() => void retryWaitingUploads(reportId, { manual: true })} className="cursor-pointer font-semibold underline">
                 Try now
               </button>
             </div>

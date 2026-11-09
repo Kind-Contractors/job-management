@@ -298,7 +298,7 @@ test('STUCK FIX: the sending screen tells "needs attention" (with the reasons an
   const page = readFileSync(join(process.cwd(), 'src', 'waste', 'WasteReportSentPage.tsx'), 'utf8');
   assert.match(page, /Your report needs attention/);
   assert.match(page, /navigate\(`\/waste\?report=\$\{reportId\}`\)/, 'opens THAT report');
-  assert.match(page, /retryWaitingUploads\(reportId\)/);
+  assert.match(page, /retryWaitingUploads\(reportId, \{ manual: true \}\)/, '"Try now" is a manual retry (not limited)');
   assert.match(page, /state\.kind === 'sending' && state\.failed === 0/, '"will be sent by itself" is only said when nothing blocks it');
 });
 
