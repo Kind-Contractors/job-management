@@ -499,7 +499,8 @@ test('STUCK FIX: a file that keeps failing never stops for good - it keeps retry
   assert.equal(waiting.status, 'pending', 'still queued after 12+ failures - not stopped');
   assert.equal(waiting.permanentFailure, false);
   assert.ok(waiting.attempts >= 12);
-  assert.match(waiting.lastError ?? '', /keeps trying by itself/);
+  assert.match(waiting.lastError ?? '', /interrupted - no answer from the server/, 'the REAL reason is kept after 12+ attempts (never replaced by a generic text)');
+  assert.equal(waiting.lastErrorDetail, 'Load failed', 'with the technical detail beside it');
   assert.ok(Date.parse(waiting.nextAttemptAt!) - clock <= 10 * 60_000, 'retried at most 10 minutes apart');
   assert.equal(calls.submits.length, 0, 'never sent while a file is missing');
   assert.deepEqual(summarizeWasteUploads(await listWasteMedia(reportId)), { total: 3, ready: 2, retrying: 1, needsAttention: 0, reasons: [] });
@@ -551,12 +552,12 @@ test('STUCK FIX: "Try now" / coming back to the app retries a waiting file at on
   await settle();
   const before = calls.small.length;
   smallUpload = async () => undefined;
-  await retryWaitingUploads(a); // no clock change: the pause has not ended
+  await retryWaitingUploads(a, { manual: true }); // "Try now" - no clock change: the pause has not ended
   await waitForWasteWorker();
   assert.equal(calls.submits.map((x) => x.reportId).join(), a, 'report A retried and sent at once');
   assert.ok(calls.small.length > before);
   assert.equal((await listWasteMedia(b))[0].status, 'pending', 'report B still waits for its own pause');
-  await retryWaitingUploads();
+  await retryWaitingUploads(undefined, { manual: true });
   await waitForWasteWorker();
   assert.deepEqual(calls.submits.map((x) => x.reportId), [a, b]);
 });
@@ -850,12 +851,13 @@ test('STALL: a video that stops making progress is paused for real (signal abort
   assert.equal(calls.video[1].tusUrl, 'https://tus/stall');
 });
 
-test('UNREADABLE: a file the phone can no longer read stops at once with a clear message - it is never retried as a network failure', async () => {
+test('UNREADABLE: a file that keeps failing to be read over time is finally marked unreadable - never uploaded, never retried as a network failure', async () => {
   useDeps({ isReadable: async () => false });
   const a = await draftWith();
   await addWasteMedia(a, 'before', 'photo', photo());
   await requestWasteSubmit(a);
   await settle();
+  assert.equal((await listWasteMedia(a))[0].status, 'pending', 'one failed read is not proof: checked again later');
   await passes(3);
   const m = (await listWasteMedia(a))[0];
   assert.equal(m.status, 'failed');
@@ -867,19 +869,22 @@ test('UNREADABLE: a file the phone can no longer read stops at once with a clear
   assert.equal(summarizeWasteUploads(await listWasteMedia(a)).needsAttention, 1);
 });
 
-test('UNREADABLE: a failure with no answer is checked against the file - unreadable stops for good, readable keeps retrying', async () => {
+test('UNREADABLE: a failure with no answer is checked against the file - a read problem is NOT counted as an upload attempt', async () => {
   let readable = true;
   useDeps({ isReadable: async () => readable });
   smallUpload = async () => {
-    readable = false; // the file vanished from the phone's storage mid-upload
+    readable = false; // the file can't be read mid-upload
     throw new TypeError('Load failed');
   };
   const a = await draftWith();
   await addWasteMedia(a, 'before', 'photo', photo());
   await settle();
   const m = (await listWasteMedia(a))[0];
-  assert.equal(m.failureKind, 'unreadable');
-  assert.equal(m.status, 'failed');
+  assert.equal(m.status, 'pending', 'checked again later, not given up');
+  assert.equal(m.readFailures, 1);
+  assert.equal(m.attempts, 0, 'not an upload attempt');
+  assert.match(m.lastError ?? '', /couldn’t be read from your phone just now/);
+  assert.match(m.lastErrorDetail ?? '', /Load failed/);
 });
 
 test('RESTART: a file left "uploading" or "checking" by a closed app goes back to waiting (no stale "Uploading…"); a video keeps its resume URL', async () => {
@@ -941,4 +946,153 @@ test('REMOVE while uploading: the upload is stopped first (its signal aborted), 
   await settle();
   assert.equal(aborted, true);
   assert.equal((await listWasteMedia(a)).length, 0, 'not brought back by the stopped upload');
+});
+
+// ---- 2026-11-09: reading problems, optional posters, real reasons, paced retries -------------------------------------------------
+test('READ: a file briefly unreadable recovers by itself - checked again, then uploaded; no upload attempt was counted', async () => {
+  let readable = false;
+  useDeps({ isReadable: async () => readable });
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo());
+  await requestWasteSubmit(a);
+  await settle();
+  let m = (await listWasteMedia(a))[0];
+  assert.deepEqual([m.status, m.readFailures, m.attempts, m.permanentFailure], ['pending', 1, 0, false]);
+  assert.equal(calls.small.length, 0);
+  readable = true; // the phone can read it again
+  await passes(1);
+  assert.equal(calls.submits.length, 1, 'uploaded, checked and sent');
+});
+
+test('READ: a file marked unreadable that becomes readable again carries on - when the app comes back, and by Try again', async () => {
+  let readable = false;
+  useDeps({ isReadable: async () => readable });
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo());
+  await requestWasteSubmit(a);
+  await settle();
+  await passes(4); // several failed checks over more than 10 minutes
+  let m = (await listWasteMedia(a))[0];
+  assert.equal(m.failureKind, 'unreadable');
+  // still unreadable: Try again keeps it marked (with the time of this check)
+  await retryWasteMedia(m.id);
+  await waitForWasteWorker();
+  assert.equal((await listWasteMedia(a))[0].failureKind, 'unreadable');
+  // readable again: the app coming back (automatic) reads it again and it carries on
+  readable = true;
+  await retryWaitingUploads();
+  await waitForWasteWorker();
+  assert.equal(calls.submits.length, 1);
+});
+
+test('READ: a file with nothing saved (or saved empty) is identified as unreadable at once', async () => {
+  online = false;
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo());
+  const m = (await listWasteMedia(a))[0];
+  await updateMediaIfPresent({ ...m, blob: new Blob([]) });
+  online = true;
+  useDeps({ isReadable: async (b) => b.size > 0 });
+  await settle();
+  const after = (await listWasteMedia(a))[0];
+  assert.equal(after.failureKind, 'unreadable');
+  assert.equal(after.permanentFailure, true);
+});
+
+test('POSTER: an unreadable poster is skipped and the VIDEO still uploads and is sent - the poster is never retried in its place', async () => {
+  useDeps({ isReadable: async (b) => b.size !== 10 }); // the test poster is 10 bytes: make it unreadable
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'video', new File([new Uint8Array(9)], 'v.mov', { type: 'video/quicktime', lastModified: 31 }));
+  await requestWasteSubmit(a);
+  await settle();
+  assert.equal(calls.small.filter((p) => p.endsWith('.thumb.jpg')).length, 0, 'poster never sent');
+  assert.equal(calls.video.length, 1, 'video uploaded on the first try');
+  assert.equal(calls.submits.length, 1);
+  assert.equal(calls.submits[0].media[0].thumbnailPath, null, 'sent without a poster');
+});
+
+test('POSTER: a poster whose upload fails (no answer, refused, or stalled) is skipped; the video uploads in the same attempt', async () => {
+  for (const failure of [new TypeError('Load failed'), Object.assign(new Error('nope'), { status: 500 }), 'hang']) {
+    await reset();
+    smallUpload = async (path) => {
+      if (!path.endsWith('.thumb.jpg')) return;
+      if (failure === 'hang') return new Promise<void>(() => undefined);
+      throw failure;
+    };
+    const a = await draftWith();
+    await addWasteMedia(a, 'before', 'video', new File([new Uint8Array(9)], 'v.mov', { type: 'video/quicktime', lastModified: 32 }));
+    await requestWasteSubmit(a);
+    await settle();
+    assert.equal(calls.video.length, 1, `video uploaded despite the poster (${String(failure)})`);
+    assert.equal(calls.submits.length, 1);
+    assert.equal(calls.submits[0].media[0].thumbnailPath, null);
+  }
+});
+
+test('POSTER: a poster that can\'t be CHECKED is skipped too - the video is not held back for it', async () => {
+  checkResult = (path) => (path.endsWith('.thumb.jpg') ? { result: 'retry', message: 'busy' } : { result: 'ok', durationSeconds: 12 });
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'video', new File([new Uint8Array(9)], 'v.mov', { type: 'video/quicktime', lastModified: 33 }));
+  await requestWasteSubmit(a);
+  await settle();
+  assert.equal(calls.submits.length, 1);
+  assert.equal(calls.submits[0].media[0].thumbnailPath, null);
+});
+
+test('REASON: after six and more attempts the real reason (and its detail) is still shown; the count is shown apart', async () => {
+  smallUpload = async () => {
+    throw Object.assign(new Error('Service Unavailable'), { status: 503 });
+  };
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo());
+  await settle();
+  await passes(7);
+  const m = (await listWasteMedia(a))[0];
+  assert.ok(m.attempts >= 6);
+  assert.equal(m.lastError, 'The server couldn’t take the file just now (error 503).');
+  assert.equal(m.lastErrorDetail, 'HTTP 503: Service Unavailable');
+});
+
+test('PACED: coming back to the app or online right after a failure does NOT retry again at once; once a minute has passed it does; Try again always does', async () => {
+  let tries = 0;
+  smallUpload = async () => {
+    tries += 1;
+    throw new TypeError('Load failed');
+  };
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo());
+  await settle();
+  assert.equal(tries, 1);
+  for (let i = 0; i < 5; i++) await retryWaitingUploads(); // switching apps back and forth / online events
+  await waitForWasteWorker();
+  assert.equal(tries, 1, 'no rapid repeated attempts');
+  clock += 61_000; // its pause (5 s) and a minute have passed -> the usual timer would have retried; an early retry is now allowed
+  const m = (await listWasteMedia(a))[0];
+  await updateMediaIfPresent({ ...m, nextAttemptAt: new Date(clock + 600_000).toISOString() }); // pretend a long pause is set
+  await retryWaitingUploads();
+  await waitForWasteWorker();
+  assert.equal(tries, 2, 'one early retry after a minute');
+  await retryWaitingUploads();
+  await waitForWasteWorker();
+  assert.equal(tries, 2, 'and not again straight away');
+  await retryWasteMedia(m.id); // Try again: always at once
+  await waitForWasteWorker();
+  assert.equal(tries, 3);
+});
+
+test('PACED: the usual growing pauses are unchanged (5 s, 15 s, 1 min, 3 min, then 10 min)', async () => {
+  smallUpload = async () => {
+    throw new TypeError('Load failed');
+  };
+  const a = await draftWith();
+  await addWasteMedia(a, 'before', 'photo', photo());
+  const gaps: number[] = [];
+  await settle();
+  for (let i = 0; i < 5; i++) {
+    const m = (await listWasteMedia(a))[0];
+    gaps.push((Date.parse(m.nextAttemptAt!) - clock) / 1000);
+    clock = Date.parse(m.nextAttemptAt!) + 1;
+    await settle();
+  }
+  assert.deepEqual(gaps, [5, 15, 60, 180, 600]);
 });
