@@ -7,8 +7,6 @@
 // Everything is faked: the function endpoint is a fake `fetch`, so no request leaves the machine.
 import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 
 import { sendInvoice } from '../src/repository/invoicesRepository';

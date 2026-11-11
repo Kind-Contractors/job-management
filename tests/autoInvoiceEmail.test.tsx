@@ -4,8 +4,6 @@
 // REAL xero-create-invoice code in xeroCreateInvoiceFunction.test.ts (AUTO-EMAIL 1-11), and the database policies by the
 // local PostgreSQL rehearsal (rehearse-auto-email).
 import 'fake-indexeddb/auto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 import { beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';

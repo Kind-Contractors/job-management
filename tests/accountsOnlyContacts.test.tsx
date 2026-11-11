@@ -3,8 +3,6 @@
 // written only when explicitly given, so saving other fields never changes it. The job-report picker labels accounts-only
 // contacts and never preselects one, but a deliberate choice is allowed (with a warning). Invoicing and Xero linking are unchanged.
 // Real code under a fake fetch (no network: the app's Supabase URL is tests.invalid) and static page renders.
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

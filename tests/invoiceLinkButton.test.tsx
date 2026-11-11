@@ -6,8 +6,6 @@
 // Proved: no Link button, link dialog, person picker or "not linked" notice for any contact; with no recipient, "Choose a Xero
 // contact for this invoice" and the way to set the building's default recipient are offered; an older contact-based default is
 // shown by its Xero name with a one-off choice beside it; a stale one is explained; an invoice already in Xero offers no change.
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

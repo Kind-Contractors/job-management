@@ -2,8 +2,6 @@
 // once the list has reloaded; if that reload fails, the chosen id is not in the list. Then nothing may be submitted - and never to
 // the building default or anyone else in its place - until the list is reloaded. (Before this, the button fell back to "is there a
 // usable default?", and the dropdown, unable to show the chosen id, displayed the default while the send would use the chosen id.)
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

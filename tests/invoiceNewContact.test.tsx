@@ -1,8 +1,6 @@
 // Contacts are no longer added from the invoice screen ("+ Add another email address" was removed): they are added and edited in
 // the Building File (Contacts & Defaults). The shared new-contact form keeps its checks, including the optional required-email
 // variant; a new contact still cannot be invoiced until it is linked to its existing Xero contact.
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

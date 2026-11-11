@@ -7,8 +7,6 @@
 // sending. There is no DOM library in this repo, so the rule is tested directly and the editor's wiring in its source.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 
 import { resolveSendRecipientId, UNLINKED_NEW_CONTACT_MESSAGE } from '../src/lib/invoiceRecipient';

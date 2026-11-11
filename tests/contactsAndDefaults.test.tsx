@@ -3,8 +3,6 @@
 // accounts-only contact; the invoice default stays per building (server-validated). The Site file only summarises, and the
 // invoice editor shows its recipient with "Change for this invoice" (never changing a saved default). Components are rendered
 // to static markup (there is no DOM library in this repo); wiring and safeguards are checked from source.
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

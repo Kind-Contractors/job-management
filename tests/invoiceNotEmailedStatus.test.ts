@@ -2,8 +2,6 @@
 // accounts work, is never shown or treated as sent, cannot be re-sent through the app, and is allowed by the database.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 
 import { isInvoiceInXero } from '../src/lib/invoiceStatus';

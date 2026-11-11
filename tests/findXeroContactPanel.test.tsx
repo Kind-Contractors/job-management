@@ -3,8 +3,6 @@
 // one chosen for a single invoice), never through a person. Links people already have stay in the database (an older
 // contact-based default still relies on its person's link until it is replaced) - only the screens went. These tests pin that the
 // old screens are gone and that the one remaining Xero search (XeroRecipientSearch) searches the way the old panel did.
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

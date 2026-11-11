@@ -4,8 +4,6 @@
 // (the screens for linking people were removed; links people already have stay in the database, and an older contact-based default
 // still relies on its person's link until it is replaced). Report recipients do not depend on any of this. The server side of the
 // same rules is in xeroCreateInvoiceFunction.test.ts (NO-AUTO and SHARED MAILBOX tests).
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

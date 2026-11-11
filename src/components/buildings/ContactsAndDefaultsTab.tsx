@@ -133,7 +133,6 @@ export default function ContactsAndDefaultsTab({ building, contacts, contactsLoa
                           type="button"
                           onClick={() => {
                             // A new edit clears the last save's notice, so a confirmation always belongs to the latest save.
-                            // A new edit clears the last save's notice, so a confirmation always belongs to the latest save.
                             setNotice(null);
                             setEditingId(c.id);
                           }}

@@ -1,8 +1,6 @@
 // The Building File layout (2026-10-27 redesign): header + stats strip, jobs table with the yearly total, report rows, the Invoicing
 // card, compact contacts. Only existing features were rearranged - these tests pin that nothing was lost or added. Components are
 // rendered to static markup (there is no DOM library in this repo); the page itself is checked from its source.
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

@@ -3,8 +3,6 @@
 // DOM library in this repo, so the components' wiring is checked in their source, and the click-through is the DEV browser test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 
 import {
