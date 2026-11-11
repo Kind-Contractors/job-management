@@ -40,7 +40,13 @@ export type SafeguardCode =
   | 'DEFAULT_WRONG_ORGANISATION'
   | 'RECIPIENT_LOCKED'
   | 'INVOICE_ORG_MISMATCH'
-  | 'XERO_INVOICE_ALREADY_RECORDED';
+  | 'XERO_INVOICE_ALREADY_RECORDED'
+  // A Xero contact named directly (a building's own recipient, or one chosen for a single invoice):
+  | 'CONTACT_NOT_IN_ORGANISATION'
+  | 'CONTACT_MERGED'
+  | 'CONTACT_CHANGED'
+  // A person chosen for an invoice whose building has its own Xero recipient:
+  | 'USE_XERO_RECIPIENT';
 
 export class XeroSafeguardError extends Error {
   readonly code: SafeguardCode;

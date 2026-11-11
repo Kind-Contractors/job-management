@@ -105,32 +105,31 @@ test('RULES: with "Send invoice to" hidden, a Xero contact is still required unl
 });
 
 // ---- the editor, rendered -----------------------------------------------------------------------------------------------------------
-test('EDITOR toggle OFF, building default usable: "Create in Xero", the default Xero contact is shown with "Change for this invoice"', () => {
+test('EDITOR toggle OFF, building default usable: "Create in Xero", the default Xero contact is shown with a one-off Xero choice', () => {
   const html = render({ toggle: false, sending: true });
   // (The button's enabled state is not checked in static markup: line items load in an effect that does not run here.)
   assert.equal(mainButton(html)[2], 'Create in Xero');
   assert.doesNotMatch(html, /Choose the Xero contact|Choose who to send/, 'the default decides the Xero contact, so nothing needs choosing');
   assert.equal(hasSendTo(html), false);
-  assert.doesNotMatch(html, /<select/, 'no picker until "Change for this invoice"');
+  assert.doesNotMatch(html, /<select|role="combobox"/, 'no person picker (removed 2026-11-11)');
   const r = recipient(html);
   assert.match(r, /Xero contact for this invoice/);
-  assert.match(r, />Sam<\/span><span class="text-neutral-600">ct-sam@client\.test<\/span><span class="text-teal-700">✓ Xero: Sam Ltd<\/span>/, 'name, email, Xero contact');
-  assert.match(r, /· this building's default<\/span>/);
+  assert.match(r, />Sam Ltd<\/span><span class="text-neutral-500">· this building's default \(contact-based, the older\s+way\)<\/span>/, 'the default by its Xero name');
   assert.equal(heading(html), 'Xero contact for this invoice It will not be emailed.', '"It will not be emailed." on the heading row');
-  assert.match(r, />Change for this invoice<\/button>/);
+  assert.match(r, />Use a different Xero contact for this invoice<\/button>/);
   assert.doesNotMatch(html, /data-testid="no-invoice-default"/);
   assert.doesNotMatch(html, /Send invoice</);
 });
 
-test('EDITOR toggle OFF, NO usable default: a Xero-contact picker with why, where to set a default (new tab), and the button waits for a choice', () => {
+test('EDITOR toggle OFF, NO usable default: why, where to set a default (new tab), a Xero contact can be chosen, and nothing is preselected', () => {
   const html = render({ toggle: false, sending: false, def: null });
   assert.equal(hasSendTo(html), false);
   assert.equal(heading(html), 'Xero contact for this invoice It will not be emailed.');
-  assert.ok(hasPicker(html), 'a picker under it');
-  assert.match(html, /data-testid="no-invoice-default"[^>]*>This building has no default invoice recipient, so one is chosen for each invoice\./);
-  assert.match(html, /Choose the Xero contact this invoice is for\. A contact that is not linked to Xero yet can be chosen; it must be linked to its existing Xero\s+contact before the invoice can be sent\./);
+  assert.ok(!hasPicker(html), 'no person picker (removed 2026-11-11)');
+  assert.match(html, /data-testid="no-invoice-default"[^>]*>This building has no default recipient in Xero yet, so a Xero contact is chosen for each invoice\./);
+  assert.doesNotMatch(html, /A contact that is not linked to Xero yet can be chosen/, 'the outdated general hint is gone');
   assert.equal(mainButton(html)[2], 'Create in Xero');
-  assert.match(html, /<option value="" disabled=""(?: class="[^"]*")? selected="">Choose a recipient…<\/option>/, 'nothing is preselected: not the first, primary or only contact');
+  assert.match(recipient(html), /No recipient chosen yet\.[\s\S]*>Choose a Xero contact for this invoice<\/button>/, 'nothing is preselected: not the first, primary or only contact');
   assert.doesNotMatch(html, /Change for this invoice|Use the building default/);
 });
 
@@ -144,22 +143,22 @@ test('EDITOR toggle OFF, invoice already in Xero: the locked Xero contact is sho
   assert.doesNotMatch(html, /retry emailing it/);
 });
 
-test('EDITOR toggle ON, system sending ON: "Send invoice"; "Send invoice to" the building default, changeable for this invoice', () => {
+test('EDITOR toggle ON, system sending ON: "Send invoice"; "Send invoice to" the building default, with a one-off Xero choice', () => {
   const html = render({ toggle: true, sending: true });
   assert.equal(mainButton(html)[2], 'Send invoice');
   const r = recipient(html);
   assert.match(r, /Send invoice to/);
-  assert.match(r, />Sam<\/span><span class="text-neutral-600">ct-sam@client\.test<\/span><span class="text-teal-700">✓ Xero: Sam Ltd<\/span>/, 'name, email, Xero contact');
-  assert.match(r, />Change for this invoice<\/button>/);
+  assert.match(r, />Sam Ltd<\/span><span class="text-neutral-500">· this building's default \(contact-based, the older\s+way\)<\/span>/);
+  assert.match(r, />Use a different Xero contact for this invoice<\/button>/);
   assert.doesNotMatch(r, /It will not be emailed/);
-  assert.doesNotMatch(html, /<select/);
+  assert.doesNotMatch(html, /<select|role="combobox"/);
 });
 
-test('EDITOR toggle ON, NO usable default: "Send invoice to" picker, nothing preselected, and the explanation', () => {
+test('EDITOR toggle ON, NO usable default: "Send invoice to", nothing preselected, a Xero contact can be chosen, and the explanation', () => {
   const html = render({ toggle: true, sending: true, def: null });
   assert.equal(heading(html), 'Send invoice to', 'emailed: no "will not be emailed" note');
-  assert.ok(hasPicker(html));
-  assert.match(html, /<option value="" disabled=""(?: class="[^"]*")? selected="">Choose a recipient…<\/option>/);
+  assert.ok(!hasPicker(html), 'no person picker (removed 2026-11-11)');
+  assert.match(recipient(html), /No recipient chosen yet\.[\s\S]*>Choose a Xero contact for this invoice<\/button>/);
   assert.match(html, /data-testid="no-invoice-default"/);
 });
 
@@ -184,13 +183,12 @@ test('EDITOR: the sticky action bar is unchanged in every mode', () => {
 });
 
 // ---- what is sent: never a guessed or stale contact ----------------------------------------------------------------------------------
-test('SEND: with the picker hidden the default is used (no contactId) - a choice made earlier while it was visible is ignored', () => {
+test('SEND: with the default in use no contactId is sent (the server uses it); no person is ever sent from the editor', () => {
   const code = readSourceFile('src', 'components', 'jobs', 'InvoiceEditor.tsx');
-  assert.match(code, /const effectiveContactId = showContactPicker \? selectedContactId : '';/);
-  assert.match(code, /selectedContactId: effectiveContactId,/);
+  // People are not chosen on the invoice any more (removed 2026-11-11): the send never names one.
+  assert.match(code, /selectedContactId: '',/);
   assert.equal(resolveSendRecipientId({ addingNewContact: false, selectedContactId: '', usableDefaultContactId: 'ct-sam' }), undefined, 'the server uses the default');
   assert.throws(() => resolveSendRecipientId({ addingNewContact: false, selectedContactId: '', usableDefaultContactId: null }), /no usable default/, 'no default and no choice: refused, never guessed');
-  assert.equal(resolveSendRecipientId({ addingNewContact: false, selectedContactId: 'ct-pat', usableDefaultContactId: 'ct-sam' }), 'ct-pat', '"Change for this invoice" sends that contact');
 });
 
 test('SEND: the editor reads the system switch only through the read-only capabilities request; the server still decides', () => {

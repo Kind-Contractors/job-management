@@ -332,6 +332,18 @@ export interface BuildingDefaultRecipient {
   xeroOrgId: string;
 }
 
+/**
+ * A building's OWN invoice recipient: the Xero contact named on its invoices, chosen for this building only (no person attached;
+ * migration 20261110100000). Any number of buildings may share one. Name and email are as the manager saw them when choosing it
+ * (display only); the server re-reads the contact in Xero whenever it is used.
+ */
+export interface BuildingInvoiceRecipient {
+  xeroContactId: string;
+  xeroOrgId: string;
+  name: string;
+  email: string | null;
+}
+
 /** A job denormalized with its building/client for grid display. */
 export interface JobRow extends Job {
   buildingName: string;
@@ -351,6 +363,8 @@ export interface JobRow extends Job {
   clientContacts: JobContactSummary[];
   /** This job's building's saved default invoice recipient, or null when none has been chosen. */
   buildingDefaultRecipient: BuildingDefaultRecipient | null;
+  /** The building's own Xero invoice recipient, or null/omitted when it has none (then buildingDefaultRecipient may apply). */
+  buildingInvoiceRecipient?: BuildingInvoiceRecipient | null;
 }
 
 /**
@@ -387,6 +401,8 @@ export interface BuildingRow {
   access: BuildingAccessInfo | null;
   /** The saved default invoice recipient, or null. Set/cleared only through the manager-only xero-link-contact function. */
   defaultRecipient: BuildingDefaultRecipient | null;
+  /** The building's own Xero invoice recipient, or null/omitted when it has none. */
+  invoiceRecipient?: BuildingInvoiceRecipient | null;
 }
 
 /**

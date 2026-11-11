@@ -251,10 +251,23 @@ export async function getXeroInvoiceCapabilities(): Promise<XeroInvoiceCapabilit
   return { creationEnabled: data.creationEnabled, sendingEnabled: data.sendingEnabled };
 }
 
-export async function sendInvoice(invoiceId: string, contactId?: string): Promise<SendInvoiceResult> {
-  const { data, error } = await supabase.functions.invoke<SendInvoiceResult>('xero-create-invoice', {
-    body: { invoiceId, contactId },
-  });
+/** A Xero contact chosen for ONE invoice: its ContactID and the name the manager saw (the server refuses it if renamed since). */
+export interface OneOffXeroRecipient {
+  xeroContactId: string;
+  expectedName: string;
+}
+
+/**
+ * `recipient`: a person's local contacts.id chosen for this invoice (legacy; refused by the server when the building has its own
+ * Xero recipient), or a Xero contact chosen for this invoice only (never saved on the building), or omitted to use the building's
+ * own recipient / contact-based default (or, once Xero holds the invoice, its locked recipient).
+ */
+export async function sendInvoice(invoiceId: string, recipient?: string | OneOffXeroRecipient): Promise<SendInvoiceResult> {
+  const body =
+    typeof recipient === 'object' && recipient !== null
+      ? { invoiceId, xeroContactId: recipient.xeroContactId, expectedXeroContactName: recipient.expectedName }
+      : { invoiceId, contactId: recipient };
+  const { data, error } = await supabase.functions.invoke<SendInvoiceResult>('xero-create-invoice', { body });
   if (error) throw new Error(await describeInvokeError(error));
   if (!data) throw new Error('No response from xero-create-invoice.');
   return data;

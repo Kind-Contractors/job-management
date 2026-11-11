@@ -55,7 +55,7 @@ test('SAVE: the shared form creates the contact, then reloads the lists - and ne
 test('REMOVED: the invoice editor no longer adds contacts; it points to Contacts & Defaults in a new tab instead', () => {
   const editor = src('src', 'components', 'jobs', 'InvoiceEditor.tsx');
   assert.doesNotMatch(editor, /Add another email address|ADD_NEW_CONTACT_VALUE|<NewContactForm|NewRecipientDialog|createContactForClient/);
-  assert.match(editor, /Set up contacts &amp; defaults/);
+  assert.match(editor, /Set the building&apos;s default recipient/);
 });
 
 test('the invoice screen passes the job\'s client, its name and its building (for the Contacts & Defaults link)', () => {

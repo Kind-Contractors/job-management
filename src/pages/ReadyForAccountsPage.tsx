@@ -362,6 +362,7 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
                 invoiceDetails={buildingRows.find((b) => b.id === selected.job.buildingId)?.invoiceDetails ?? ''}
                 clientContacts={selected.job.clientContacts}
                 buildingDefault={selected.job.buildingDefaultRecipient}
+                buildingRecipient={selected.job.buildingInvoiceRecipient ?? null}
               />
             ) : selected.visit.invoiceId ? (
               <div className="mt-3 border border-neutral-300 bg-white p-3">

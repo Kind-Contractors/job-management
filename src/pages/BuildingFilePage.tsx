@@ -13,7 +13,7 @@ import BuildingReportsPanel from '../components/buildings/BuildingReportsPanel';
 import ChangeBuildingClientPanel from '../components/buildings/ChangeBuildingClientPanel';
 import BuildingManagementHistory from '../components/buildings/BuildingManagementHistory';
 import ContactsAndDefaultsTab from '../components/buildings/ContactsAndDefaultsTab';
-import { defaultRecipientProblem, isUsableRecipient, linkStatusLabel, localLinkStatus } from '../lib/xeroLinkStatus';
+import { defaultRecipientProblem } from '../lib/xeroLinkStatus';
 import { contactInitials, REPORT_DEFAULT_PROBLEM, reportDefaultSummary } from '../lib/contactDisplay';
 import { buildingReports } from '../lib/buildingReports';
 import BuildingInvoicesPanel from '../components/buildings/BuildingInvoicesPanel';
@@ -59,8 +59,6 @@ export default function BuildingFilePage() {
   const [editingBuilding, setEditingBuilding] = useState(false);
   const [changingClient, setChangingClient] = useState(false);
   const [clientNotice, setClientNotice] = useState<string | null>(null);
-  // The contact just added here: the notice offers to link it to its existing Xero contact straight away (optional).
-  // The contact whose "Link to Xero" was pressed: opens the shared LinkXeroContactDialog for exactly that contact.
   const [editingAccess, setEditingAccess] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [creatingJob, setCreatingJob] = useState(false);
@@ -172,7 +170,6 @@ export default function BuildingFilePage() {
   const jobsWithoutYearlyValue = buildingJobs.filter((j) => j.yearlyValue == null).length;
   // The same split the Job reports panel shows (ready = marked Completed or sent to the client).
   const reports = buildingReports(building.id, jobRows, historicalJobs.data ?? []);
-  const linkedContacts = contacts.filter(isUsableRecipient).length;
   // The two defaults, as the Site file summary shows them (managed on the Contacts & Defaults tab).
   const reportDefault = reportDefaultSummary(contacts);
   const invoiceDefaultProblem = defaultRecipientProblem(building.defaultRecipient, contacts);
@@ -264,7 +261,6 @@ export default function BuildingFilePage() {
         <Stat
           label="Contacts"
           value={contactsLoading || contactsError ? '…' : String(contacts.length)}
-          note={contactsLoading || contactsError ? undefined : `${linkedContacts} linked to Xero`}
         />
       </div>
 
@@ -427,14 +423,19 @@ export default function BuildingFilePage() {
                     </div>
                     <div>
                       <span className="text-neutral-600">Invoices for this building go to </span>
-                      {invoiceDefaultContact && !invoiceDefaultProblem ? (
+                      {building.invoiceRecipient ? (
                         <>
-                          <span className="font-semibold text-ink">{invoiceDefaultContact.name}</span>
-                          {invoiceDefaultContact.xeroContactName && <span className="text-teal-700"> · ✓ Xero: {invoiceDefaultContact.xeroContactName}</span>}
+                          <span className="font-semibold text-ink">{building.invoiceRecipient.name}</span>
+                          <span className="text-teal-700"> · default recipient in Xero</span>
+                        </>
+                      ) : invoiceDefaultContact && !invoiceDefaultProblem ? (
+                        <>
+                          <span className="font-semibold text-ink">{invoiceDefaultContact.xeroContactName ?? invoiceDefaultContact.name}</span>
+                          <span className="text-neutral-600"> · contact-based default (older way)</span>
                         </>
                       ) : (
                         <span className="text-due-fg">
-                          {invoiceDefaultProblem ?? 'no default yet: a recipient is chosen for each invoice.'}
+                          {invoiceDefaultProblem ?? 'no default recipient yet: a Xero contact is chosen for each invoice.'}
                         </span>
                       )}
                     </div>
@@ -464,12 +465,6 @@ export default function BuildingFilePage() {
                           </div>
                           <div className="truncate text-[11.5px] text-neutral-600">{c.email ?? c.phoneNumber ?? 'No email or phone'}</div>
                         </div>
-                        <span
-                          title={linkStatusLabel(c)}
-                          className={`flex-none text-[11px] ${localLinkStatus(c) === 'linked' ? 'text-teal-700' : 'text-due-fg'}`}
-                        >
-                          {localLinkStatus(c) === 'linked' ? '✓ Xero' : localLinkStatus(c) === 'needs_relink' ? 'Link again' : 'Not linked'}
-                        </span>
                       </div>
                     ))}
                     </ScrollableList>

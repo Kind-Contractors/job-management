@@ -45,6 +45,11 @@ export interface XeroLinkVerification {
   state: XeroLinkState;
   currentName?: string | null;
   nameChanged?: boolean;
+  /** 'building' when the building's OWN Xero recipient was checked (then `current` holds its live details when found). */
+  recipientSource?: 'building';
+  /** The building's own recipient as Xero holds it now: full name, email and billing address. */
+  current?: XeroRecipientCandidate | null;
+  emailChanged?: boolean;
 }
 
 export interface LinkContactInput {
@@ -100,6 +105,60 @@ export async function unlinkContact(localContactId: string): Promise<void> {
 
 export async function setBuildingDefaultRecipient(buildingId: string, localContactId: string): Promise<void> {
   await invoke({ action: 'setBuildingDefault', buildingId, localContactId });
+}
+
+/** A candidate for a building's (or one invoice's) Xero recipient: the full email and address, for managers (decided 2026-11-10). */
+export interface XeroRecipientCandidate extends Omit<XeroContactCandidate, 'emailHint'> {
+  emailHint: string | null;
+  email: string | null;
+  address: string | null;
+}
+
+export interface XeroRecipientSearchResult {
+  results: XeroRecipientCandidate[];
+  mayBeIncomplete: boolean;
+}
+
+/** Read-only search of the connected Xero organisation for an invoice recipient (by name, or any text Xero matches). Nothing is chosen. */
+export async function searchXeroRecipients(term: string): Promise<XeroRecipientSearchResult> {
+  const out = await invoke<{ results: XeroRecipientCandidate[]; mayBeIncomplete?: boolean }>({ action: 'searchRecipients', term });
+  return { results: out.results ?? [], mayBeIncomplete: out.mayBeIncomplete === true };
+}
+
+export type XeroRecipientState = 'ok' | 'not_found' | 'not_active' | 'merged' | 'no_email';
+
+/** One Xero contact's current details, read by id in the connected organisation (read-only). */
+export async function getXeroRecipient(xeroContactId: string): Promise<{ state: XeroRecipientState; contact: XeroRecipientCandidate | null }> {
+  return invoke({ action: 'getRecipient', xeroContactId });
+}
+
+/** The building's recipient the manager saw: both null = none. A save is refused (reload) if either has changed since. */
+export interface ExpectedBuildingRecipient {
+  expectedCurrentXeroContactId: string | null;
+  expectedCurrentXeroOrgId: string | null;
+}
+
+export interface SetBuildingRecipientResult {
+  recipient: XeroRecipientCandidate & { xeroOrgId: string };
+  previous: { xeroContactId: string; xeroOrgId: string } | null;
+  /** True when the same Xero contact was confirmed again (its details refreshed). */
+  unchanged: boolean;
+}
+
+/**
+ * Makes the exact Xero contact the manager confirmed THIS building's invoice recipient (no other building, contact or invoice is
+ * changed). The server re-reads it in the connected organisation, refuses it if blocked or renamed (expectedName), and refuses
+ * the save if the building's recipient is no longer the one the manager saw.
+ */
+export async function setBuildingRecipient(
+  input: { buildingId: string; xeroContactId: string; expectedName: string } & ExpectedBuildingRecipient,
+): Promise<SetBuildingRecipientResult> {
+  return invoke<SetBuildingRecipientResult>({ action: 'setBuildingRecipient', ...input });
+}
+
+/** Clears THIS building's invoice recipient - only if it is still the one the manager saw. */
+export async function clearBuildingRecipient(input: { buildingId: string } & ExpectedBuildingRecipient): Promise<{ cleared: boolean }> {
+  return invoke<{ cleared: boolean }>({ action: 'clearBuildingRecipient', ...input });
 }
 
 export async function clearBuildingDefaultRecipient(buildingId: string): Promise<void> {

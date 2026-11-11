@@ -38,19 +38,17 @@ test('FAILED REFRESH after adding a contact: the new id is chosen but the list s
   assert.equal(resolveSendRecipientId({ addingNewContact: false, selectedContactId: 'ct-new', usableDefaultContactId: 'ct-default', selectedIsAvailable: true }), 'ct-new');
 });
 
-test('SUBMISSION BLOCKED while unavailable: the main button needs the chosen contact in the list, and the send passes the same fact', () => {
-  assert.match(editor, /const recipientUnavailable = !recipientLocked && recipientSelectionState\(effectiveContactId, false, clientContacts\) === 'missing';/);
-  assert.match(editor, /const recipientChosen = recipientLocked \|\| \(!recipientUnavailable && \(selectedContact \? true : !!usableDefaultContactId\)\);/);
+test('SUBMISSION: the main button needs a recipient that is on screen, and the send is decided before the draft is saved', () => {
+  assert.match(editor, /const recipientChosen = recipientLocked \|\| usingOneOffXero \|\| hasBuildingRecipient \|\| usingContactDefault;/);
   assert.match(editor, /disabled=\{anyMutationPending \|\| lines\.length === 0 \|\| !recipientChosen\}/);
-  assert.match(editor, /selectedIsAvailable: !recipientUnavailable,/);
   const send = editor.slice(editor.indexOf('const sendMutation'));
-  assert.ok(send.indexOf('resolveSendRecipientId(') < send.indexOf('await persistCurrentDraft()'), 'refused before the draft is saved');
+  assert.ok(send.indexOf('resolveSendRequest(') < send.indexOf('await persistCurrentDraft()'), 'refused before the draft is saved');
 });
 
-test('the screen never shows a different recipient: a "not loaded yet" entry is shown for the chosen id, with the reason and a reload', () => {
-  assert.match(editor, /\.\.\.\(recipientUnavailable \? \[\{ value: effectiveContactId, text: 'Chosen contact not loaded yet', disabled: true \},?\s*\] : \[\]\)/);
-  assert.match(editor, /\{recipientUnavailable && \(\s*<div data-testid="recipient-unavailable" role="alert"[^>]*>\s*\{RECIPIENT_UNAVAILABLE_MESSAGE\}/);
-  assert.match(editor, /onClick=\{\(\) => void queryClient\.invalidateQueries\(\{ queryKey: \['jobRows'\] \}\)\}[\s\S]{0,120}Reload recipients/);
+test('NO STALE CHOICE: the editor no longer has a list of people that could be out of date - a chosen person cannot go "missing"', () => {
+  // Since 2026-11-11 the recipient is the building's default, a working contact-based default, or a Xero contact chosen in the
+  // search (kept with its name and email): nothing on screen depends on the contacts list having reloaded.
+  assert.doesNotMatch(editor, /recipientUnavailable|RECIPIENT_UNAVAILABLE_MESSAGE|Chosen contact not loaded yet|recipientSelectionState/);
 });
 
 test('DEFAULT unchanged: with nothing chosen, a usable building default is used (no contactId sent); without one, nothing is guessed', () => {

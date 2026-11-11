@@ -1,9 +1,11 @@
-// The "Link" action beside unlinked recipients in the invoice editor. Rendered on the REAL components (static markup from a seeded
-// query cache; there is no DOM library in this repo), plus the Link button's click handler invoked directly from the element tree.
+// The invoice editor no longer offers people as recipients or links them to Xero contacts (removed 2026-11-11): an invoice is
+// addressed to the building's default recipient in Xero, an older contact-based default that still works, or a Xero contact chosen
+// for this invoice only (found by name). Rendered on the REAL editor (static markup from a seeded query cache; there is no DOM
+// library in this repo).
 //
-// Proved: every unlinked contact gets a Link button and linked ones do not; clicking it reports exactly that contact; the editor
-// opens the shared LinkXeroContactDialog for it; a successful link refreshes the queries the editor reads its contacts from, after
-// which the contact is offered as a selectable recipient; and nothing on this path can send an invoice.
+// Proved: no Link button, link dialog, person picker or "not linked" notice for any contact; with no recipient, "Choose a Xero
+// contact for this invoice" and the way to set the building's default recipient are offered; an older contact-based default is
+// shown by its Xero name with a one-off choice beside it; a stale one is explained; an invoice already in Xero offers no change.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
@@ -12,12 +14,9 @@ import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { recipientOptionsAsHtml } from './helpers/recipientOptions';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { isValidElement, type ReactElement, type ReactNode } from 'react';
 
 import InvoiceEditor from '../src/components/jobs/InvoiceEditor';
-import LinkXeroContactDialog from '../src/components/jobs/LinkXeroContactDialog';
-import UnlinkedRecipientsList, { refreshAfterXeroLink } from '../src/components/jobs/UnlinkedRecipientsList';
-import type { InvoiceDetail, JobContactSummary } from '../src/domain/types';
+import type { BuildingDefaultRecipient, InvoiceDetail, JobContactSummary } from '../src/domain/types';
 
 const XC = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const ORG = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -36,110 +35,60 @@ function invoice(over: Partial<InvoiceDetail> = {}): InvoiceDetail {
     lineItems: [{ id: 'li-1', visitId: 'v-1', description: 'Window cleaning', quantity: 1, unitAmount: 120 }], ...over,
   };
 }
-function renderEditor(contacts: JobContactSummary[], inv: InvoiceDetail = invoice()) {
+function renderEditor(contacts: JobContactSummary[], inv: InvoiceDetail = invoice(), buildingDefault: BuildingDefaultRecipient | null = null) {
   const qc = new QueryClient();
   qc.setQueryData(['invoice', inv.id], inv);
   return recipientOptionsAsHtml(renderToStaticMarkup(
     <QueryClientProvider client={qc}>
-      <InvoiceEditor invoiceId={inv.id} onClose={() => {}} clientId="client-1" clientContacts={contacts} buildingDefault={null} />
+      <InvoiceEditor invoiceId={inv.id} onClose={() => {}} clientId="client-1" buildingId="b-1" clientContacts={contacts} buildingDefault={buildingDefault} />
     </QueryClientProvider>,
-  ));
-}
-
-/** Every <button> element in a rendered element tree (function components are not expanded: the list renders plain elements). */
-function buttonsIn(node: ReactNode): ReactElement<any>[] {
-  const out: ReactElement<any>[] = [];
-  const walk = (n: ReactNode) => {
-    if (Array.isArray(n)) return n.forEach(walk);
-    if (!isValidElement(n)) return;
-    const el = n as ReactElement<any>;
-    if (el.type === 'button') out.push(el);
-    walk(el.props?.children);
-  };
-  walk(node);
-  return out;
+  )).replace(/&#x27;/g, "'").replace(/&amp;/g, '&');
 }
 
 const src = (...p: string[]) => readSourceFile('src', ...p);
 const code = (...p: string[]) => src(...p).replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
 
-// ---- the list ---------------------------------------------------------------------------------------------------------------------------
-test('every unlinked contact (including an old link with no organisation) gets a Link button; a linked contact does not', () => {
-  const tree = UnlinkedRecipientsList({ contacts: [LINKED, MO, LEGACY], onLink: () => {} });
-  const buttons = buttonsIn(tree);
-  assert.deepEqual(buttons.map((b) => b.props['aria-label']), ['Link Mo to a Xero contact', 'Link Old Link to a Xero contact']);
-  assert.ok(buttons.every((b) => b.props.type === 'button'), 'type="button": a click can never submit a form');
+test('NO PERSON LINKING: no Link button, link dialog, person picker or "not linked" notice - linked, unlinked or old links alike', () => {
+  const html = renderEditor([LINKED, MO, LEGACY]);
+  assert.doesNotMatch(html, /Link to Xero|not linked to Xero|recipient-not-linked|unlinked-recipients/i);
+  assert.doesNotMatch(html, /role="combobox"/, 'people are not offered as recipients');
+  assert.doesNotMatch(html, /Linked Person|Old Link|>Mo</, 'no person is listed as a recipient');
 });
 
-test('clicking Link reports EXACTLY the contact beside it', () => {
-  const clicked: string[] = [];
-  const buttons = buttonsIn(UnlinkedRecipientsList({ contacts: [LINKED, MO, LEGACY], onLink: (c) => clicked.push(c.id) }));
-  buttons[1].props.onClick();
-  buttons[0].props.onClick();
-  assert.deepEqual(clicked, ['ct-legacy', 'ct-mo']);
-});
-
-test('with every contact linked there is nothing to show', () => {
-  assert.equal(UnlinkedRecipientsList({ contacts: [LINKED], onLink: () => {} }), null);
-});
-
-// ---- inside the invoice editor ------------------------------------------------------------------------------------------------------------
-test('the invoice editor has no search panel and no per-contact Link list (both in Contacts & Defaults), and keeps every contact selectable', () => {
+test("NO RECIPIENT: a Xero contact can be chosen for this invoice, or the building's default recipient set (new tab)", () => {
   const html = renderEditor([LINKED, MO]);
-  assert.doesNotMatch(html, /data-testid="find-xero-contact"|Find a contact in Xero/);
-  assert.doesNotMatch(html, /aria-label="Link Mo to a Xero contact"|data-testid="unlinked-list"/, 'the per-contact Link list is gone');
-  assert.match(html, /<option value="ct-linked"(?: class="[^"]*")?>Linked Person — ct-linked@example\.test · Xero: Oak Estates Ltd<\/option>/, 'linked: selectable');
-  assert.match(html, /<option value="ct-mo"(?: class="[^"]*")?>Mo — ct-mo@example\.test · not linked to Xero yet<\/option>/, 'unlinked: selectable; it must be linked before the invoice is sent');
+  assert.match(html, /data-testid="no-recipient-yet"/);
+  assert.match(html, />Choose a Xero contact for this invoice</);
+  assert.match(html, /data-testid="no-invoice-default"[^>]*>This building has no default recipient in Xero yet, so a Xero contact is chosen for each invoice\./);
+  assert.match(html, /<a href="\/buildings\/b-1\?tab=contacts" target="_blank" rel="noopener noreferrer"[^>]*>Set the building's default recipient<\/a>/);
+  // (Whether the main button is enabled is not checked in static markup - line items load in an effect that does not run here;
+  // the rule itself is checked from source in xeroRecipientUi.test.ts and invoiceRecipient.test.ts.)
 });
 
-test('after a link, the refreshed contacts show the contact as linked and selectable, and its Link button is gone', () => {
-  const after = renderEditor([LINKED, { ...MO, xeroContactId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', xeroOrgId: ORG, xeroContactName: 'Mo Ltd' }]);
-  assert.doesNotMatch(after, /Link Mo to a Xero contact/);
-  assert.doesNotMatch(after, /Not linked to Xero/);
-  assert.match(after, /<option value="ct-mo"(?: class="[^"]*")?>Mo — ct-mo@example\.test · Xero: Mo Ltd<\/option>/);
+test('OLDER CONTACT-BASED DEFAULT: shown by its Xero name, with a one-off Xero choice beside it', () => {
+  const html = renderEditor([LINKED, MO], invoice(), { contactId: 'ct-linked', xeroContactId: XC, xeroOrgId: ORG });
+  assert.match(html, /data-testid="contact-default-recipient"/);
+  assert.match(html, />Oak Estates Ltd</);
+  assert.match(html, /this building's default \(contact-based, the older\s+way\)/);
+  assert.match(html, />Use a different Xero contact for this invoice</);
+  assert.doesNotMatch(html, /data-testid="no-invoice-default"/);
 });
 
-test('a successful link refreshes the queries the recipient list is read from', () => {
-  const qc = new QueryClient();
-  const invalidated: unknown[] = [];
-  qc.invalidateQueries = ((filters: { queryKey: unknown }) => { invalidated.push(filters.queryKey); return Promise.resolve(); }) as any;
-  refreshAfterXeroLink(qc);
-  assert.deepEqual(invalidated, [['jobRows'], ['contacts']]);
+test('STALE CONTACT-BASED DEFAULT: explained, and a Xero contact can still be chosen for this invoice', () => {
+  const html = renderEditor([LEGACY], invoice(), { contactId: 'ct-legacy', xeroContactId: XC, xeroOrgId: ORG });
+  assert.match(html, /data-testid="no-invoice-default"/);
+  assert.doesNotMatch(html, /This building has no default recipient in Xero yet/, 'the reason given is the stale default, not "none"');
+  assert.match(html, />Choose a Xero contact for this invoice</);
 });
 
-test('once the invoice exists in Xero (recipient locked) no Link list is offered', () => {
-  const html = renderEditor([LINKED, MO], invoice({ status: 'failed', xeroInvoiceId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', xeroContactId: XC }));
-  assert.doesNotMatch(html, /Link Mo to a Xero contact/);
+test('LOCKED: once the invoice exists in Xero, no recipient change is offered', () => {
+  const html = renderEditor([LINKED], invoice({ status: 'failed', xeroInvoiceId: 'x-inv', xeroContactId: XC }));
+  assert.match(html, /locked: this invoice is already in Xero/);
+  assert.doesNotMatch(html, /Choose a Xero contact for this invoice|Use a different Xero contact/);
 });
 
-test('the editor still opens the SHARED link dialog for a chosen unlinked contact (alert and notice), and refreshes on success', () => {
+test('SOURCE: the editor has no linking code left, and pressing the main button just sends (no "needs a link" detour)', () => {
   const editor = code('components', 'jobs', 'InvoiceEditor.tsx');
-  assert.doesNotMatch(editor, /<UnlinkedRecipientsList/, 'replaced by the Find-in-Xero panel');
-  assert.match(editor, /onClick=\{\(\) => setLinkingContact\(selectedContact\)\}/);
-  assert.match(editor, /<LinkXeroContactDialog\s+localContactId=\{linkingContact\.id\}\s+localContactName=\{linkingContact\.name\}/);
-  assert.match(editor, /currentXeroContactId=\{linkingContact\.xeroContactId\}/);
-  assert.match(editor, /onLinked=\{\(\) => refreshAfterXeroLink\(queryClient\)\}/);
-});
-
-test('the dialog opened this way is for that contact', () => {
-  const qc = new QueryClient();
-  const html = renderToStaticMarkup(
-    <QueryClientProvider client={qc}>
-      <LinkXeroContactDialog localContactId="ct-mo" localContactName="Mo" localContactEmail={null} currentXeroContactId={null} onClose={() => {}} onLinked={() => {}} />
-    </QueryClientProvider>,
-  );
-  assert.match(html, /Link to Xero contact/);
-  assert.match(html, />Mo<\/h2>/);
-  assert.match(html, /<input (?![^>]*value="[^"])[^>]*aria-label="Search Xero contacts"/, 'the name search starts EMPTY: the manager types it');
-});
-
-test('nothing on the Link path can send an invoice', () => {
-  assert.doesNotMatch(code('components', 'jobs', 'UnlinkedRecipientsList.tsx'), /sendInvoice|xero-create-invoice|repository/);
-  assert.doesNotMatch(code('components', 'jobs', 'LinkXeroContactDialog.tsx'), /sendInvoice|xero-create-invoice|invoicesRepository/);
-  assert.doesNotMatch(code('repository', 'xeroLinksRepository.ts'), /xero-create-invoice|sendInvoice\(/);
-});
-
-test('a contact with no email shows just its name in the selector', () => {
-  const html = renderEditor([{ ...MO, email: null }]);
-  assert.match(html, /<option value="ct-mo"(?: class="[^"]*")?>Mo · not linked to Xero yet<\/option>/, 'unlinked, no email: still selectable');
+  assert.doesNotMatch(editor, /LinkXeroContactDialog|UnlinkedRecipientsList|refreshAfterXeroLink|RecipientSelect|sendAttemptOutcome|linkingContact|xeroLinkNeededFor/);
+  assert.match(editor, /onClick=\{\(\) => \{\s+setSendResult\(null\);\s+sendMutation\.mutate\(\);\s+\}\}/);
 });

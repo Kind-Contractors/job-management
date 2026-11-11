@@ -41,20 +41,20 @@ test('sending never creates a contact: the send has no contact creation in it, a
   const mutation = code.slice(code.indexOf('const sendMutation'), code.indexOf('const anyMutationPending'));
   assert.doesNotMatch(mutation, /createContactForClient|NewContactForm/);
   assert.doesNotMatch(code, /createContactForClient|newContactName|newContactEmail/, 'only the shared form creates contacts');
-  assert.deepEqual(code.match(/isValidEmail\([^)]*\)/g), ['isValidEmail(selectedContact.email)'], 'email validity is only read, to explain a contact without one');
+  assert.equal(code.match(/isValidEmail\(/g), null, 'people are no longer chosen here, so no contact email is checked');
 });
 
 test('the refusal happens FIRST in the send: before the draft is saved and before anything is sent', () => {
   const mutation = code.slice(code.indexOf('const sendMutation'));
-  const refuse = mutation.indexOf('resolveSendRecipientId(');
+  const refuse = mutation.indexOf('resolveSendRequest(');
   const save = mutation.indexOf('await persistCurrentDraft()');
   const send = mutation.indexOf('sendInvoice(invoiceId');
   assert.ok(refuse >= 0 && save >= 0 && send >= 0, 'all three steps are in the send');
   assert.ok(refuse < save && save < send, `refuse (${refuse}) < save (${save}) < send (${send})`);
 });
 
-test('Send needs a chosen recipient (locked, a listed contact, or the usable default); there is no "add" option on the invoice any more', () => {
-  assert.match(code, /const recipientChosen = recipientLocked \|\| \(!recipientUnavailable && \(selectedContact \? true : !!usableDefaultContactId\)\);/);
+test('Send needs a recipient (locked, a Xero contact for this invoice, the building default, or a working contact-based default); no "add" option', () => {
+  assert.match(code, /const recipientChosen = recipientLocked \|\| usingOneOffXero \|\| hasBuildingRecipient \|\| usingContactDefault;/);
   assert.match(code, /disabled=\{anyMutationPending \|\| lines\.length === 0 \|\| !recipientChosen\}/);
   assert.doesNotMatch(code, /NewRecipientDialog|<NewContactForm|ADD_NEW_CONTACT_VALUE/);
 });

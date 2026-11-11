@@ -71,7 +71,7 @@ test('EDIT: the rendered form - fields seeded, main contact explained as client-
   assert.match(html, /value="main@client\.test"/);
   assert.match(html, /<input type="checkbox" class="mt-0\.5" checked=""\/><span>Main contact/);
   assert.match(html, /The default recipient of job reports and the contact shown in the jobs grid, for all 3 of Atlas Property's buildings\./);
-  assert.match(html, /Accounts only<span[^>]*>For invoices\. Never chosen automatically as the recipient of a job report\.<\/span>/);
+  assert.match(html, /Accounts only<span[^>]*>An accounts contact\. Never chosen automatically as the recipient of a job report\.<\/span>/);
   assert.match(html, />Save changes<\/button>/);
 });
 
@@ -122,22 +122,20 @@ test('TAB: says contacts are client-wide (shared by every building) and the invo
   const html = renderTab([MAIN, OPS, LINKED], 3);
   assert.match(html, /Contacts belong to <span class="font-semibold">Atlas Property<\/span> and are shared by all 3 of its buildings: a change here applies to every one of them\.\s+The invoice default below is for this building only\./);
   assert.match(html, /data-testid="manage-contacts"/);
-  assert.match(html, /data-testid="find-xero-contact"/);
   assert.match(html, /data-testid="report-default"/);
-  assert.match(html, /data-testid="invoice-default"/);
+  assert.match(html, /data-testid="building-invoice-recipient"/);
+  assert.match(html, /Invoices · default recipient in Xero/);
+  assert.doesNotMatch(html, /data-testid="find-xero-contact"|data-testid="invoice-default"/, 'removed 2026-11-11');
 });
 
-test('TAB: each contact shows badges and Xero state, with Edit, Link to Xero / Change Xero link, and Verify for linked ones', () => {
+test('TAB: each contact shows its badges with Edit and Delete - and no Xero link state or link actions (removed 2026-11-11)', () => {
   const html = renderTab([MAIN, ACC, LINKED]);
   assert.equal((html.match(/data-testid="contact-row"/g) ?? []).length, 3);
   assert.match(html, />Main contact<\/span>/);
   assert.match(html, />Accounts only<\/span>/);
-  assert.match(html, /✓ Linked to Xero: Lee Ltd/);
   assert.match(html, /aria-label="Edit Mia Main"[^>]*>Edit<\/button>/);
-  assert.match(html, /aria-label="Link Mia Main"[^>]*>Link to Xero<\/button>/);
-  assert.match(html, /aria-label="Change the Xero link of Lee Linked"[^>]*>Change Xero link<\/button>/);
-  assert.match(html, /aria-label="Verify the Xero link of Lee Linked"[^>]*>Verify<\/button>/);
-  assert.doesNotMatch(html, /aria-label="Verify the Xero link of Mia Main"/, 'nothing to verify on an unlinked contact');
+  assert.match(html, /aria-label="Delete Mia Main"[^>]*>Delete<\/button>/);
+  assert.doesNotMatch(html, /Linked to Xero|Not linked|Link to Xero|Change Xero link|>Verify<|linked to Xero/);
 });
 
 test('TAB: a filter appears for longer lists; the empty client says so; loading and errors are explained', () => {
@@ -153,11 +151,10 @@ test('TAB: a filter appears for longer lists; the empty client says so; loading 
 test('TAB: every write is an existing, guarded path; nothing creates a Xero contact or touches an invoice', () => {
   const tab = noComments(src('src', 'components', 'buildings', 'ContactsAndDefaultsTab.tsx'));
   assert.doesNotMatch(tab, /supabase|from\('contacts'\)|sendInvoice|xero-create-invoice|invoicesRepository|createXeroContact/);
-  assert.match(tab, /verifyContactLink\(id\)/, 'verify is the read-only check');
-  assert.match(tab, /<BuildingDefaultRecipientPanel building=\{building\} contacts=\{contacts\} \/>/, 'the invoice default keeps its server-validated panel');
+  assert.match(tab, /<BuildingInvoiceRecipientPanel building=\{building\} contacts=\{contacts\} \/>/, "the building's default recipient in Xero has its server-validated panel");
+  assert.doesNotMatch(tab, /verifyContactLink|linkContact|<BuildingDefaultRecipientPanel|<FindXeroContactPanel|<LinkXeroContactDialog/, 'no person-linking (removed 2026-11-11)');
 });
 
-// ---- the page -----------------------------------------------------------------------------------------------------------------------
 test('PAGE: the tab is in the URL (?tab=contacts / ?tab=history; anything else is the Site file), replacing history entries', () => {
   const page = noComments(src('src', 'pages', 'BuildingFilePage.tsx'));
   assert.match(page, /return value === 'contacts' \|\| value === 'history' \? value : 'site';/);
@@ -170,17 +167,17 @@ test('PAGE: the tab is in the URL (?tab=contacts / ?tab=history; anything else i
 });
 
 // ---- the invoice editor -----------------------------------------------------------------------------------------------------------
-test('INVOICE: "Change for this invoice" only opens the picker for this invoice - it never changes a saved default or a contact', () => {
+test('INVOICE: a Xero contact chosen for this invoice is for this invoice only - it never changes a saved default or a contact', () => {
   const editor = noComments(src('src', 'components', 'jobs', 'InvoiceEditor.tsx'));
-  assert.match(editor, /onClick=\{\(\) => setChooseOtherContact\(true\)\}[\s\S]{0,700}Change for this invoice/);
-  assert.doesNotMatch(editor, /setBuildingDefaultRecipient|clearBuildingDefaultRecipient|updateContact|createContactForClient|contactsRepository/);
-  assert.match(editor, /For this invoice only: the building&apos;s default is not changed\./);
+  assert.match(editor, /onClick=\{\(\) => setSearchingXero\(true\)\}[\s\S]{0,700}Use a different Xero contact for this invoice/);
+  assert.doesNotMatch(editor, /setBuildingDefaultRecipient|clearBuildingDefaultRecipient|setBuildingRecipient|clearBuildingRecipient|updateContact|createContactForClient|contactsRepository/);
+  assert.match(editor, /Xero contact for this invoice only: the\s+building&apos;s saved recipient is not changed/);
 });
 
-test('INVOICE: no usable default -> why, plus "Set up contacts & defaults" in a NEW tab (unsaved invoice edits kept) and a reload', () => {
+test("INVOICE: no usable default -> why, plus \"Set the building's default recipient\" in a NEW tab (unsaved invoice edits kept) and a reload", () => {
   const editor = noComments(src('src', 'components', 'jobs', 'InvoiceEditor.tsx'));
-  assert.match(editor, /\{defaultProblem \?\? 'This building has no default invoice recipient, so one is chosen for each invoice\.'\}/);
-  assert.match(editor, /href=\{`\/buildings\/\$\{buildingId\}\?tab=contacts`\}\s+target="_blank"\s+rel="noopener noreferrer"/);
+  assert.match(editor, /\{defaultProblem \?\? 'This building has no default recipient in Xero yet, so a Xero contact is chosen for each invoice\.'\}/);
+  assert.match(editor, /href=\{`\/buildings\/\$\{buildingId\}\?tab=contacts`\}\s+target="_blank"\s+rel="noopener noreferrer"[\s\S]{0,120}Set the building&apos;s default recipient/);
   assert.match(editor, /void queryClient\.invalidateQueries\(\{ queryKey: \['jobRows'\] \}\)/);
 });
 
