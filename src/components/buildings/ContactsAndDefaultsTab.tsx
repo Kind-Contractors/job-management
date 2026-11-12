@@ -56,7 +56,7 @@ export default function ContactsAndDefaultsTab({ building, contacts, contactsLoa
   return (
     <div data-testid="contacts-and-defaults" className="flex flex-wrap items-start gap-5 text-[14px] text-ink">
       {/* ===== Client contacts (shared by every building of the client) ===== */}
-      <section data-testid="manage-contacts" className="min-w-0 flex-[999_1_480px] rounded-md border border-neutral-300 bg-white">
+      <section data-testid="manage-contacts" className="min-w-0 flex-[3_1_460px] rounded-md border border-neutral-300 bg-white">
         <div className="flex items-start gap-3 border-b border-neutral-200 px-[18px] py-4">
           <div className="min-w-0 flex-1">
             <h2 className="text-[16px] font-bold">
@@ -179,7 +179,7 @@ export default function ContactsAndDefaultsTab({ building, contacts, contactsLoa
       </section>
 
       {/* ===== Who receives what ===== */}
-      <aside className="flex max-w-[460px] min-w-0 flex-[1_1_360px] flex-col gap-4">
+      <aside className="flex max-w-[640px] min-w-0 flex-[2_1_420px] flex-col gap-4">
         <h2 className="font-heading text-[11px] font-semibold tracking-[0.14em] text-neutral-600 uppercase">Who receives what</h2>
         <ReportDefaultPanel clientId={building.clientId} clientName={building.clientName} contacts={contacts} buildingCount={buildingCount} refreshKeys={refreshKeys} />
         {/* The building's default recipient in Xero (the name on its invoices). An older contact-based default is shown there too,
