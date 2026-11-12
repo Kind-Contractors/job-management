@@ -11,7 +11,7 @@ export function BuildingInvoicesList({ invoices, loading, error, onRetry }: { in
       <div className="flex items-center border-b border-neutral-300 px-4 py-2.5 font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
         Invoices · {invoices.length}
         <Link to="/records?tab=invoices" className="ml-auto font-sans text-[11px] font-normal tracking-normal text-teal-700 normal-case hover:underline">
-          All invoices in Records →
+          Invoices in Xero, in Records →
         </Link>
       </div>
       {error ? (
