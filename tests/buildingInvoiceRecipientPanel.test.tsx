@@ -354,7 +354,7 @@ test('RENDER: a problem found in Xero (archived, renamed) is shown on the curren
 
 test('RENDER: no recipient, and a contact-based default, say so - the latter can be replaced or cleared here', () => {
   const none = panel(reload(B_NONE));
-  assert.match(none, /Invoices · default recipient in Xero/);
+  assert.match(none, /Invoices in Xero<\/h3>/);
   assert.match(none, /No invoice recipient yet/);
   assert.match(none, />Find the invoice contact in Xero</);
   assert.doesNotMatch(none, /Clear recipient|Clear contact-based default/);

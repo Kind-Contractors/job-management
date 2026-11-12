@@ -42,9 +42,10 @@ test('INITIALS: first letters of the first two words, else the first two letters
 });
 
 // ---- the invoice default (Contacts & Defaults tab) -----------------------------------------------------------------------------------------
-test('INVOICING: the panel is "Invoices · default recipient in Xero"; an older contact-based default is shown by its Xero name, with Choose / Clear', () => {
+test('INVOICING: the panel is "Invoices in Xero" (this building only); an older contact-based default is shown by its Xero name, with Choose / Clear', () => {
   const html = renderPanel(building({ defaultRecipient: { contactId: 'c1', xeroContactId: 'X1', xeroOrgId: 'ORG' } }), [LINKED, UNLINKED]);
-  assert.match(html, /Invoices · default recipient in Xero/);
+  assert.match(html, /Invoices in Xero<\/h3>/);
+  assert.match(html, />This building only</);
   assert.match(html, /Current: contact-based default/);
   assert.match(html, /Atlas Ltd/);
   assert.match(html, /The older way, through Sam Client's Xero link\./);

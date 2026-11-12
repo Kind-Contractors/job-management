@@ -44,7 +44,7 @@ test('PLAN: a Xero-linked contact can be deleted - with a warning that only the 
 test('PLAN: the main contact is blocked, with how to resolve it', () => {
   const [b] = contactDeletionPlan({ ...CHECK, isPrimary: true }, 'Atlas').blockers;
   assert.equal(b.kind, 'main_contact');
-  assert.match(b.text, /Jane Smith is the main contact .*Choose another main contact first under "Job reports · default recipient", or untick "Main contact" in Edit\./);
+  assert.match(b.text, /Jane Smith is the main contact .*Choose another main contact first under "Job reports", or untick "Main contact" in Edit\./);
 });
 
 test('PLAN: an invoice default on ANY of the client\'s buildings is blocked, naming those buildings and how to resolve it', () => {

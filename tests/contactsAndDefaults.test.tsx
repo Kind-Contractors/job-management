@@ -86,7 +86,8 @@ test('EDIT: saving is the existing updateContact by id, with the shared checks a
 // ---- the report-default panel ---------------------------------------------------------------------------------------------------
 test('REPORT PANEL: shows the main contact; accounts-only contacts are never offered; applies to every building of the client', () => {
   const html = wrap(<ReportDefaultPanel clientId="cl1" clientName="Atlas Property" contacts={[MAIN, OPS, ACC]} buildingCount={2} refreshKeys={[]} />);
-  assert.match(html, /Job reports · default recipient/);
+  assert.match(html, /Job reports<\/h3>/);
+  assert.match(html, />All 2 buildings</);
   assert.match(html, /it applies to all 2 of Atlas Property's buildings/);
   assert.match(html, />Mia Main<\/div>/);
   assert.match(html, /· main contact/);
@@ -118,11 +119,12 @@ const renderTab = (contacts: any[], buildingCount = 2, over: Record<string, unkn
 
 test('TAB: says contacts are client-wide (shared by every building) and the invoice default is this building only', () => {
   const html = renderTab([MAIN, OPS, LINKED], 3);
-  assert.match(html, /Contacts belong to <span class="font-semibold">Atlas Property<\/span> and are shared by all 3 of its buildings: a change here applies to every one of them\.\s+The invoice default below is for this building only\./);
+  assert.match(html, /Contacts belong to <span class="font-semibold">Atlas Property<\/span> and are shared by all 3 of its buildings\. Edits apply everywhere\./);
+  assert.match(html, />This building only</, 'the invoice default is marked as this building only');
   assert.match(html, /data-testid="manage-contacts"/);
   assert.match(html, /data-testid="report-default"/);
   assert.match(html, /data-testid="building-invoice-recipient"/);
-  assert.match(html, /Invoices · default recipient in Xero/);
+  assert.match(html, /Invoices in Xero<\/h3>/);
   assert.doesNotMatch(html, /data-testid="find-xero-contact"|data-testid="invoice-default"/, 'removed 2026-11-11');
 });
 

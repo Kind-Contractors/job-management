@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient, type QueryKey } from '@tanstack/react-query';
 import type { Contact } from '../../domain/types';
 import { updateContact } from '../../repository/contactsRepository';
-import { REPORT_DEFAULT_PROBLEM, reportDefaultSummary } from '../../lib/contactDisplay';
+import { contactInitials, REPORT_DEFAULT_PROBLEM, reportDefaultSummary } from '../../lib/contactDisplay';
 
 interface ReportDefaultPanelProps {
   clientId: string;
@@ -45,35 +45,49 @@ export default function ReportDefaultPanel({ clientId, clientName, contacts, bui
   const showPicker = summary.kind === 'none' || changing;
 
   return (
-    <div data-testid="report-default" className="border border-neutral-300 bg-white">
-      <div className="border-b border-neutral-300 px-4 py-2.5 font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
-        Job reports · default recipient
+    <section data-testid="report-default" className="rounded-md border border-neutral-300 bg-white px-[18px] py-4 text-[14px] text-ink">
+      <div className="flex items-center justify-between gap-2.5">
+        <h3 className="flex items-center gap-2 text-[15px] font-bold">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="text-teal">
+            <path d="M7 3h7l5 5v13H7z" />
+            <path d="M14 3v5h5M10 13h6M10 17h6" />
+          </svg>
+          Job reports
+        </h3>
+        <span className="rounded bg-neutral-200 px-2 py-0.5 text-[11px] font-semibold text-neutral-800">
+          {buildingCount > 1 ? `All ${buildingCount} buildings` : 'All buildings'}
+        </span>
       </div>
-      <div className="flex flex-col gap-2 px-4 py-3 text-[12.5px]">
-        <div className="text-[11px] text-neutral-600">
-          The client&apos;s main contact. It is also the contact shown in the jobs grid, and it applies to {everywhere}. Accounts-only
-          contacts are never the default; any contact can still be chosen for a single report in Ready for client.
-        </div>
+      <div className="mt-3 flex flex-col gap-2.5">
         {summary.kind === 'contact' ? (
-          <div className="border border-neutral-300 bg-neutral-100 p-2.5">
-            <div className="font-semibold text-ink">{summary.contact.name}</div>
-            <div className="text-[11.5px] text-neutral-600">
-              {summary.contact.email ?? 'No email address: add one before sending reports to this contact.'}
-              {summary.via === 'only_contact' ? ' · the only operational contact' : ' · main contact'}
+          <div className="flex items-center gap-3 rounded-md border border-neutral-300 bg-neutral-100 p-3">
+            <span aria-hidden="true" className="grid h-9 w-9 flex-none place-items-center rounded-full bg-teal text-[12px] font-bold text-white">
+              {contactInitials(summary.contact.name)}
+            </span>
+            <div className="min-w-0">
+              <div className="font-semibold text-ink">{summary.contact.name}</div>
+              <div className="text-[13px] text-neutral-600">
+                {summary.contact.email ?? 'No email address: add one before sending reports to this contact.'}
+                {summary.via === 'only_contact' ? ' · the only operational contact' : ' · main contact'}
+              </div>
             </div>
           </div>
         ) : (
-          <div role="status" className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg">
+          <div role="status" className="rounded-md border border-due bg-due/10 p-3 text-[13px] text-due-fg">
             {REPORT_DEFAULT_PROBLEM[summary.why]}
           </div>
         )}
+        <p className="text-[12px] text-neutral-600">
+          Always the client&apos;s main contact (also shown in the jobs grid); it applies to {everywhere}. Accounts-only contacts are never
+          the default. You can still choose someone else for a single report in Ready for client.
+        </p>
 
         {summary.kind === 'contact' && !changing && (
           <div>
             <button
               type="button"
               onClick={() => setChanging(true)}
-              className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11.5px] font-semibold text-teal-700 hover:bg-neutral-100"
+              className="h-[34px] cursor-pointer rounded-md border border-neutral-300 bg-white px-3 text-[13px] font-semibold text-teal-700 hover:bg-neutral-100"
             >
               Change main contact
             </button>
@@ -82,13 +96,13 @@ export default function ReportDefaultPanel({ clientId, clientName, contacts, bui
 
         {showPicker && eligible.length > 0 && (
           <>
-            <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
+            <label className="flex flex-col gap-1 text-[13px] font-semibold text-ink">
               {summary.kind === 'contact' ? 'New main contact' : 'Set the main contact'}
               <select
                 value={pickedId}
                 onChange={(e) => setPickedId(e.target.value)}
                 disabled={saveMutation.isPending}
-                className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
+                className="h-10 rounded-md border border-neutral-300 bg-white px-2.5 text-[14px] font-normal text-ink outline-none focus:border-teal"
               >
                 <option value="">Choose a contact…</option>
                 {eligible.map((c) => (
@@ -100,12 +114,12 @@ export default function ReportDefaultPanel({ clientId, clientName, contacts, bui
                 ))}
               </select>
             </label>
-            <div className="flex gap-1.5">
+            <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => pickedId && saveMutation.mutate(pickedId)}
                 disabled={!pickedId || saveMutation.isPending}
-                className="cursor-pointer bg-teal px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                className="h-[34px] cursor-pointer rounded-md bg-teal px-3.5 text-[13px] font-semibold text-white hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {saveMutation.isPending ? 'Saving…' : 'Save main contact'}
               </button>
@@ -118,7 +132,7 @@ export default function ReportDefaultPanel({ clientId, clientName, contacts, bui
                     setError(null);
                   }}
                   disabled={saveMutation.isPending}
-                  className="cursor-pointer border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-100 disabled:opacity-60"
+                  className="h-[34px] cursor-pointer rounded-md border border-neutral-300 bg-white px-3 text-[13px] text-neutral-700 hover:bg-neutral-100 disabled:opacity-60"
                 >
                   Cancel
                 </button>
@@ -127,14 +141,14 @@ export default function ReportDefaultPanel({ clientId, clientName, contacts, bui
           </>
         )}
         {showPicker && eligible.length === 0 && contacts.length > 0 && (
-          <div className="text-[11px] text-neutral-500">Add an operational (not accounts-only) contact, above, to set a default.</div>
+          <div className="text-[12px] text-neutral-500">Add an operational (not accounts-only) contact, above, to set a default.</div>
         )}
         {error && (
-          <div role="alert" className="text-[11.5px] text-missed-fg">
+          <div role="alert" className="text-[13px] text-missed-fg">
             {error}
           </div>
         )}
       </div>
-    </div>
+    </section>
   );
 }

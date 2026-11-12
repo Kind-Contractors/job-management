@@ -59,12 +59,20 @@ test('LOOPS: one automatic reload per build; a reload that did not bring a new b
 });
 
 // ---- screens -----------------------------------------------------------------------------------------------------------------
-test('BAR: says a new version is ready and why it is waiting; Reload is always offered', () => {
-  const upload = renderToStaticMarkup(<UpdateBarView waitingFor="upload" onReload={() => {}} />);
-  assert.match(upload, /A new version of the app is ready\./);
+test('BAR: says a new version is ready; Reload now and Later are always offered; the waits that matter are spelled out', () => {
+  const noop = () => {};
+  const upload = renderToStaticMarkup(<UpdateBarView waitingFor="upload" onReload={noop} onLater={noop} />);
+  assert.match(upload, /A new version is ready/);
+  assert.match(upload, /Reload to get the latest fixes\. It only takes a moment\./);
   assert.match(upload, /when the photos and videos have finished uploading/);
-  assert.match(upload, />Reload</);
-  assert.match(renderToStaticMarkup(<UpdateBarView waitingFor="unsaved" onReload={() => {}} />), /Save your changes first/);
+  assert.match(upload, />Reload now</);
+  assert.match(upload, />Later</);
+  assert.match(upload, /aria-label="Close"/);
+  assert.match(renderToStaticMarkup(<UpdateBarView waitingFor="unsaved" onReload={noop} onLater={noop} />), /Save your changes first/);
+  const plain = renderToStaticMarkup(<UpdateBarView waitingFor="you" onReload={noop} onLater={noop} />);
+  assert.doesNotMatch(plain, /Save your changes first|finished uploading/);
+  assert.doesNotMatch(plain, /See what/, 'no release-notes link unless there is somewhere to send it');
+  assert.match(renderToStaticMarkup(<UpdateBarView waitingFor={null} onReload={noop} onLater={noop} whatsNewUrl="https://example.test/notes" />), /See what&#x27;s new|See what’s new/);
 });
 
 test('ACCESS SCREEN: no longer claims the account is "not set up"; offers Reload and shows the app version', () => {
