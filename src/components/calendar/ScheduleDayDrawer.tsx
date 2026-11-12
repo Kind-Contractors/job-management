@@ -8,6 +8,7 @@ import ActivityForm from './ActivityForm';
 import TimeRangeFields from './TimeRangeFields';
 import { activeSelection, splitPrimary } from '../../lib/visitTechnicianSelection';
 import { listBuildingRows } from '../../repository/buildingsRepository';
+import { bookingBuildings, bookingBuildingSublabel, bookingClients } from '../../lib/scheduleBookingOptions';
 import type { JobRow, ScheduleActivity, Technician, WeekVisit } from '../../domain/types';
 import type { ActivityFormValues } from '../../lib/activityInput';
 import { timeRangeError } from '../../lib/timeRange';
@@ -31,13 +32,15 @@ const DATE_HEADER_FORMAT = new Intl.DateTimeFormat('en-GB', {
  * bookings, then a single "Add booking" section that books through the
  * exact same `createVisit` mutation every other booking path in this app
  * already uses — no second write path, no new booking concept. Client →
- * Building → Job is derived entirely from the already-loaded `jobRows`
- * (which already carry buildingId/buildingName/clientId/clientName
- * denormalized) — no new query for the cascade itself. `listBuildingRows()`
- * is fetched only for its `siteInstructions`/`postcode` fields (not
- * present on JobRow), reusing the exact query key BuildingsPage/
- * BuildingFilePage/JobCreator already populate, so it's typically already
- * cached rather than a fresh round trip.
+ * Building → Job: the Client and Building choices come from the buildings
+ * list (`listBuildingRows()`, the same query key BuildingsPage/
+ * BuildingFilePage/JobCreator already populate, so typically cached), merged
+ * with the live jobs - so a building with no live job yet (a new building)
+ * can still be chosen and get its first job from "+ Add new job for this
+ * building" (see ../../lib/scheduleBookingOptions.ts). The Job choice is the
+ * building's live jobs, from the already-loaded `jobRows`. The buildings list
+ * also supplies the selected building's address, postcode and site
+ * instructions.
  *
  * "+ Add new job for this building" (once a building is selected) opens
  * the existing JobCreator in its building-preset mode as a small overlay
@@ -65,6 +68,8 @@ export default function ScheduleDayDrawer({
   visitStatusStyle,
   initialTechnicianId,
   initialActivityId,
+  initialClientId = '',
+  initialBuildingId = '',
   onClose,
   onSelectVisit,
 }: {
@@ -79,6 +84,9 @@ export default function ScheduleDayDrawer({
   initialActivityId?: string | null;
   /** Pre-selects the Technician field when opened from a specific technician's row/cell in Week or Day mode (see ScheduleTechnicianGrid's "+" affordance) — omitted (or null) when opened from Month mode or the day header, which carry no technician context. */
   initialTechnicianId?: string | null;
+  /** Starting Client / Building of the booking form. Only tests pass these; the app always opens with nothing chosen. */
+  initialClientId?: string;
+  initialBuildingId?: string;
   onClose: () => void;
   onSelectVisit: (jobId: string) => void;
 }) {
@@ -100,8 +108,8 @@ export default function ScheduleDayDrawer({
   const { data: buildingRows = [] } = useQuery({ queryKey: ['buildingRows'], queryFn: listBuildingRows });
   const buildingById = useMemo(() => new Map(buildingRows.map((b) => [b.id, b])), [buildingRows]);
 
-  const [clientId, setClientId] = useState('');
-  const [buildingId, setBuildingId] = useState('');
+  const [clientId, setClientId] = useState(initialClientId);
+  const [buildingId, setBuildingId] = useState(initialBuildingId);
   const [jobId, setJobId] = useState('');
   // Selected technician ids in selection order; the first becomes the visit's primary (see createVisit).
   const [technicianIds, setTechnicianIds] = useState<string[]>(initialTechnicianId ? [initialTechnicianId] : []);
@@ -125,17 +133,10 @@ export default function ScheduleDayDrawer({
   const [activityMessage, setActivityMessage] = useState<string | null>(null);
   const editingActivity = editingActivityId ? dayActivities.find((a) => a.id === editingActivityId) : undefined;
 
-  const clients = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const j of jobRows) seen.set(j.clientId, j.clientName);
-    return Array.from(seen, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
-  }, [jobRows]);
+  // From the buildings list (merged with the live jobs): a client or building without a live job is still offered.
+  const clients = useMemo(() => bookingClients(buildingRows, jobRows), [buildingRows, jobRows]);
 
-  const buildingsForClient = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const j of jobRows) if (j.clientId === clientId) seen.set(j.buildingId, j.buildingName);
-    return Array.from(seen, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
-  }, [jobRows, clientId]);
+  const buildingsForClient = useMemo(() => bookingBuildings(buildingRows, jobRows, clientId), [buildingRows, jobRows, clientId]);
 
   const jobsForBuilding = useMemo(
     () => jobRows.filter((j) => j.buildingId === buildingId).sort((a, b) => a.jobSummary.localeCompare(b.jobSummary)),
@@ -355,7 +356,7 @@ export default function ScheduleDayDrawer({
               setBuildingId(id);
               setJobId('');
             }}
-            options={buildingsForClient.map((b) => ({ id: b.id, label: b.name, sublabel: buildingById.get(b.id)?.postcode ?? undefined }))}
+            options={buildingsForClient.map((b) => ({ id: b.id, label: b.name, sublabel: bookingBuildingSublabel(b) }))}
             placeholder="Search buildings…"
             disabled={!clientId}
             disabledMessage="Select a client first"
@@ -386,6 +387,11 @@ export default function ScheduleDayDrawer({
             ))}
           </select>
         </label>
+        {buildingId && jobsForBuilding.length === 0 && (
+          <div data-testid="no-live-jobs-hint" className="text-[11px] text-neutral-600">
+            This building has no live jobs yet. Use &ldquo;+ Add new job for this building&rdquo; to add its first one.
+          </div>
+        )}
 
         <button
           type="button"

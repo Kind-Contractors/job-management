@@ -4,6 +4,7 @@
 // A service-role key must never be added here.
 
 import { createClient } from '@supabase/supabase-js';
+import { sessionAwareFetch } from '../auth/sessionEnded';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -26,4 +27,5 @@ if (import.meta.env.DEV && supabaseUrl.includes(PRODUCTION_PROJECT_REF)) {
   );
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// Every request notices a sign-in the server has ended (see ../auth/sessionEnded.ts); nothing else about requests changes.
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, { global: { fetch: sessionAwareFetch } });

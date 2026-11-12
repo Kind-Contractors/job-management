@@ -1,5 +1,7 @@
-import { useState, type FormEvent } from 'react';
+import { useContext, useState, type FormEvent } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import { AuthContext } from '../auth/AuthProvider';
+import { SESSION_ENDED_MESSAGE } from '../auth/sessionEnded';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -7,6 +9,8 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Set when the app signed this browser out because the server had ended its sign-in (see auth/sessionEnded.ts).
+  const sessionEnded = useContext(AuthContext)?.sessionEnded === true;
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -27,6 +31,11 @@ export default function LoginPage() {
           <div className="font-heading text-sm font-semibold tracking-[0.1em] uppercase">Kind Contractors</div>
         </div>
         <h1 className="mb-4 font-heading text-lg font-semibold">Sign in</h1>
+        {sessionEnded && (
+          <div role="status" data-testid="session-ended" className="mb-3 border border-due bg-due/10 p-2 text-xs text-due-fg">
+            {SESSION_ENDED_MESSAGE}
+          </div>
+        )}
 
         <label className="mb-3 block text-xs text-neutral-600">
           Email
