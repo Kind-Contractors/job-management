@@ -3,7 +3,8 @@
 //     marked Completed (hand delivery). A failed email changes nothing.
 //   * Ready for accounts holds a visit until its invoice is IN XERO ('sent' or 'in_xero_not_emailed'); no invoice, draft, sending
 //     and failed stay. One rule for the list, its heading and the rail badge, per visit, with the division filter.
-//   * Records lists delivered reports and every invoice (read-only); the Building File lists its own invoices.
+//   * Records lists delivered reports and the invoices CREATED IN XERO (read-only) - drafts, sending and failed stay in Ready for
+//     accounts, so an invoice is always in exactly one of the two; the Building File lists all of its own invoices, any status.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -17,7 +18,8 @@ import { isReportAwaitingCompletion, isReportDelivered, isReportReadyForClient, 
 import { hasIncompleteReportWork } from '../src/components/jobs/JobLifecycleDialog';
 import { clientChangeImpact } from '../src/lib/buildingClientChange';
 import { deliveredReportRecords, exVatTotal, filterInvoiceRecords, filterReportRecords, INVOICE_STATUS_LABEL, xeroInvoiceUrl } from '../src/lib/records';
-import { listBuildingInvoiceRecords, mapInvoiceRecord, type InvoiceRecord } from '../src/repository/invoiceRecordsRepository';
+import { listBuildingInvoiceRecords, listInvoiceRecords, mapInvoiceRecord, type InvoiceRecord } from '../src/repository/invoiceRecordsRepository';
+import { IN_XERO_INVOICE_STATUSES } from '../src/lib/invoiceStatus';
 import RecordsPage from '../src/pages/RecordsPage';
 import ReadyForAccountsPage from '../src/pages/ReadyForAccountsPage';
 import ReadyForClientPage from '../src/pages/ReadyForClientPage';
@@ -209,17 +211,80 @@ const allStatuses: InvoiceRecord[] = (['draft', 'sending', 'failed', 'sent', 'in
   mapInvoiceRecord(invRow({ id: `i-${status}`, status, xero_invoice_number: `INV-${i}`, created_at: `2026-10-0${i + 1}T09:00:00Z` })),
 );
 
-test('RECORDS page, invoices tab: every status is listed, amounts are labelled ex VAT, and the JMS-status caveat is shown', () => {
+/** Answers every request with these invoice rows (whatever it asked for), and records the URLs asked. */
+async function withInvoiceRows<T>(rows: unknown[], run: (urls: URL[]) => Promise<T>): Promise<T> {
+  const urls: URL[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: any) => {
+    urls.push(new URL(typeof input === 'string' ? input : input.url));
+    return new Response(JSON.stringify(rows), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    return await run(urls);
+  } finally {
+    globalThis.fetch = real;
+  }
+}
+const ALL_STATUS_ROWS = (['draft', 'sending', 'failed', 'sent', 'in_xero_not_emailed'] as LocalInvoiceStatus[]).map((status) => invRow({ id: `i-${status}`, status }));
+
+test('RECORDS invoices: only invoices created in Xero - the query asks for sent / in_xero_not_emailed, and anything else is dropped even if it came back', async () => {
+  await withInvoiceRows(ALL_STATUS_ROWS, async (urls) => {
+    const rows = await listInvoiceRecords();
+    assert.deepEqual(rows.map((r) => r.status), ['sent', 'in_xero_not_emailed'], 'sent and in Xero (not emailed) appear');
+    for (const s of ['draft', 'sending', 'failed']) assert.ok(!rows.some((r) => r.status === s), `${s} never appears in Records`);
+    assert.equal(urls[0].searchParams.get('status'), 'in.(sent,in_xero_not_emailed)');
+  });
+  assert.deepEqual([...IN_XERO_INVOICE_STATUSES], ['sent', 'in_xero_not_emailed']);
+});
+
+test('BUILDING FILE: still every invoice of the building, whatever its status (no status filter)', async () => {
+  await withInvoiceRows(ALL_STATUS_ROWS, async (urls) => {
+    const rows = await listBuildingInvoiceRecords('b1');
+    assert.deepEqual(rows.map((r) => r.status), ['draft', 'sending', 'failed', 'sent', 'in_xero_not_emailed']);
+    assert.equal(urls[0].searchParams.get('status'), null, 'the Building File query has no status filter');
+  });
+  const html = renderToStaticMarkup(<MemoryRouter><BuildingInvoicesList invoices={allStatuses} loading={false} error={false} onRetry={() => {}} /></MemoryRouter>);
+  for (const label of Object.values(INVOICE_STATUS_LABEL)) assert.ok(html.includes(label), `Building File shows ${label}`);
+});
+
+test('EXACTLY ONE PLACE: an invoice of any status is in Records or in Ready for accounts - never both, never neither', async () => {
+  const records = await withInvoiceRows(ALL_STATUS_ROWS, () => listInvoiceRecords());
+  for (const status of ['draft', 'sending', 'failed', 'sent', 'in_xero_not_emailed'] as LocalInvoiceStatus[]) {
+    const inRecords = records.some((r) => r.status === status);
+    const inQueue = isVisitInAccountsQueue(job('j', []), visit('v', { invoiceId: `i-${status}`, invoiceStatus: status }));
+    assert.equal(inRecords !== inQueue, true, `${status}: records=${inRecords}, ready for accounts=${inQueue}`);
+  }
+  // Unfinished invoices stay in Ready for accounts - also when the report has since gone back for correction.
+  for (const status of ['draft', 'sending', 'failed'] as LocalInvoiceStatus[]) {
+    assert.equal(isVisitReadyForAccounts(visit('v', { reportReviewStatus: 'returned_for_correction', ...inv(status) })), true, status);
+  }
+});
+
+test('RECORDS page, invoices tab: in-Xero invoices listed, the status filter offers only the two in-Xero statuses, ex VAT and the JMS caveat', () => {
   const html = wrap(<RecordsPage />, '/records?tab=invoices', (qc) => {
     qc.setQueryData(['jobRows'], []);
     qc.setQueryData(['historicalJobRows'], []);
-    qc.setQueryData(['invoiceRecords'], allStatuses);
+    qc.setQueryData(['invoiceRecords'], allStatuses.filter((r) => r.status === 'sent' || r.status === 'in_xero_not_emailed'));
   });
-  assert.equal((html.match(/data-testid="invoice-record"/g) ?? []).length, 5);
-  for (const label of Object.values(INVOICE_STATUS_LABEL)) assert.ok(html.includes(label), label);
+  assert.equal((html.match(/data-testid="invoice-record"/g) ?? []).length, 2);
+  const select = html.slice(html.indexOf('aria-label="Invoice status"'), html.indexOf('</select>', html.indexOf('aria-label="Invoice status"')));
+  assert.deepEqual([...select.matchAll(/<option value="([^"]+)"/g)].map((m) => m[1]), ['all', 'sent', 'in_xero_not_emailed']);
+  assert.match(select, />Sent \(emailed\)</);
+  assert.match(select, />In Xero · not emailed</);
+  assert.doesNotMatch(select, /Draft|Sending|Failed/);
+  assert.match(html, /Job reports already delivered to clients, and invoices created in Xero\. Work still to do, including draft invoices, is in Ready for client and Ready for accounts\./);
   assert.match(html, /£250\.25 <span[^>]*>ex VAT<\/span>/);
   assert.match(html, /Statuses are as recorded in JMS/);
   assert.match(html, /Paid, voided or credited invoices are only shown in Xero/);
+});
+
+test('RECORDS page, invoices tab: with none in Xero yet, it says so and points to Ready for accounts', () => {
+  const html = wrap(<RecordsPage />, '/records?tab=invoices', (qc) => {
+    qc.setQueryData(['jobRows'], []);
+    qc.setQueryData(['historicalJobRows'], []);
+    qc.setQueryData(['invoiceRecords'], []);
+  });
+  assert.match(html, /No invoices have been created in Xero yet\. Drafts and invoices still to be created are in <a [^>]*href="\/ready-for-accounts"[^>]*>Ready for accounts<\/a>\./);
 });
 
 test('RECORDS invoices: search (number, client, building, job), status and created-date filters', () => {

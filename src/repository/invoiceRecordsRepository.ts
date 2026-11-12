@@ -1,4 +1,5 @@
-// Read-only access to invoices as they are recorded in JMS, for Records and the Building File's Invoices panel.
+// Read-only access to invoices as they are recorded in JMS: for Records (only those created in Xero) and the Building File's
+// Invoices panel (every invoice of the building, whatever its status).
 //
 // Nothing here writes, and nothing calls Xero: the status shown is the one JMS recorded when it created / emailed the invoice
 // (draft, sending, failed, sent, in Xero not emailed). Paid, voided or credited states live only in Xero.
@@ -8,6 +9,7 @@
 // row-level-security policy on invoices / invoice_line_items / jobs / buildings / clients.
 import { supabase } from '../lib/supabaseClient';
 import type { LocalInvoiceStatus } from '../domain/types';
+import { IN_XERO_INVOICE_STATUSES, isInvoiceInXero } from '../lib/invoiceStatus';
 
 export interface InvoiceRecordLine {
   id: string;
@@ -94,11 +96,19 @@ export function mapInvoiceRecord(r: Row): InvoiceRecord {
   };
 }
 
-/** Every invoice recorded in JMS, any status, for jobs of any lifecycle - newest first. */
+/**
+ * Records: the invoices that have been created in Xero ('sent' or 'in_xero_not_emailed'), for jobs of any lifecycle - newest
+ * first. Drafts, and invoices still sending or failed, are unfinished work: they stay in Ready for accounts (and in the Building
+ * File's Invoices panel), never here. Checked again after loading, with the same rule the queue uses.
+ */
 export async function listInvoiceRecords(): Promise<InvoiceRecord[]> {
-  const { data, error } = await supabase.from('invoices').select(INVOICE_SELECT).order('created_at', { ascending: false });
+  const { data, error } = await supabase
+    .from('invoices')
+    .select(INVOICE_SELECT)
+    .in('status', [...IN_XERO_INVOICE_STATUSES])
+    .order('created_at', { ascending: false });
   if (error) throw new Error(`Failed to load invoices: ${error.message}`);
-  return ((data ?? []) as unknown as Row[]).map(mapInvoiceRecord);
+  return ((data ?? []) as unknown as Row[]).map(mapInvoiceRecord).filter((i) => isInvoiceInXero(i.status));
 }
 
 /** The invoices of the jobs at one building (active, completed, lost or cancelled) - newest first. */

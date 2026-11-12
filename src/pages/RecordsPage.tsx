@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { listHistoricalJobRows, listJobRows } from '../repository/jobsRepository';
 import { listInvoiceRecords, type InvoiceRecord } from '../repository/invoiceRecordsRepository';
+import { IN_XERO_INVOICE_STATUSES } from '../lib/invoiceStatus';
 import {
   INVOICE_STATUS_LABEL,
   deliveredReportRecords,
@@ -139,7 +140,7 @@ export function ReportRecordsTab({ entries, search, loading, error, historicalEr
   );
 }
 
-/** Every invoice recorded in JMS, whatever its status or its job's lifecycle. */
+/** The invoices created in Xero, whatever their job's lifecycle. Unfinished ones (draft, sending, failed) are in Ready for accounts. */
 export function InvoiceRecordsTab({ invoices, search, loading, error }: { invoices: InvoiceRecord[]; search: string; loading: boolean; error: boolean }) {
   const [status, setStatus] = useState<InvoiceRecordStatusFilter>('all');
   const [from, setFrom] = useState('');
@@ -153,7 +154,7 @@ export function InvoiceRecordsTab({ invoices, search, loading, error }: { invoic
       <Filters from={from} to={to} onFrom={setFrom} onTo={setTo} dateLabel="Created">
         <select value={status} onChange={(e) => setStatus(e.target.value as InvoiceRecordStatusFilter)} aria-label="Invoice status" className={input}>
           <option value="all">Any status</option>
-          {(Object.keys(INVOICE_STATUS_LABEL) as (keyof typeof INVOICE_STATUS_LABEL)[]).map((s) => (
+          {IN_XERO_INVOICE_STATUSES.map((s) => (
             <option key={s} value={s}>
               {INVOICE_STATUS_LABEL[s]}
             </option>
@@ -169,7 +170,19 @@ export function InvoiceRecordsTab({ invoices, search, loading, error }: { invoic
       ) : error ? (
         <p className="px-4 py-3 text-[12.5px] text-missed-fg">The invoices could not be loaded.</p>
       ) : rows.length === 0 ? (
-        <p className="px-4 py-3 text-[12.5px] text-neutral-500">{invoices.length === 0 ? 'No invoices have been created yet.' : 'No invoices match these filters.'}</p>
+        <p className="px-4 py-3 text-[12.5px] text-neutral-500">
+          {invoices.length === 0 ? (
+            <>
+              No invoices have been created in Xero yet. Drafts and invoices still to be created are in{' '}
+              <Link to="/ready-for-accounts" className="text-teal-700 underline">
+                Ready for accounts
+              </Link>
+              .
+            </>
+          ) : (
+            'No invoices match these filters.'
+          )}
+        </p>
       ) : (
         <>
           {paged.pageRows.map((i) => (
@@ -220,7 +233,7 @@ export default function RecordsPage() {
       <div className="flex flex-wrap items-end gap-4 px-5 pt-4 pb-3">
         <div>
           <h1 className="font-heading text-[26px] leading-none font-semibold text-ink">Records</h1>
-          <p className="mt-1 text-[13px] text-neutral-600">Job reports already delivered to clients, and every invoice. Work still to do is in Ready for client and Ready for accounts.</p>
+          <p className="mt-1 text-[13px] text-neutral-600">Job reports already delivered to clients, and invoices created in Xero. Work still to do, including draft invoices, is in Ready for client and Ready for accounts.</p>
         </div>
         <div className="segmented ml-auto flex border border-neutral-300" role="group" aria-label="Records">
           {tabButton('reports', 'Job reports', active.isPending ? null : reportEntries.length)}
