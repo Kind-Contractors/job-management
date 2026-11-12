@@ -19,6 +19,7 @@ import { buildingReports } from '../lib/buildingReports';
 import BuildingInvoicesPanel from '../components/buildings/BuildingInvoicesPanel';
 import Breadcrumbs from '../components/shell/Breadcrumbs';
 import ScrollableList from '../components/shared/ScrollableList';
+import { ACCOUNTS_ONLY_BADGE, MAIN_CONTACT_BADGE } from '../components/contacts/contactBadgeStyles';
 import { HISTORY_EVENT_LABEL, historyEventDetail } from '../lib/historyEventLabels';
 
 type Tab = 'site' | 'contacts' | 'history';
@@ -452,16 +453,8 @@ export default function BuildingFilePage() {
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                             <span className="font-semibold text-ink">{c.name}</span>
-                            {c.isPrimary && (
-                              <span className="border border-teal-700 bg-teal-100 px-1 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.06em] text-teal-700 uppercase">
-                                Main contact
-                              </span>
-                            )}
-                            {c.isAccountsContact && (
-                              <span className="border border-teal-700 bg-teal-100 px-1 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.06em] text-teal-700 uppercase">
-                                Accounts only
-                              </span>
-                            )}
+                            {c.isPrimary && <span className={MAIN_CONTACT_BADGE}>Main contact</span>}
+                            {c.isAccountsContact && <span className={ACCOUNTS_ONLY_BADGE}>Accounts only</span>}
                           </div>
                           <div className="truncate text-[11.5px] text-neutral-600">{c.email ?? c.phoneNumber ?? 'No email or phone'}</div>
                         </div>

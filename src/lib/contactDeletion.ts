@@ -23,7 +23,7 @@ export function contactDeletionPlan(check: ContactDeletionCheck, clientName: str
   if (check.isPrimary) {
     blockers.push({
       kind: 'main_contact',
-      text: `${name} is the main contact (the default recipient of job reports, and the contact shown in the jobs grid). Choose another main contact first under "Job reports · default recipient", or untick "Main contact" in Edit.`,
+      text: `${name} is the main contact (the default recipient of job reports, and the contact shown in the jobs grid). Choose another main contact first under "Job reports", or untick "Main contact" in Edit.`,
     });
   }
   if (check.defaultForBuildings.length > 0) {

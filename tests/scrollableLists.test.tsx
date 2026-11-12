@@ -48,6 +48,6 @@ test('WHERE: the four Building File lists use it - only their rows scroll (heade
   assert.match(reports, /<ScrollableList count=\{available\.length\} label="Job reports">\s+\{available\.map\(\(entry\) => \{/);
   assert.ok(reports.indexOf('</ScrollableList>') < reports.indexOf('{notYetAvailable > 0 && ('), 'the "N more reports" note stays below, outside');
   const tab = src('src', 'components', 'buildings', 'ContactsAndDefaultsTab.tsx');
-  assert.match(tab, /<ScrollableList count=\{shown\.length\} label="Contacts">\s+\{shown\.map\(\(c\) => \{/);
+  assert.match(tab, /<ScrollableList count=\{shown\.length\} label="Contacts">\s+\{shown\.map\(\(c\) => [({]/);
   assert.ok(tab.indexOf('aria-label="Filter contacts"') < tab.indexOf('<ScrollableList count={shown.length}'), 'the filter stays above');
 });

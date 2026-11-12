@@ -80,7 +80,7 @@ test("SAVE: the building's client id, the shared form (shared checks, the existi
 test('TAB: "+ Add contact" (Contacts & Defaults) opens the form for the building\'s client; Cancel closes it; success says so; the list is shown in full', () => {
   const tab = src('src', 'components', 'buildings', 'ContactsAndDefaultsTab.tsx');
   const page = src('src', 'pages', 'BuildingFilePage.tsx');
-  assert.match(tab, />\s*\+ Add contact\s*<\/button>/);
+  assert.match(tab, /<\/svg>\s*Add contact\s*<\/button>/);
   assert.match(tab, /if \(contactsLoading\) return/, 'not offered until the contacts have loaded');
   assert.match(tab, /<BuildingAddContactForm\s+clientId=\{building\.clientId\}\s+clientName=\{building\.clientName\}\s+buildingId=\{building\.id\}\s+contacts=\{contacts\}/);
   assert.match(tab, /setNotice\(`Contact added: \$\{contact\.name\}\.`\);/);
