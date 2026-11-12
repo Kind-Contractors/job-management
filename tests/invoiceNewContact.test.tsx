@@ -1,8 +1,6 @@
 // Contacts are no longer added from the invoice screen ("+ Add another email address" was removed): they are added and edited in
 // the Building File (Contacts & Defaults). The shared new-contact form keeps its checks, including the optional required-email
 // variant; a new contact still cannot be invoiced until it is linked to its existing Xero contact.
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -55,7 +53,7 @@ test('SAVE: the shared form creates the contact, then reloads the lists - and ne
 test('REMOVED: the invoice editor no longer adds contacts; it points to Contacts & Defaults in a new tab instead', () => {
   const editor = src('src', 'components', 'jobs', 'InvoiceEditor.tsx');
   assert.doesNotMatch(editor, /Add another email address|ADD_NEW_CONTACT_VALUE|<NewContactForm|NewRecipientDialog|createContactForClient/);
-  assert.match(editor, /Set up contacts &amp; defaults/);
+  assert.match(editor, /Set the building&apos;s default recipient/);
 });
 
 test('the invoice screen passes the job\'s client, its name and its building (for the Contacts & Defaults link)', () => {

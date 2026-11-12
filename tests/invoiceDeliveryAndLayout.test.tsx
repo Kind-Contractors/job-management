@@ -103,9 +103,10 @@ test('LAYOUT: the Ready for accounts detail column scrolls (it was the one part 
   for (const cls of ['overflow-y-auto', 'min-h-0', 'flex-1']) assert.ok(col![1].split(' ').includes(cls), `detail column has ${cls}`);
 });
 
-test('LAYOUT: with many contacts every one is still a recipient option, and no search panel crowds the invoice', () => {
+test('LAYOUT: however many contacts the client has, the invoice stays compact - people are not listed as recipients (removed 2026-11-11)', () => {
   const many = Array.from({ length: 30 }, (_, i) => contact(`c${i}`, `Person ${i}`, `p${i}@x.test`, null));
   const html = render(invoice(), many);
   assert.doesNotMatch(html, /data-testid="find-xero-contact"|data-testid="unlinked-list"/);
-  assert.equal((html.match(/<option value="c\d+"/g) ?? []).length, 30, 'every contact is still a recipient option');
+  assert.equal((html.match(/<option value="c\d+"|Person \d+/g) ?? []).length, 0, 'no person is listed');
+  assert.match(html, />Choose a Xero contact for this invoice</);
 });

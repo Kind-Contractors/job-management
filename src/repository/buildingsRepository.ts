@@ -21,6 +21,8 @@ const BUILDING_SELECT = `
   default_invoice_contact_id,
   default_invoice_xero_contact_id,
   default_invoice_xero_org_id,
+  default_invoice_xero_contact_name,
+  default_invoice_xero_contact_email,
   clients ( id, company_name ),
   building_access ( key_safe_code, keyholder_name, keyholder_phone, parking_notes, access_notes )
 `;

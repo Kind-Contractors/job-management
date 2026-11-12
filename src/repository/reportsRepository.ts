@@ -7,6 +7,7 @@
 // request; the DB is still the final authority.
 
 import type { ReportDetail, ReportReviewStatus } from '../domain/types';
+import { FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 import { logActivityEvent } from './activityEventsRepository';
 
@@ -406,7 +407,23 @@ export interface SendClientReportResult {
  */
 export async function sendClientReport(input: SendClientReportInput): Promise<SendClientReportResult> {
   const { data, error } = await supabase.functions.invoke<SendClientReportResult>('send-client-report', { body: input });
-  if (error) throw new Error(error.message);
+  if (error) {
+    // supabase-js turns every non-2xx answer into "Edge Function returned a non-2xx status code". The function's own JSON body
+    // says what actually went wrong - pass that on, never the generic text: a failed send comes back as a failed result (the
+    // page shows its reason), and a refusal with only a reason (e.g. not authorised) is thrown with that reason.
+    if (error instanceof FunctionsHttpError) {
+      let body: { status?: unknown; error?: unknown } | null = null;
+      try {
+        body = (await error.context.json()) as { status?: unknown; error?: unknown };
+      } catch {
+        body = null;
+      }
+      const reason = body && typeof body.error === 'string' && body.error.trim() !== '' ? body.error : null;
+      if (reason && body?.status === 'failed') return { status: 'failed', error: reason };
+      if (reason) throw new Error(reason);
+    }
+    throw new Error(error.message);
+  }
   if (!data) throw new Error('No response from send-client-report.');
   return data;
 }

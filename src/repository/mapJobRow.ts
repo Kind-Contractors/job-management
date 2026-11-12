@@ -9,6 +9,7 @@
 // and nothing here treats a stale `booked` visit as `missed` — only the DB's
 // own `visits.status = 'missed'` ever produces that status.
 
+import { ownInvoiceRecipient } from './ownInvoiceRecipient';
 import type {
   ContributionState,
   VisitExtraTechnician,
@@ -130,6 +131,8 @@ interface SupabaseBuilding {
   default_invoice_contact_id: string | null;
   default_invoice_xero_contact_id: string | null;
   default_invoice_xero_org_id: string | null;
+  default_invoice_xero_contact_name?: string | null;
+  default_invoice_xero_contact_email?: string | null;
   clients: SupabaseClient | SupabaseClient[] | null;
   building_access: SupabaseBuildingAccess | SupabaseBuildingAccess[] | null;
 }
@@ -477,5 +480,6 @@ export function mapJobRow(row: SupabaseJobRecord): JobRow {
       building?.default_invoice_contact_id && building.default_invoice_xero_contact_id && building.default_invoice_xero_org_id
         ? { contactId: building.default_invoice_contact_id, xeroContactId: building.default_invoice_xero_contact_id, xeroOrgId: building.default_invoice_xero_org_id }
         : null,
+    buildingInvoiceRecipient: building ? ownInvoiceRecipient(building) : null,
   };
 }

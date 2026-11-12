@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   BuildingDefaultRecipient,
+  BuildingInvoiceRecipient,
   InvoiceLineItem,
   JobContactSummary,
 } from "../../domain/types";
@@ -15,28 +16,18 @@ import {
 } from "../../repository/invoicesRepository";
 import {
   LOCKED_RECIPIENT_MESSAGE,
-  RECIPIENT_UNAVAILABLE_MESSAGE,
-  recipientSelectionState,
-  resolveSendRecipientId,
-  sendAttemptOutcome,
+  resolveSendRequest,
+  type OneOffXeroChoice,
 } from "../../lib/invoiceRecipient";
 import {
-  canSendInvoiceTo,
   defaultRecipientProblem,
   isUsableRecipient,
-  isValidEmail,
-  linkStatusLabel,
 } from "../../lib/xeroLinkStatus";
-import LinkXeroContactDialog from "./LinkXeroContactDialog";
 import { getAutoInvoiceEmailSetting } from "../../repository/appSettingsRepository";
 import { deliveryLine, sendResultMessage } from "../../lib/invoiceDelivery";
 import { AUTO_INVOICE_EMAIL_QUERY_KEY } from "../settings/AutoInvoiceEmailSetting";
-import { refreshAfterXeroLink } from "./UnlinkedRecipientsList";
-import RecipientSelect from "../shared/RecipientSelect";
-import {
-  invoiceActionMode,
-  needsXeroContactChoice,
-} from "../../lib/invoiceActionMode";
+import XeroRecipientSearch from "./XeroRecipientSearch";
+import { invoiceActionMode } from "../../lib/invoiceActionMode";
 
 /** Query key of the read-only check of what this system's server-side switches allow (wording only; the server decides). */
 export const XERO_INVOICE_CAPABILITIES_QUERY_KEY = [
@@ -62,6 +53,11 @@ interface InvoiceEditorProps {
   clientContacts: JobContactSummary[];
   /** The building's saved default invoice recipient, or null/omitted when none has been chosen. Never guessed from the contacts. */
   buildingDefault?: BuildingDefaultRecipient | null;
+  /**
+   * The building's OWN Xero invoice recipient (a Xero contact chosen for the building, no person attached), or null/omitted. When
+   * present it is the recipient, and a person can't be chosen instead; a different Xero contact can be chosen for one invoice.
+   */
+  buildingRecipient?: BuildingInvoiceRecipient | null;
 }
 
 /**
@@ -78,6 +74,7 @@ export default function InvoiceEditor({
   buildingId,
   invoiceDetails = "",
   buildingDefault = null,
+  buildingRecipient = null,
 }: InvoiceEditorProps) {
   const queryClient = useQueryClient();
   const { data: invoice, isLoading } = useQuery({
@@ -114,21 +111,11 @@ export default function InvoiceEditor({
     ok: boolean;
     message: string;
   } | null>(null);
-  // The contact the main button was pressed for while it was not linked to Xero: nothing was saved or sent, and the "not linked"
-  // explanation is shown as an alert until the choice changes or the contact is linked.
-  const [xeroLinkNeededFor, setXeroLinkNeededFor] = useState<string | null>(
-    null,
-  );
-
-  // '' = the building's default recipient (or nothing, when there is no usable default); anything else is an existing contact's
-  // id, chosen for this invoice only. A recipient is never preselected by guessing (primary / only contact). Contacts are added
-  // and edited in the Building File (Contacts & Defaults), not here.
-  const [selectedContactId, setSelectedContactId] = useState<string>("");
-  // The unlinked contact whose Link button was clicked: opens the shared LinkXeroContactDialog for exactly that contact.
-  const [linkingContact, setLinkingContact] =
-    useState<JobContactSummary | null>(null);
-  // The building's usable default is shown without a picker; "Change for this invoice" opens one to choose another contact.
-  const [chooseOtherContact, setChooseOtherContact] = useState(false);
+  // A Xero contact chosen for THIS invoice only (on screen until Send; never saved on the building), and whether its search is open.
+  const [oneOffXero, setOneOffXero] = useState<
+    (OneOffXeroChoice & { email: string | null }) | null
+  >(null);
+  const [searchingXero, setSearchingXero] = useState(false);
 
   // Seed local editable state once the invoice loads (or reloads after a send).
   useEffect(() => {
@@ -143,9 +130,8 @@ export default function InvoiceEditor({
   // (InvoiceEditor is reused across opens, not remounted) must not carry
   // over a previously selected/typed recipient.
   useEffect(() => {
-    setSelectedContactId("");
-    setChooseOtherContact(false);
-    setXeroLinkNeededFor(null);
+    setOneOffXero(null);
+    setSearchingXero(false);
   }, [invoiceId]);
 
   const invalidate = () => {
@@ -213,14 +199,21 @@ export default function InvoiceEditor({
     defaultContact && isUsableRecipient(defaultContact)
       ? defaultContact.id
       : null;
-  // The recipient is decided by the locked contact or the building's usable default unless the manager chooses another for this
-  // invoice ("Change for this invoice"); with neither, a contact must be chosen. Labelled "Send invoice to" when it will be
-  // emailed, otherwise as the Xero contact. Nothing is guessed: with no default and no choice, the button stays disabled.
-  const showContactPicker = needsXeroContactChoice({
-    recipientLocked,
-    usableDefault: !!usableDefaultContactId,
-    chooseOther: chooseOtherContact,
-  });
+  // Who the invoice goes to (never guessed; with none of these the button stays disabled):
+  //   - Xero already holds it: its locked recipient;
+  //   - a Xero contact chosen for THIS invoice (never saved on the building);
+  //   - the building's default recipient in Xero;
+  //   - an older contact-based default that still works (the server still uses it until it is replaced in the Building File).
+  // People are not chosen here: an invoice is addressed to a Xero contact, found by name. Labelled "Send invoice to" when it will
+  // be emailed, otherwise as the Xero contact.
+  const hasBuildingRecipient = !recipientLocked && !!buildingRecipient;
+  const usingOneOffXero = !recipientLocked && !!oneOffXero;
+  const usingContactDefault =
+    !recipientLocked &&
+    !hasBuildingRecipient &&
+    !usingOneOffXero &&
+    !!usableDefaultContactId;
+  const hasAnyDefault = hasBuildingRecipient || !!usableDefaultContactId;
   const recipientHeading = mode.showSendTo
     ? "Send invoice to"
     : "Xero contact for this invoice";
@@ -240,40 +233,22 @@ export default function InvoiceEditor({
       )}
     </div>
   );
-  // A choice made while the picker was showing never applies once it is hidden: the default (or locked contact) is used.
-  const effectiveContactId = showContactPicker ? selectedContactId : "";
-  const selectedContact = effectiveContactId
-    ? (clientContacts.find((c) => c.id === effectiveContactId) ?? null)
-    : null;
-  const choosePhrase = mode.showSendTo
-    ? "who to send this invoice to"
-    : "the Xero contact this invoice is for";
-  // A chosen contact must be in the list shown (it may have been removed, or the list failed to reload). Then nothing can be
-  // submitted - never the building default or anyone else in its place - until the list is reloaded.
-  const recipientUnavailable =
-    !recipientLocked &&
-    recipientSelectionState(effectiveContactId, false, clientContacts) ===
-      "missing";
-  // A recipient is CHOSEN (the button can be pressed) when it is locked, a listed contact - linked to Xero or not - or the usable
-  // building default. An unlinked choice is stopped on press (sendAttemptOutcome), before anything is saved or sent.
   const recipientChosen =
     recipientLocked ||
-    (!recipientUnavailable &&
-      (selectedContact ? true : !!usableDefaultContactId));
+    usingOneOffXero ||
+    hasBuildingRecipient ||
+    usingContactDefault;
 
   const sendMutation = useMutation({
     mutationFn: async () => {
-      // Refuse an unlinkable recipient BEFORE anything is saved or created: no local contact is ever created from
-      // here, so a failed send can never leave an orphan, unlinked contact behind.
-      const contactId = resolveSendRecipientId({
+      // Decided BEFORE anything is saved: with no recipient this refuses (the button is disabled then anyway).
+      const recipient = resolveSendRequest({
         addingNewContact: false,
-        selectedContactId: effectiveContactId,
+        selectedContactId: "",
         usableDefaultContactId,
-        selectedIsLinked: selectedContact
-          ? canSendInvoiceTo(selectedContact)
-          : undefined,
-        selectedIsAvailable: !recipientUnavailable,
         recipientLocked,
+        hasBuildingRecipient,
+        oneOffXero: usingOneOffXero ? oneOffXero : null,
       });
 
       // Persist current editor state — xero-create-invoice reads the
@@ -281,7 +256,7 @@ export default function InvoiceEditor({
       // already be saved before it runs, every time.
       await persistCurrentDraft();
 
-      return sendInvoice(invoiceId, contactId);
+      return sendInvoice(invoiceId, recipient);
     },
     onSuccess: (result) => {
       invalidate();
@@ -511,116 +486,131 @@ export default function InvoiceEditor({
                     <span className="font-semibold text-ink">
                       {lockedContact
                         ? (lockedContact.xeroContactName ?? lockedContact.name)
-                        : "the contact this invoice was created for"}
+                        : (invoice?.xeroRecipientName ??
+                          "the contact this invoice was created for")}
                     </span>{" "}
                     · locked: this invoice is already in Xero.
                   </div>
                 </>
-              ) : !showContactPicker ? (
+              ) : searchingXero ? (
                 <>
                   {recipientHeadingRow}
-                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <XeroRecipientSearch
+                    purpose="For this invoice only: the building's saved recipient is not changed."
+                    disabled={anyMutationPending}
+                    onCancel={() => setSearchingXero(false)}
+                    onChoose={(c) => {
+                      setOneOffXero({
+                        xeroContactId: c.contactId,
+                        name: c.name,
+                        email: c.email,
+                      });
+                      setSearchingXero(false);
+                    }}
+                  />
+                </>
+              ) : usingOneOffXero && oneOffXero ? (
+                <>
+                  {recipientHeadingRow}
+                  <div
+                    data-testid="one-off-xero-recipient"
+                    className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1"
+                  >
                     <span className="font-semibold text-ink">
-                      {defaultContact?.name}
+                      {oneOffXero.name}
                     </span>
-                    {defaultContact?.email && (
+                    {oneOffXero.email && (
                       <span className="text-neutral-600">
-                        {defaultContact.email}
-                      </span>
-                    )}
-                    {defaultContact?.xeroContactName && (
-                      <span className="text-teal-700">
-                        ✓ Xero: {defaultContact.xeroContactName}
+                        {oneOffXero.email}
                       </span>
                     )}
                     <span className="text-neutral-500">
-                      · this building&apos;s default
-                      {/* {mode.showSendTo ? "" : ". It will not be emailed."} */}
+                      · Xero contact for this invoice only: the
+                      building&apos;s saved recipient is not changed
                     </span>
                     <button
                       type="button"
-                      onClick={() => setChooseOtherContact(true)}
+                      onClick={() => setOneOffXero(null)}
+                      disabled={anyMutationPending}
+                      className="ml-auto cursor-pointer text-[11px] text-teal-700 underline disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {hasAnyDefault
+                        ? "Use the building's default recipient"
+                        : "Undo"}
+                    </button>
+                  </div>
+                </>
+              ) : hasBuildingRecipient && buildingRecipient ? (
+                <>
+                  {recipientHeadingRow}
+                  <div
+                    data-testid="building-xero-recipient"
+                    className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1"
+                  >
+                    <span className="font-semibold text-ink">
+                      {buildingRecipient.name}
+                    </span>
+                    {buildingRecipient.email && (
+                      <span className="text-neutral-600">
+                        {buildingRecipient.email}
+                      </span>
+                    )}
+                    <span className="text-neutral-500">
+                      · this building&apos;s default recipient
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSearchingXero(true)}
                       disabled={anyMutationPending}
                       className="ml-auto cursor-pointer border border-neutral-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-teal-700 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      Change for this invoice
+                      Use a different Xero contact for this invoice
+                    </button>
+                  </div>
+                </>
+              ) : usingContactDefault && defaultContact ? (
+                <>
+                  {recipientHeadingRow}
+                  <div
+                    data-testid="contact-default-recipient"
+                    className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1"
+                  >
+                    <span className="font-semibold text-ink">
+                      {defaultContact.xeroContactName ?? defaultContact.name}
+                    </span>
+                    <span className="text-neutral-500">
+                      · this building&apos;s default (contact-based, the older
+                      way)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSearchingXero(true)}
+                      disabled={anyMutationPending}
+                      className="ml-auto cursor-pointer border border-neutral-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-teal-700 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Use a different Xero contact for this invoice
                     </button>
                   </div>
                 </>
               ) : (
                 <>
                   {recipientHeadingRow}
-                  <RecipientSelect
-                    label={recipientHeading}
-                    value={selectedContactId}
-                    onChange={(value) => {
-                      setSelectedContactId(value);
-                      setXeroLinkNeededFor(null);
-                    }}
-                    disabled={anyMutationPending}
-                    className="mt-1"
-                    options={[
-                      {
-                        value: "",
-                        text: usableDefaultContactId
-                          ? `Building default: ${defaultContact?.xeroContactName ?? defaultContact?.name}`
-                          : "Choose a recipient…",
-                        disabled: !usableDefaultContactId,
-                      },
-                      // Shown (not the default) while the chosen contact is missing from the list, so the screen never displays a
-                      // different recipient from the one chosen.
-                      ...(recipientUnavailable
-                        ? [
-                            {
-                              value: effectiveContactId,
-                              text: "Chosen contact not loaded yet",
-                              disabled: true,
-                            },
-                          ]
-                        : []),
-                      ...clientContacts.map((c) => ({
-                        value: c.id,
-                        text: `${c.name}${c.email ? ` — ${c.email}` : ""}`,
-                        // Only the words "not linked to Xero yet" are amber; the name and email keep the normal colour.
-                        note: isUsableRecipient(c)
-                          ? {
-                              text: c.xeroContactName
-                                ? `Xero: ${c.xeroContactName}`
-                                : "linked to Xero",
-                            }
-                          : { text: "not linked to Xero yet", warn: true },
-                      })),
-                    ]}
-                  />
-                  <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-neutral-600">
-                    {selectedContact?.email && (
-                      <span>{selectedContact.email}</span>
-                    )}
-                    {selectedContact && canSendInvoiceTo(selectedContact) && (
-                      <span className="text-teal-700">
-                        ✓ Xero: {selectedContact.xeroContactName ?? "linked"}
-                      </span>
-                    )}
-                    {usableDefaultContactId && (
-                      <>
-                        <span>
-                          For this invoice only: the building&apos;s default is
-                          not changed.
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setChooseOtherContact(false);
-                            setSelectedContactId("");
-                            setXeroLinkNeededFor(null);
-                          }}
-                          disabled={anyMutationPending}
-                          className="cursor-pointer text-teal-700 underline disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          Use the building default
-                        </button>
-                      </>
-                    )}
+                  <div
+                    data-testid="no-recipient-yet"
+                    className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1"
+                  >
+                    <span className="text-neutral-600">
+                      No recipient chosen yet.
+                    </span>
+                    <button
+                      type="button"
+                      data-testid="choose-xero-contact"
+                      onClick={() => setSearchingXero(true)}
+                      disabled={anyMutationPending}
+                      className="ml-auto cursor-pointer border border-neutral-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-teal-700 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Choose a Xero contact for this invoice
+                    </button>
                   </div>
                 </>
               )}
@@ -645,34 +635,17 @@ export default function InvoiceEditor({
                 {LOCKED_RECIPIENT_MESSAGE}
               </div>
             )}
-            {recipientUnavailable && (
-              <div
-                data-testid="recipient-unavailable"
-                role="alert"
-                className="border border-missed bg-missed/10 p-2 text-[11.5px] text-missed-fg"
-              >
-                {RECIPIENT_UNAVAILABLE_MESSAGE}{" "}
-                <button
-                  type="button"
-                  onClick={() =>
-                    void queryClient.invalidateQueries({
-                      queryKey: ["jobRows"],
-                    })
-                  }
-                  className="cursor-pointer underline"
-                >
-                  Reload recipients
-                </button>
-              </div>
-            )}
-            {!recipientLocked && !usableDefaultContactId && (
+            {!recipientLocked &&
+              !usableDefaultContactId &&
+              !hasBuildingRecipient &&
+              !usingOneOffXero && (
               // No usable default: say why, and where to set one. Opened in a NEW tab so nothing typed on this invoice is lost.
               <div
                 data-testid="no-invoice-default"
                 className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg"
               >
                 {defaultProblem ??
-                  "This building has no default invoice recipient, so one is chosen for each invoice."}{" "}
+                  "This building has no default recipient in Xero yet, so a Xero contact is chosen for each invoice."}{" "}
                 {buildingId && (
                   <>
                     <a
@@ -681,7 +654,7 @@ export default function InvoiceEditor({
                       rel="noopener noreferrer"
                       className="font-semibold underline"
                     >
-                      Set up contacts &amp; defaults
+                      Set the building&apos;s default recipient
                     </a>{" "}
                     (opens in a new tab; this invoice stays as it is), then{" "}
                   </>
@@ -700,71 +673,6 @@ export default function InvoiceEditor({
                 .
               </div>
             )}
-            {!recipientLocked &&
-              !effectiveContactId &&
-              !usableDefaultContactId &&
-              !defaultProblem &&
-              (clientContacts.some(canSendInvoiceTo) ? (
-                <div className="border border-neutral-300 bg-neutral-100 p-2 text-[11.5px] text-neutral-700">
-                  Choose {choosePhrase}. A contact that is not linked to Xero
-                  yet can be chosen; it must be linked to its existing Xero
-                  contact before the invoice can be sent.
-                </div>
-              ) : (
-                <div className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg">
-                  None of this client&apos;s contacts is linked to a Xero
-                  contact yet. You can choose any of them, but it must be linked
-                  to its existing Xero contact (&ldquo;Link to Xero
-                  contact&rdquo;, offered once you choose it) before the invoice
-                  can be sent. The app never matches or creates a Xero contact
-                  by itself.
-                </div>
-              ))}
-            {!recipientLocked &&
-              selectedContact &&
-              !canSendInvoiceTo(selectedContact) && (
-                // Shown as soon as an unlinked contact is chosen; after a press of the main button it becomes an alert that says
-                // nothing was saved or sent. Linking stays the explicit, confirmed choice in the shared dialog.
-                <div
-                  data-testid="recipient-not-linked"
-                  role={
-                    xeroLinkNeededFor === selectedContact.id
-                      ? "alert"
-                      : undefined
-                  }
-                  className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg"
-                >
-                  {xeroLinkNeededFor === selectedContact.id && (
-                    <div className="font-semibold">
-                      Not sent: a Xero contact is needed.
-                    </div>
-                  )}
-                  {linkStatusLabel(selectedContact)}. {selectedContact.name}{" "}
-                  must be linked to their existing Xero contact before this
-                  invoice can be sent: link them, then press &ldquo;{mode.label}
-                  &rdquo; again.
-                  {xeroLinkNeededFor === selectedContact.id &&
-                    " Nothing has been saved or sent."}
-                  {!isValidEmail(selectedContact.email) && (
-                    <div data-testid="recipient-no-email" className="mt-1">
-                      {selectedContact.name} has no email address in the app.
-                      The invoice uses the email address held on the Xero
-                      contact you link, so choose the Xero contact that has the
-                      right invoicing email.
-                    </div>
-                  )}
-                  <div className="mt-1">
-                    <button
-                      type="button"
-                      onClick={() => setLinkingContact(selectedContact)}
-                      disabled={anyMutationPending}
-                      className="cursor-pointer font-semibold underline disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      Link to Xero contact
-                    </button>
-                  </div>
-                </div>
-              )}
             <div
               data-testid="invoice-email-notice"
               className={
@@ -798,14 +706,6 @@ export default function InvoiceEditor({
               <button
                 onClick={() => {
                   setSendResult(null);
-                  // An unlinked recipient: nothing is saved or sent; the explanation and the Link action are shown instead.
-                  if (
-                    sendAttemptOutcome({ recipientLocked, selectedContact }) ===
-                    "needs_xero_link"
-                  ) {
-                    setXeroLinkNeededFor(selectedContact?.id ?? null);
-                    return;
-                  }
                   sendMutation.mutate();
                 }}
                 disabled={
@@ -832,16 +732,6 @@ export default function InvoiceEditor({
         </div>
       </div>
 
-      {linkingContact && (
-        <LinkXeroContactDialog
-          localContactId={linkingContact.id}
-          localContactName={linkingContact.name}
-          localContactEmail={linkingContact.email}
-          currentXeroContactId={linkingContact.xeroContactId}
-          onClose={() => setLinkingContact(null)}
-          onLinked={() => refreshAfterXeroLink(queryClient)}
-        />
-      )}
     </div>
   );
 }

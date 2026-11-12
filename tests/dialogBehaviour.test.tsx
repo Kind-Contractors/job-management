@@ -62,7 +62,6 @@ const DIALOGS = [
   'src/components/calendar/ScheduleDayDrawer.tsx',
   'src/components/buildings/BuildingReportsPanel.tsx',
   'src/components/jobs/ContactPopover.tsx',
-  'src/components/jobs/LinkXeroContactDialog.tsx',
   'src/components/jobs/JobLifecycleDialog.tsx',
   'src/components/settings/AutoInvoiceEmailSetting.tsx',
   'src/components/jobs/CancelWorkDialog.tsx',

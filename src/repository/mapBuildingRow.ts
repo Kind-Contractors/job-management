@@ -1,6 +1,7 @@
 // Maps a raw Supabase `buildings` row (with embedded client/access data) onto
 // BuildingRow — mirrors mapJobRow.ts's structure and honesty rules.
 
+import { ownInvoiceRecipient } from './ownInvoiceRecipient';
 import type { BuildingAccessInfo, BuildingRow } from '../domain/types';
 
 interface SupabaseClient {
@@ -27,6 +28,8 @@ export interface SupabaseBuildingRecord {
   default_invoice_contact_id?: string | null;
   default_invoice_xero_contact_id?: string | null;
   default_invoice_xero_org_id?: string | null;
+  default_invoice_xero_contact_name?: string | null;
+  default_invoice_xero_contact_email?: string | null;
   clients: SupabaseClient | SupabaseClient[] | null;
   building_access: SupabaseBuildingAccess | SupabaseBuildingAccess[] | null;
 }
@@ -68,5 +71,6 @@ export function mapBuildingRow(row: SupabaseBuildingRecord): BuildingRow {
       row.default_invoice_contact_id && row.default_invoice_xero_contact_id && row.default_invoice_xero_org_id
         ? { contactId: row.default_invoice_contact_id, xeroContactId: row.default_invoice_xero_contact_id, xeroOrgId: row.default_invoice_xero_org_id }
         : null,
+    invoiceRecipient: ownInvoiceRecipient(row),
   };
 }

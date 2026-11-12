@@ -10,6 +10,18 @@
 //   setBuildingDefault   { buildingId, localContactId }
 //   clearBuildingDefault { buildingId }
 //
+// A building's own invoice recipient (the Xero contact named on its invoices - not a person; see migration 20261110100000):
+//   searchRecipients       { term }                                read-only candidates by name, with full email and address
+//   getRecipient           { xeroContactId }                       read-only: that contact's current details and whether it can be used
+//   setBuildingRecipient   { buildingId, xeroContactId, expectedName, expectedCurrentXeroContactId, expectedCurrentXeroOrgId }
+//   clearBuildingRecipient { buildingId, expectedCurrentXeroContactId, expectedCurrentXeroOrgId }
+// The expected-current pair is the recipient the manager saw (both null = none). Both must still be what the building has, or
+// nothing is changed and the manager is asked to reload: this is how a replacement is confirmed, and how a change made meanwhile
+// by someone else is never overwritten. The recipient is the exact ContactID the manager picked, re-read in the connected
+// organisation at that moment; it is never chosen from an email, a name, or a person's Xero link. The save itself goes through
+// the database functions set_/clear_building_invoice_recipient, which only the server (service role) may call; the service role
+// is used for nothing else here.
+//
 // What this function NEVER does: create, update, merge, archive or email a Xero contact (it only reads: a search and a read
 // by id); link or choose a contact because a name or email looks alike (a link is made only for the exact ContactID a manager
 // picked and confirmed); pick one of several candidates; or substitute a different contact for one that is missing, archived,
@@ -20,10 +32,12 @@
 // ever used against that organisation. It does not depend on XERO_CREATION_ENABLED or XERO_SENDING_ENABLED: linking writes
 // nothing to Xero (it only reads) and sends nothing.
 //
-// Never logs or returns XERO_CLIENT_ID, XERO_CLIENT_SECRET, a token, or a full contact email address.
+// Never logs or returns XERO_CLIENT_ID, XERO_CLIENT_SECRET, the service role key or a token. A full contact email address is
+// returned only by the building-recipient actions, to the manager choosing a recipient (decided 2026-11-10); the actions for
+// linking people still return a masked hint.
 
 import { corsHeaders } from 'npm:@supabase/supabase-js@2/cors';
-import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import { assertManager, UnauthorizedError } from '../_shared/auth.ts';
 import { boundedSearchTerm, getContactById, getXeroAccessToken, isXeroId, searchContacts, XERO_SEARCH_TERM_MAX, XeroHttpError } from '../_shared/xeroClient.ts';
 import {
@@ -33,7 +47,7 @@ import {
   requireVerifiedContactLink,
   XeroSafeguardError,
 } from '../_shared/xeroSafeguards.ts';
-import { summariseAndFlag, summariseContact } from '../_shared/xeroContactSummary.ts';
+import { recipientCandidates, recipientDetails, summariseAndFlag, summariseContact } from '../_shared/xeroContactSummary.ts';
 
 class LinkError extends Error {
   readonly code: string;
@@ -76,21 +90,45 @@ async function loadContact(db: SupabaseClient, id: string): Promise<LocalContact
   return data as LocalContact;
 }
 
-async function loadBuilding(db: SupabaseClient, id: string) {
+interface BuildingRecipientRow {
+  id: string;
+  client_id: string;
+  default_invoice_contact_id: string | null;
+  default_invoice_xero_contact_id: string | null;
+  default_invoice_xero_org_id: string | null;
+  default_invoice_xero_contact_name: string | null;
+  default_invoice_xero_contact_email: string | null;
+}
+
+async function loadBuilding(db: SupabaseClient, id: string): Promise<BuildingRecipientRow> {
   const { data, error } = await db
     .from('buildings')
-    .select('id, client_id, default_invoice_contact_id, default_invoice_xero_contact_id, default_invoice_xero_org_id')
+    .select(
+      'id, client_id, default_invoice_contact_id, default_invoice_xero_contact_id, default_invoice_xero_org_id, default_invoice_xero_contact_name, default_invoice_xero_contact_email',
+    )
     .eq('id', id)
     .maybeSingle();
   if (error) throw new Error(`Could not read the building: ${error.message}`);
   if (!data) throw new LinkError('BUILDING_NOT_FOUND', 'That building could not be found.', 404);
-  return data as {
-    id: string;
-    client_id: string;
-    default_invoice_contact_id: string | null;
-    default_invoice_xero_contact_id: string | null;
-    default_invoice_xero_org_id: string | null;
-  };
+  return data as BuildingRecipientRow;
+}
+
+/** A recipient chosen in the building's invoice recipient panel (its own Xero contact, no person attached). */
+const hasOwnRecipient = (b: BuildingRecipientRow) => !b.default_invoice_contact_id && !!b.default_invoice_xero_contact_id;
+
+/**
+ * The service-role client - used ONLY to call set_/clear_building_invoice_recipient, which nobody else may call, after this
+ * function has checked the manager (and, to set, verified the contact in Xero). Every read still goes through the manager's own
+ * client and its row-level security.
+ */
+let serviceDb: SupabaseClient | null = null;
+function serviceClient(): SupabaseClient {
+  if (serviceDb) return serviceDb;
+  const url = Deno.env.get('SUPABASE_URL');
+  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (!url || !key) throw new Error('Edge Function runtime is missing SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY.');
+  serviceDb = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  return serviceDb;
 }
 
 /** How many buildings use this local contact as their default invoice recipient. */
@@ -146,9 +184,8 @@ const BLOCKED_TEXT: Record<string, string> = {
 
 // ---- actions ----------------------------------------------------------------------------------------------------------------------
 
-async function search(body: Record<string, unknown>) {
-  const term = normaliseTerm(body.term);
-  const { accessToken } = await connect();
+/** The term as typed and, if different, without accents; each contact once. Read-only. */
+async function searchByText(accessToken: string, term: string) {
   const found = await searchContacts(accessToken, term, 25);
   let mayBeIncomplete = found.length >= 25;
   const folded = withoutAccents(term);
@@ -157,6 +194,13 @@ async function search(body: Record<string, unknown>) {
     mayBeIncomplete ||= more.length >= 25;
     for (const c of more) if (!found.some((f) => same(f.ContactID, c.ContactID))) found.push(c);
   }
+  return { found, mayBeIncomplete };
+}
+
+async function search(body: Record<string, unknown>) {
+  const term = normaliseTerm(body.term);
+  const { accessToken } = await connect();
+  const { found, mayBeIncomplete } = await searchByText(accessToken, term);
   return { ok: true, results: summariseAndFlag(found), mayBeIncomplete };
 }
 
@@ -198,6 +242,7 @@ async function findByEmail(db: SupabaseClient, body: Record<string, unknown>) {
 async function verify(db: SupabaseClient, body: Record<string, unknown>) {
   if (body.buildingId !== undefined) {
     const building = await loadBuilding(db, requireId(body.buildingId, 'The building'));
+    if (hasOwnRecipient(building)) return { ok: true, ...(await verifyOwnRecipient(building)) };
     if (!building.default_invoice_contact_id) return { ok: true, state: 'no_default' };
     const contact = await loadContact(db, building.default_invoice_contact_id);
     const { accessToken, orgId } = await connect();
@@ -228,6 +273,167 @@ async function liveState(accessToken: string, xeroContactId: string | null): Pro
   if (s.blockedReason === 'NO_EMAIL') return { state: 'no_email', currentName: s.name };
   return { state: 'ok', currentName: s.name };
 }
+
+// ---- a building's own invoice recipient -----------------------------------------------------------------------------------------
+
+const RECIPIENT_BLOCKED_TEXT: Record<string, string> = {
+  ARCHIVED: 'That Xero contact is archived, so it cannot be the invoice recipient. Restore it in Xero, or choose another contact. Nothing was changed.',
+  NOT_ACTIVE: 'That Xero contact is not active, so it cannot be the invoice recipient. Nothing was changed.',
+  MERGED: 'That Xero contact was merged into another contact. Choose the surviving contact instead. Nothing was changed.',
+  NO_EMAIL: 'That Xero contact has no email address, so invoices could not be emailed to it. Add one in Xero, then try again. Nothing was changed.',
+};
+
+/** Search for a building's invoice recipient, by name (or any text Xero matches). Read-only; nothing is chosen. */
+async function searchRecipients(body: Record<string, unknown>) {
+  const term = normaliseTerm(body.term);
+  const { accessToken } = await connect();
+  const { found, mayBeIncomplete } = await searchByText(accessToken, term);
+  return { ok: true, results: recipientCandidates(found), mayBeIncomplete };
+}
+
+/** The current details of one Xero contact, read by id in the connected organisation, and whether it can be a recipient. */
+async function getRecipient(body: Record<string, unknown>) {
+  const xeroId = requireId(body.xeroContactId, 'The Xero contact');
+  const { accessToken } = await connect();
+  const lookup = await getContactById(accessToken, xeroId);
+  if (lookup.outcome === 'not_found') return { ok: true, state: 'not_found', contact: null };
+  const contact = recipientDetails(lookup.value);
+  return { ok: true, state: liveStateOf(contact.blockedReason), contact };
+}
+
+function liveStateOf(blocked: string | null): string {
+  if (blocked === 'ARCHIVED' || blocked === 'NOT_ACTIVE') return 'not_active';
+  if (blocked === 'MERGED') return 'merged';
+  if (blocked === 'NO_EMAIL') return 'no_email';
+  return 'ok';
+}
+
+/** Is the building's own recipient still good in the connected organisation? Read-only. */
+async function verifyOwnRecipient(building: BuildingRecipientRow) {
+  const { accessToken, orgId } = await connect();
+  const saved = { xeroContactId: building.default_invoice_xero_contact_id, xeroOrgId: building.default_invoice_xero_org_id };
+  if (!same(building.default_invoice_xero_org_id, orgId)) return { state: 'wrong_organisation', recipientSource: 'building', saved, current: null };
+  const lookup = await getContactById(accessToken, building.default_invoice_xero_contact_id ?? '');
+  if (lookup.outcome === 'not_found') return { state: 'not_found', recipientSource: 'building', saved, current: null, currentName: null };
+  const current = recipientDetails(lookup.value);
+  return {
+    state: liveStateOf(current.blockedReason),
+    recipientSource: 'building',
+    saved,
+    current,
+    currentName: current.name,
+    nameChanged: building.default_invoice_xero_contact_name !== null && current.name !== building.default_invoice_xero_contact_name,
+    emailChanged: (building.default_invoice_xero_contact_email ?? null) !== current.email,
+  };
+}
+
+/**
+ * The recipient the manager saw: { id, org } or none. Both fields are required in the request (null for "none"), so a write can
+ * never silently assume there was nothing there.
+ */
+function expectedCurrent(body: Record<string, unknown>): { id: string | null; org: string | null } {
+  if (!('expectedCurrentXeroContactId' in body) || !('expectedCurrentXeroOrgId' in body)) {
+    throw new LinkError('BAD_REQUEST', "Say which recipient you saw on the building (none or its Xero contact and organisation), so a change made meanwhile isn't overwritten.", 400);
+  }
+  const id = body.expectedCurrentXeroContactId;
+  const org = body.expectedCurrentXeroOrgId;
+  if (id === null && org === null) return { id: null, org: null };
+  if (typeof id !== 'string' || !isXeroId(id) || typeof org !== 'string' || !isXeroId(org)) {
+    throw new LinkError('BAD_REQUEST', 'The recipient you saw must be given as both its Xero contact and its organisation, or as none.', 400);
+  }
+  return { id: id.trim(), org: org.trim() };
+}
+
+const RECIPIENT_CHANGED_TEXT = "This building's invoice recipient has changed since you loaded the page. Reload it and try again. Nothing was changed.";
+
+function requireUnchanged(building: BuildingRecipientRow, expected: { id: string | null; org: string | null }) {
+  const id = building.default_invoice_xero_contact_id?.trim() || null;
+  const org = building.default_invoice_xero_org_id?.trim() || null;
+  if (id !== expected.id || org !== expected.org) throw new LinkError('RECIPIENT_CHANGED', RECIPIENT_CHANGED_TEXT, 409);
+}
+
+/** The database function's refusals, in the same words as the checks made here first. */
+function recipientWriteError(message: string): Error {
+  if (message.includes('building_invoice_recipient_changed')) return new LinkError('RECIPIENT_CHANGED', RECIPIENT_CHANGED_TEXT, 409);
+  if (message.includes('building_not_found')) return new LinkError('BUILDING_NOT_FOUND', 'That building could not be found.', 404);
+  if (message.includes('building_invoice_recipient_incomplete') || message.includes('building_invoice_recipient_actor_required')) {
+    return new LinkError('RECIPIENT_INCOMPLETE', 'The recipient could not be saved because some of its details were missing. Nothing was changed.');
+  }
+  return new Error(`Could not save the invoice recipient: ${message}`);
+}
+
+async function setBuildingRecipient(db: SupabaseClient, body: Record<string, unknown>) {
+  const buildingId = requireId(body.buildingId, 'The building');
+  const xeroId = requireId(body.xeroContactId, 'The Xero contact');
+  if (typeof body.expectedName !== 'string' || body.expectedName.trim() === '') {
+    throw new LinkError('BAD_REQUEST', 'The name of the Xero contact you chose must be sent so the choice can be confirmed.', 400);
+  }
+  const expected = expectedCurrent(body);
+
+  // A change made meanwhile is reported before Xero is asked anything (the database checks again, atomically, when saving).
+  const building = await loadBuilding(db, buildingId);
+  requireUnchanged(building, expected);
+
+  const { accessToken, orgId } = await connect();
+  const lookup = await getContactById(accessToken, xeroId);
+  if (lookup.outcome === 'not_found' || !same(lookup.value.ContactID, xeroId)) {
+    throw new LinkError(
+      'CONTACT_NOT_IN_ORGANISATION',
+      'That Xero contact does not exist in the connected Xero organisation (it may belong to a different organisation, or it was removed). Nothing was changed.',
+    );
+  }
+  const contact = recipientDetails(lookup.value);
+  if (contact.blockedReason) throw new LinkError(BLOCKED_CODE[contact.blockedReason], RECIPIENT_BLOCKED_TEXT[contact.blockedReason]);
+  if (contact.name !== body.expectedName.trim()) {
+    throw new LinkError(
+      'CONTACT_CHANGED',
+      'That Xero contact has changed since you looked at it (its name is different now). Search again and confirm the contact you intend. Nothing was changed.',
+      409,
+    );
+  }
+
+  const { data: user } = await db.auth.getUser();
+  const actor = user.user?.email?.trim();
+  if (!actor) throw new LinkError('ACTOR_UNKNOWN', 'Your account has no email address to record who chose the recipient. Nothing was changed.');
+
+  const { error } = await serviceClient().rpc('set_building_invoice_recipient', {
+    p_building_id: buildingId,
+    p_xero_contact_id: contact.contactId,
+    p_xero_org_id: orgId,
+    p_xero_contact_name: contact.name,
+    p_xero_contact_email: contact.email,
+    p_actor: actor,
+    p_expected_current_xero_contact_id: expected.id,
+    p_expected_current_xero_org_id: expected.org,
+  });
+  if (error) throw recipientWriteError(error.message);
+
+  return {
+    ok: true,
+    recipient: { ...contact, xeroOrgId: orgId },
+    previous: expected.id ? { xeroContactId: expected.id, xeroOrgId: expected.org } : null,
+    unchanged: same(expected.id, contact.contactId) && same(expected.org, orgId),
+  };
+}
+
+async function clearBuildingRecipient(db: SupabaseClient, body: Record<string, unknown>) {
+  const buildingId = requireId(body.buildingId, 'The building');
+  const expected = expectedCurrent(body);
+  const building = await loadBuilding(db, buildingId);
+  requireUnchanged(building, expected);
+  if (expected.id === null) return { ok: true, cleared: false };
+
+  const { error } = await serviceClient().rpc('clear_building_invoice_recipient', {
+    p_building_id: buildingId,
+    p_expected_current_xero_contact_id: expected.id,
+    p_expected_current_xero_org_id: expected.org,
+  });
+  if (error) throw recipientWriteError(error.message);
+  return { ok: true, cleared: true };
+}
+
+const OWN_RECIPIENT_TEXT =
+  "This building's invoice recipient was chosen in its invoice recipient panel, not through a contact. Change or clear it there. Nothing was changed.";
 
 async function link(db: SupabaseClient, body: Record<string, unknown>) {
   const localId = requireId(body.localContactId, 'The contact');
@@ -324,6 +530,7 @@ async function setBuildingDefault(db: SupabaseClient, body: Record<string, unkno
   const building = await loadBuilding(db, buildingId);
   const contact = await loadContact(db, localId);
 
+  if (hasOwnRecipient(building)) throw new LinkError('RECIPIENT_SET_IN_PANEL', OWN_RECIPIENT_TEXT, 409);
   if (contact.client_id !== building.client_id) {
     throw new LinkError('WRONG_CLIENT', "That contact belongs to a different client from this building, so it cannot be the building's default recipient. Nothing was changed.");
   }
@@ -343,20 +550,27 @@ async function setBuildingDefault(db: SupabaseClient, body: Record<string, unkno
     .eq('id', buildingId)
     .select('id')
     .maybeSingle();
-  if (error) throw new Error(`Could not save the default recipient: ${error.message}`);
+  if (error) {
+    if (error.message.includes('building_invoice_recipient_server_only')) throw new LinkError('RECIPIENT_SET_IN_PANEL', OWN_RECIPIENT_TEXT, 409);
+    throw new Error(`Could not save the default recipient: ${error.message}`);
+  }
   if (!updated) throw new LinkError('BUILDING_NOT_FOUND', 'That building could not be found.', 404);
   return { ok: true };
 }
 
 async function clearBuildingDefault(db: SupabaseClient, body: Record<string, unknown>) {
   const buildingId = requireId(body.buildingId, 'The building');
+  if (hasOwnRecipient(await loadBuilding(db, buildingId))) throw new LinkError('RECIPIENT_SET_IN_PANEL', OWN_RECIPIENT_TEXT, 409);
   const { data: updated, error } = await db
     .from('buildings')
     .update({ default_invoice_contact_id: null, default_invoice_xero_contact_id: null, default_invoice_xero_org_id: null })
     .eq('id', buildingId)
     .select('id')
     .maybeSingle();
-  if (error) throw new Error(`Could not clear the default recipient: ${error.message}`);
+  if (error) {
+    if (error.message.includes('building_invoice_recipient_server_only')) throw new LinkError('RECIPIENT_SET_IN_PANEL', OWN_RECIPIENT_TEXT, 409);
+    throw new Error(`Could not clear the default recipient: ${error.message}`);
+  }
   if (!updated) throw new LinkError('BUILDING_NOT_FOUND', 'That building could not be found.', 404);
   return { ok: true };
 }
@@ -400,6 +614,14 @@ Deno.serve(async (req: Request) => {
         return json(await setBuildingDefault(db, body), 200);
       case 'clearBuildingDefault':
         return json(await clearBuildingDefault(db, body), 200);
+      case 'searchRecipients':
+        return json(await searchRecipients(body), 200);
+      case 'getRecipient':
+        return json(await getRecipient(body), 200);
+      case 'setBuildingRecipient':
+        return json(await setBuildingRecipient(db, body), 200);
+      case 'clearBuildingRecipient':
+        return json(await clearBuildingRecipient(db, body), 200);
       default:
         return json({ ok: false, code: 'BAD_REQUEST', error: 'Unknown action.' }, 400);
     }

@@ -382,7 +382,17 @@ export interface XeroContact {
   AccountNumber?: string;
   /** Present when this contact was merged into another: the surviving contact's id. */
   MergedToContactID?: string;
-  Addresses?: { AddressType?: string; City?: string; PostalCode?: string }[];
+  Addresses?: {
+    AddressType?: string;
+    AddressLine1?: string;
+    AddressLine2?: string;
+    AddressLine3?: string;
+    AddressLine4?: string;
+    City?: string;
+    Region?: string;
+    PostalCode?: string;
+    Country?: string;
+  }[];
   ContactPersons?: { IncludeInEmails?: boolean }[];
 }
 

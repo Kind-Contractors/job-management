@@ -14,7 +14,7 @@ export const UNLINKED_NEW_CONTACT_MESSAGE =
   'Save the new contact first (Create contact), then send. Nothing was saved or sent. Or choose an existing recipient.';
 
 export const NO_USABLE_DEFAULT_MESSAGE =
-  "No recipient is chosen for this invoice, and this building has no usable default recipient. Choose a contact that is linked to Xero, or set the building's default recipient on the building page.";
+  "No recipient is chosen for this invoice, and this building has no usable default recipient. Choose a Xero contact for this invoice, or set the building's default recipient in Xero on the building page.";
 export const NOT_LINKED_RECIPIENT_MESSAGE =
   'That contact is not linked to a Xero contact, so an invoice cannot be sent to it. Link it to its existing Xero contact first ("Link to Xero contact"), or choose a linked contact. Nothing was saved or sent.';
 export const RECIPIENT_UNAVAILABLE_MESSAGE =
@@ -81,4 +81,31 @@ export function resolveSendRecipientId(choice: RecipientChoice): string | undefi
   }
   if (choice.selectedIsLinked === false) throw new Error(NOT_LINKED_RECIPIENT_MESSAGE);
   return choice.selectedContactId === choice.usableDefaultContactId ? undefined : choice.selectedContactId;
+}
+
+export const PERSON_WITH_BUILDING_RECIPIENT_MESSAGE =
+  "This building has its own Xero invoice recipient, so a person can't be chosen instead. To invoice someone else this time, choose a Xero contact for this invoice.";
+
+/** A Xero contact chosen for ONE invoice (never saved on the building): its ContactID and the name the manager saw. */
+export interface OneOffXeroChoice {
+  xeroContactId: string;
+  name: string;
+}
+
+/**
+ * What to send for the recipient: undefined (the server uses the invoice's locked recipient, else the building's own Xero
+ * recipient, else its contact-based default), a Xero contact chosen for this invoice ({ xeroContactId, expectedName }), or a
+ * person's contact id (legacy - only for a building without its own Xero recipient). A person is never sent in place of the
+ * building's own recipient; everything else follows resolveSendRecipientId.
+ */
+export function resolveSendRequest(
+  choice: RecipientChoice & { hasBuildingRecipient?: boolean; oneOffXero?: OneOffXeroChoice | null },
+): string | { xeroContactId: string; expectedName: string } | undefined {
+  if (choice.recipientLocked) return undefined;
+  if (choice.oneOffXero) return { xeroContactId: choice.oneOffXero.xeroContactId, expectedName: choice.oneOffXero.name };
+  if (choice.hasBuildingRecipient) {
+    if (choice.selectedContactId || choice.addingNewContact) throw new Error(PERSON_WITH_BUILDING_RECIPIENT_MESSAGE);
+    return undefined;
+  }
+  return resolveSendRecipientId(choice);
 }

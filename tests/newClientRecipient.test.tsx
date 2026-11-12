@@ -1,7 +1,8 @@
-// A brand-new client and building whose only contact is not linked to Xero, with no building default recipient: the contact is
-// listed AND selectable in the invoice editor, the editor says it must be linked to its existing Xero contact before the invoice is
-// sent (never "matched or created on submit"), the Link button is offered, and nothing can be sent for it - pressing the button
-// stops before the invoice is saved. Real components rendered to static markup from a seeded query cache (there is no DOM library in this repo).
+// A brand-new client and building whose only contact is not linked to Xero, with no building default recipient. Since 2026-11-11
+// people are not invoice recipients in the editor: it offers "Choose a Xero contact for this invoice" (found by name) and the way to
+// set the building's default recipient - nothing is listed, linked, matched or created for the person. The pure send rules below
+// (an unlinked person is never sendable) still hold for older callers. Real components rendered to static markup from a seeded
+// query cache (there is no DOM library in this repo).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -39,39 +40,28 @@ function render(contacts: any[]) {
   ));
 }
 
-test('a NEW unlinked contact (valid email, no building default) is listed and SELECTABLE; it must be linked before sending', () => {
-  const html = render([NEW_CONTACT]);
-  assert.match(html, /<option value="ct-new"(?: class="[^"]*")?>Pat New — pat@newclient\.test · not linked to Xero yet<\/option>/);
-  assert.doesNotMatch(html, /matched or created/);
-  assert.equal(canSendInvoiceTo(NEW_CONTACT), false);
-});
-
-test('the editor says how to proceed: link a contact to its EXISTING Xero contact; the app never matches or creates one', () => {
-  const html = render([NEW_CONTACT]);
-  assert.match(html, /None of this client(?:'|&#x27;)s contacts is linked to a Xero contact yet\. You can choose any of them, but it must be linked to\s+its existing Xero contact \(“Link to Xero contact”, offered once you choose it\) before the invoice can be sent\.\s+The app never matches or creates a Xero contact by itself\./);
-  assert.doesNotMatch(html, /created in Xero, when you submit/);
-});
-
-test('no default: it says so and offers "Set up contacts & defaults" (a new tab), not a search panel', () => {
-  const html = render([NEW_CONTACT]);
+test('a NEW client and building (one unlinked contact, no default): the editor offers a Xero contact for this invoice and setting the building default', () => {
+  const html = render([NEW_CONTACT]).replace(/&#x27;/g, "'");
+  assert.match(html, />Choose a Xero contact for this invoice</);
+  assert.match(html, /data-testid="no-invoice-default"[^>]*>This building has no default recipient in Xero yet, so a Xero contact is chosen for each invoice\./);
+  assert.doesNotMatch(html, /Pat New|<option value="ct-new"|role="combobox"/, 'the person is not offered as a recipient (removed 2026-11-11)');
+  assert.doesNotMatch(html, /Link to Xero|not linked to Xero|matched or created|created in Xero, when you submit/);
   assert.doesNotMatch(html, /data-testid="find-xero-contact"/);
-  assert.match(html, /data-testid="no-invoice-default"[^>]*>This building has no default invoice recipient, so one is chosen for each invoice\./);
 });
 
-test('a contact restored from an older browser cache (Xero fields MISSING, not null) is selectable but treated as unlinked, not as sendable', () => {
+test('contacts restored from an older browser cache (Xero fields MISSING) or with no email change nothing on screen, and are never sendable', () => {
+  for (const c of [CACHED_SHAPE, NO_EMAIL]) {
+    const html = render([c]);
+    assert.match(html, />Choose a Xero contact for this invoice</);
+    assert.doesNotMatch(html, /Pat New|No Email/);
+  }
   assert.equal('xeroContactId' in CACHED_SHAPE, false);
   assert.equal(canSendInvoiceTo(CACHED_SHAPE as any), false);
-  assert.match(render([CACHED_SHAPE]), /<option value="ct-new"(?: class="[^"]*")?>Pat New — pat@newclient\.test · not linked to Xero yet<\/option>/);
+  assert.equal(canSendInvoiceTo({ ...NEW_CONTACT, xeroContactId: '   ' }), false, 'a blank link is not a link');
 });
 
 test('the persisted cache version is bumped, so data cached before the Xero fields existed is discarded on restore', () => {
   assert.notEqual(QUERY_CACHE_SCHEMA_VERSION, '2026-10-13-report-videos');
-});
-
-test('a contact with no email is selectable too (it still needs a link before sending), and a blank link is not treated as a link', () => {
-  const html = render([NO_EMAIL]);
-  assert.match(html, /<option value="ct-noemail"(?: class="[^"]*")?>No Email · not linked to Xero yet<\/option>/);
-  assert.equal(canSendInvoiceTo({ ...NEW_CONTACT, xeroContactId: '   ' }), false);
 });
 
 test('choosing an unlinked contact is refused BEFORE anything is saved or sent (the send never starts)', () => {
@@ -86,12 +76,3 @@ test('choosing an unlinked contact is refused BEFORE anything is saved or sent (
   );
 });
 
-test('once linked (as the link dialog saves it), the same contact is selectable and its LOCAL id is what is sent', () => {
-  const linked = { ...NEW_CONTACT, xeroContactId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', xeroOrgId: 'org-1', xeroContactName: 'Pat New Ltd' };
-  assert.equal(canSendInvoiceTo(linked), true);
-  assert.match(render([linked]), /<option value="ct-new"(?: class="[^"]*")?>Pat New — pat@newclient\.test · Xero: Pat New Ltd<\/option>/);
-  assert.equal(
-    resolveSendRecipientId({ addingNewContact: false, selectedContactId: 'ct-new', usableDefaultContactId: null, selectedIsLinked: canSendInvoiceTo(linked) }),
-    'ct-new',
-  );
-});
