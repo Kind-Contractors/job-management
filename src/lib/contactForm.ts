@@ -17,7 +17,7 @@ export interface ContactFormFields {
 
 /** The accounts-only checkbox, worded the same wherever a contact is created or edited. */
 export const ACCOUNTS_ONLY_LABEL = 'Accounts only';
-export const ACCOUNTS_ONLY_HINT = 'For invoices. Never chosen automatically as the recipient of a job report.';
+export const ACCOUNTS_ONLY_HINT = 'An accounts contact. Never chosen automatically as the recipient of a job report.';
 
 export const BLANK_CONTACT_FORM: ContactFormFields = { name: '', email: '', phoneNumber: '', isPrimary: false, isAccountsContact: false };
 

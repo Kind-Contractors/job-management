@@ -1,6 +1,6 @@
 // Recipient dropdowns colour the contacts that need care, and the invoice shows more about its default recipient:
-//   - Ready for accounts: a contact NOT linked to Xero yet is amber in the invoice recipient dropdown (and the closed box is amber
-//     while one is chosen), with a key; the building default's email and the building's invoice details are shown.
+//   - Ready for accounts: since 2026-11-11 there is no person dropdown on the invoice (people are not invoice recipients), so
+//     nothing is coloured there; an older contact-based default is shown by its Xero name, with the building's invoice details.
 //   - Ready for client: an "Accounts only" contact is amber in the report recipient dropdown, with a key.
 // A native <option> can only be coloured whole. Rendered to static markup with the query cache seeded (no DOM library here).
 import { readFileSync } from 'node:fs';
@@ -42,26 +42,16 @@ function render(opts: { contacts: JobContactSummary[]; def?: BuildingDefaultReci
 }
 
 // ---- Ready for accounts: the invoice recipient -------------------------------------------------------------------------------
-test('INVOICE: only the words "not linked to Xero yet" are amber - the name and email keep the normal colour', () => {
+test('INVOICE: there is no person dropdown on the invoice any more (removed 2026-11-11), so no recipient is coloured there', () => {
   const html = render({ contacts: [SAM, NEW] });
-  assert.match(html, /data-value="ct-new"[^>]*><span>Pat New — ct-new@client\.test<\/span><span class="text-due-fg"> · not linked to Xero yet<\/span><\/li>/);
-  assert.match(html, /data-value="ct-sam"[^>]*><span>Sam — ct-sam@client\.test<\/span><span> · Xero: Sam Ltd<\/span><\/li>/, 'a linked contact: nothing amber');
-  assert.doesNotMatch(html, /recipient-colour-key/, 'no colour key needed: the amber words explain themselves');
+  assert.doesNotMatch(html, /role="combobox"|data-value="ct-new"|data-value="ct-sam"|not linked to Xero yet/);
+  assert.doesNotMatch(src('src', 'components', 'jobs', 'InvoiceEditor.tsx'), /RecipientSelect/);
 });
 
-test('INVOICE: the chosen option shows the same way in the closed box (name normal, warning words amber)', () => {
-  const box = /role="combobox"[^>]*>([\s\S]*?)<\/button>/;
-  const none = box.exec(render({ contacts: [SAM, NEW] }))![1];
-  assert.match(none, /<span>Choose a recipient…<\/span>/, 'nothing chosen: the placeholder');
-  const code = src('src', 'components', 'shared', 'RecipientSelect.tsx');
-  assert.match(code, /\{selected \? optionText\(selected\) : null\}/, 'the closed box renders the chosen option with the same colouring');
-  assert.match(code, /<span className=\{o\.note\.warn \? 'text-due-fg' : undefined\}>/);
-});
-
-test('INVOICE DEFAULT: the default recipient is shown with its email and Xero contact, and the building\'s invoice details', () => {
+test("INVOICE DEFAULT: an older contact-based default is shown by its Xero name, with the building's invoice details", () => {
   const html = render({ contacts: [SAM, NEW], def: DEFAULT, invoiceDetails: 'PO 4471\nAttn: accounts' });
   const card = html.slice(html.indexOf('data-testid="invoice-recipient"'), html.indexOf('data-testid="invoice-email-notice"'));
-  assert.match(card, />Sam<\/span><span class="text-neutral-600">ct-sam@client\.test<\/span><span class="text-teal-700">✓ Xero: Sam Ltd<\/span>/);
+  assert.match(card, />Sam Ltd<\/span><span class="text-neutral-500">· this building's default \(contact-based, the older\s+way\)<\/span>/);
   assert.match(card, /data-testid="invoice-details"[^>]*><span[^>]*>Invoice details<\/span><span class="whitespace-pre-line text-ink">PO 4471\nAttn: accounts<\/span>/);
 });
 

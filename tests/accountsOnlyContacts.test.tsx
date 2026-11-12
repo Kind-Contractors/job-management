@@ -3,8 +3,6 @@
 // written only when explicitly given, so saving other fields never changes it. The job-report picker labels accounts-only
 // contacts and never preselects one, but a deliberate choice is allowed (with a warning). Invoicing and Xero linking are unchanged.
 // Real code under a fake fetch (no network: the app's Supabase URL is tests.invalid) and static page renders.
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -246,7 +244,7 @@ test('PAGE 4: the default comes from the report-only rule; a deliberate accounts
 });
 
 // ---- invoicing and Xero linking are unchanged -------------------------------------------------------------------------------
-test('INVOICE: accounts-only contacts are still offered as invoice recipients and for Xero linking', () => {
+test('INVOICE: the invoice editor no longer lists people (accounts-only or not); nothing anywhere filters on the classification', () => {
   const inv: InvoiceDetail = {
     id: 'inv-1', jobId: 'j1', status: 'draft', dueDate: '2026-11-17', description: null, worksOrderNumber: null, xeroInvoiceId: null, xeroInvoiceNumber: null,
     xeroContactId: null, lastError: null, sentAt: null, xeroRecipientName: null, xeroRecipientEmail: null, notEmailedReason: null,
@@ -259,12 +257,13 @@ test('INVOICE: accounts-only contacts are still offered as invoice recipients an
       <InvoiceEditor invoiceId="inv-1" onClose={() => {}} clientId="c1" clientContacts={[OPS, ACC]} buildingDefault={null} />
     </QueryClientProvider>,
   ));
-  assert.match(html, /<option value="acc"(?: class="[^"]*")?>Accounts Team — acc@client\.test · not linked to Xero yet<\/option>/, 'selectable invoice recipient');
-  assert.doesNotMatch(html, /data-testid="find-xero-contact"/, 'linking moved to the Building File (Contacts & Defaults)');
-  assert.doesNotMatch(noComments(src('src', 'components', 'jobs', 'FindXeroContactPanel.tsx')), /isAccountsContact/, 'the panel never filters on it');
+  // Since 2026-11-11 an invoice goes to a Xero contact found by name, not to a person: no contact is listed as a recipient.
+  assert.doesNotMatch(html, /Accounts Team|<option value="acc"/, 'people are not offered as invoice recipients');
+  assert.match(html, />Choose a Xero contact for this invoice</);
+  assert.doesNotMatch(html, /data-testid="find-xero-contact"/);
   for (const f of [
-    ['src', 'components', 'jobs', 'InvoiceEditor.tsx'], ['src', 'components', 'jobs', 'BuildingDefaultRecipientPanel.tsx'], ['src', 'components', 'jobs', 'LinkXeroContactDialog.tsx'],
-    ['src', 'components', 'jobs', 'UnlinkedRecipientsList.tsx'], ['src', 'lib', 'invoiceRecipient.ts'], ['src', 'lib', 'xeroLinkStatus.ts'], ['src', 'repository', 'mapJobRow.ts'],
+    ['src', 'components', 'jobs', 'InvoiceEditor.tsx'], ['src', 'components', 'buildings', 'BuildingInvoiceRecipientPanel.tsx'],
+    ['src', 'lib', 'invoiceRecipient.ts'], ['src', 'lib', 'xeroLinkStatus.ts'], ['src', 'repository', 'mapJobRow.ts'],
     ['supabase', 'functions', 'xero-create-invoice', 'index.ts'], ['supabase', 'functions', 'xero-link-contact', 'index.ts'], ['supabase', 'functions', '_shared', 'invoiceRecipients.ts'],
     ['supabase', 'functions', 'send-client-report', 'index.ts'],
   ]) {

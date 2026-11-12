@@ -73,6 +73,43 @@ export function summariseContact(c: XeroContact): ContactSummary {
   };
 }
 
+/**
+ * What a manager sees when choosing a BUILDING's invoice recipient (the Xero contact named on its invoices): the full name, email
+ * and address, so similar contacts can be told apart (managers only; decided 2026-11-10). Still nothing about phones, bank or tax
+ * details, and nothing here decides which contact is "the" one.
+ */
+export interface RecipientDetails extends ContactSummary {
+  /** The contact's full email address (where Xero sends the invoice), or null. */
+  email: string | null;
+  /** The postal (billing) address on one line - Xero's POBOX address, else the street address - or null. */
+  address: string | null;
+}
+
+export interface AnnotatedRecipientDetails extends RecipientDetails {
+  sameNameAsOthers: number;
+  sameEmailAsOthers: number;
+}
+
+function addressOf(c: XeroContact): string | null {
+  const all = c.Addresses ?? [];
+  const ordered = [...all.filter((a) => a.AddressType === 'POBOX'), ...all.filter((a) => a.AddressType === 'STREET'), ...all.filter((a) => a.AddressType !== 'POBOX' && a.AddressType !== 'STREET')];
+  for (const a of ordered) {
+    const parts = [a.AddressLine1, a.AddressLine2, a.AddressLine3, a.AddressLine4, a.City, a.Region, a.PostalCode, a.Country].map(text).filter(Boolean);
+    if (parts.length > 0) return parts.join(', ');
+  }
+  return null;
+}
+
+export function recipientDetails(c: XeroContact): RecipientDetails {
+  return { ...summariseContact(c), email: text(c.EmailAddress) || null, address: addressOf(c) };
+}
+
+/** recipientDetails for a result list, each flagged with how many look-alikes sit beside it. Order is preserved; nothing is picked. */
+export function recipientCandidates(contacts: XeroContact[]): AnnotatedRecipientDetails[] {
+  const flagged = summariseAndFlag(contacts);
+  return contacts.map((c, i) => ({ ...recipientDetails(c), sameNameAsOthers: flagged[i].sameNameAsOthers, sameEmailAsOthers: flagged[i].sameEmailAsOthers }));
+}
+
 /** Summaries of a result list, each flagged with how many look-alikes sit beside it. Order is preserved; nothing is picked. */
 export function summariseAndFlag(contacts: XeroContact[]): AnnotatedContactSummary[] {
   const names = new Map<string, number>();

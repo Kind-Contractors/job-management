@@ -613,7 +613,7 @@ test('a recipient from a DIFFERENT client is refused before Xero is asked about 
 test('a missing recipient on a first send is refused (nothing to link or verify)', async () => {
   const res = await call({ invoiceId: 'inv-1' });
   assert.equal(res.status, 502);
-  assert.match((await res.json()).error, /no default recipient/);
+  assert.match((await res.json()).error, /no invoice recipient/);
   assertNoXeroWrites();
 });
 
@@ -1396,7 +1396,7 @@ test('DEFAULT 2: with NO default and no contact chosen, the send is refused with
   const out = await res.json();
   assert.equal(res.status, 502);
   assert.equal(out.code, 'NO_RECIPIENT');
-  assert.match(out.error, /no default recipient/);
+  assert.match(out.error, /no invoice recipient/);
   assert.equal(invoiceCreatesOrUpdates().length, 0);
   assert.equal(contactReads().length, 0, 'no contact was even looked at');
   assert.equal(world.invoice.xero_contact_id, null);
@@ -2389,4 +2389,238 @@ test('TAX 2: when the sales rate cannot be established (only custom rates) NOTHI
     assert.match(text, /20% \(VAT on Expenses\) \(TaxType INPUT2, ReportTaxType INPUT, CanApplyToRevenue false\)/);
     assert.doesNotMatch(text, new RegExp(`${SECRET}|${ACCESS_TOKEN}|test-client-id`));
   }
+});
+
+// ---- a building's OWN Xero recipient, and a Xero contact chosen for one invoice (Step 3) -------------------------------------------
+// The building's own recipient (migration 20261110100000: a Xero contact, no person attached) is the default; a Xero contact can be
+// chosen for one invoice without touching the building; a person's Xero link never takes the place of the building's recipient; an
+// invoice Xero already holds is never reassigned, whatever the building now says.
+const OWN = 'e0e0e0e0-e0e0-4e0e-8e0e-e0e0e0e0e0e0';
+const ONE_OFF = 'f0f0f0f0-f0f0-4f0f-8f0f-f0f0f0f0f0f0';
+function setOwnRecipient(xeroId = OWN, org = ORG) {
+  world.building.default_invoice_contact_id = null;
+  world.building.default_invoice_xero_contact_id = xeroId;
+  world.building.default_invoice_xero_org_id = org;
+}
+function addOwnAndOneOffContacts() {
+  world.xeroContacts[OWN] = { ContactID: OWN, Name: 'Estate Management London Ltd', EmailAddress: 'ap@eml.test', ContactStatus: 'ACTIVE' };
+  world.xeroContacts[ONE_OFF] = { ContactID: ONE_OFF, Name: '137 Randolph DCI Finance Limited', EmailAddress: 'ap@dci.test', ContactStatus: 'ACTIVE' };
+}
+const buildingWrites = () => world.dbLog.filter((r) => r.path === '/rest/v1/buildings' && r.method !== 'GET');
+const localContactReads = () => world.dbLog.filter((r) => r.path === '/rest/v1/contacts');
+const oneOff = (over: Record<string, unknown> = {}) => call({ invoiceId: 'inv-1', xeroContactId: ONE_OFF, expectedXeroContactName: '137 Randolph DCI Finance Limited', ...over });
+
+test('BUILDING RECIPIENT: with nothing chosen, the building\'s own Xero recipient is used - read by id, no person consulted', async () => {
+  addOwnAndOneOffContacts();
+  setOwnRecipient();
+  const res = await call({ invoiceId: 'inv-1' });
+  const out = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(out.recipientSource, 'building_recipient');
+  assert.equal(out.recipientName, 'Estate Management London Ltd');
+  assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Contact.ContactID, OWN);
+  assert.deepEqual(Object.keys(invoiceCreatesOrUpdates()[0].body.Invoices[0].Contact), ['ContactID'], 'the contact is named by id only');
+  assert.equal(world.invoice.xero_contact_id, OWN);
+  assert.equal(world.invoice.xero_recipient_email, 'ap@eml.test');
+  assert.equal(localContactReads().length, 0, 'no person (and no person\'s Xero link) was read');
+  assert.ok(contactReads().every((r) => r.path.endsWith(`/Contacts/${OWN}`)));
+  assert.equal(buildingWrites().length, 0);
+});
+
+test('BUILDING RECIPIENT: unusable in Xero (missing, other organisation, archived, merged, no email) is refused - never a fallback', async () => {
+  const cases: [string, (c: XeroContactRec) => void, string][] = [
+    ['missing', () => { delete world.xeroContacts[OWN]; }, 'CONTACT_NOT_IN_ORGANISATION'],
+    ['archived', (c) => { c.ContactStatus = 'ARCHIVED'; }, 'CONTACT_NOT_ACTIVE'],
+    ['merged', (c) => { c.MergedToContactID = CONTACT; }, 'CONTACT_MERGED'],
+    ['no email', (c) => { delete c.EmailAddress; }, 'CONTACT_NO_EMAIL'],
+  ];
+  for (const [label, breakIt, code] of cases) {
+    reset();
+    addOwnAndOneOffContacts();
+    setOwnRecipient();
+    breakIt(world.xeroContacts[OWN]);
+    const res = await call({ invoiceId: 'inv-1' });
+    const out = await res.json();
+    assert.equal(out.code, code, label);
+    assert.equal(invoiceCreatesOrUpdates().length, 0, `${label}: nothing created`);
+    assert.equal(localContactReads().length, 0, `${label}: no person read as a fallback`);
+    assert.ok(!contactReads().some((r) => r.path.endsWith(`/Contacts/${CONTACT}`)), `${label}: the merged-into / a person's contact is not used instead`);
+  }
+  reset();
+  addOwnAndOneOffContacts();
+  setOwnRecipient(OWN, OTHER_ORG);
+  const res = await call({ invoiceId: 'inv-1' });
+  assert.equal((await res.json()).code, 'DEFAULT_WRONG_ORGANISATION');
+  assert.equal(contactReads().length, 0, 'a recipient saved for another organisation is not even looked up');
+  assert.equal(invoiceCreatesOrUpdates().length, 0);
+});
+
+test('PERSON NEVER OVERRIDES: a person contactId on a building with its own recipient is refused before anything - draft untouched, no Xero', async () => {
+  addOwnAndOneOffContacts();
+  setOwnRecipient();
+  // ct-1 is a person of the client, linked in Xero to CONTACT (the "Laura" case).
+  const res = await call({ invoiceId: 'inv-1', contactId: 'ct-1' });
+  const out = await res.json();
+  assert.equal(res.status, 409);
+  assert.equal(out.code, 'USE_XERO_RECIPIENT');
+  assert.equal(world.invoice.status, 'draft', 'not claimed');
+  assert.equal(world.invoice.xero_contact_id, null);
+  assert.equal(world.xeroLog.length, 0, 'Xero was not contacted at all');
+});
+
+test('PERSON NEVER OVERRIDES: even if the building gains its own recipient AFTER the early check, the full check refuses the person', async () => {
+  addOwnAndOneOffContacts();
+  // The early (pre-claim) check sees no own recipient; it appears before the post-claim check.
+  world.afterInvoiceRead = (n) => { if (n === 2) setOwnRecipient(); }; // read 1 = the pre-claim validation, 2 = after the claim
+  const res = await call({ invoiceId: 'inv-1', contactId: 'ct-1' });
+  const out = await res.json();
+  assert.equal(out.code, 'USE_XERO_RECIPIENT');
+  assert.equal(invoiceCreatesOrUpdates().length, 0);
+  assert.notEqual(world.invoice.xero_contact_id, CONTACT, 'the person\'s Xero contact was never recorded');
+});
+
+test('LEGACY: without an own recipient, a person chosen for the invoice and a contact-based default still work exactly as before', async () => {
+  setBuildingDefault();
+  let res = await call({ invoiceId: 'inv-1' });
+  assert.equal(res.status, 200);
+  assert.equal(((await res.json()) as any).recipientSource, 'building_default');
+  reset();
+  res = await call({ invoiceId: 'inv-1', contactId: 'ct-1' });
+  assert.equal(res.status, 200);
+  assert.equal(((await res.json()) as any).recipientSource, 'selected');
+  assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Contact.ContactID, CONTACT);
+});
+
+test('ONE-OFF OVERRIDE: a Xero contact chosen for this invoice is used, recorded on the invoice only - the building\'s saved recipient never changes', async () => {
+  for (const setup of [() => setOwnRecipient(), () => setBuildingDefault(), () => {}]) {
+    reset();
+    addOwnAndOneOffContacts();
+    setup();
+    const buildingBefore = JSON.stringify(world.building);
+    const res = await oneOff();
+    const out = await res.json();
+    assert.equal(res.status, 200);
+    assert.equal(out.recipientSource, 'selected_xero');
+    assert.equal(out.recipientName, '137 Randolph DCI Finance Limited');
+    assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Contact.ContactID, ONE_OFF);
+    assert.equal(world.invoice.xero_contact_id, ONE_OFF);
+    assert.equal(world.invoice.xero_recipient_name, '137 Randolph DCI Finance Limited');
+    assert.equal(JSON.stringify(world.building), buildingBefore, 'the building\'s saved recipient is unchanged');
+    assert.equal(buildingWrites().length, 0, 'nothing was written to the building');
+    assert.equal(localContactReads().length, 0);
+  }
+});
+
+test('ONE-OFF OVERRIDE: the next invoice for the same building still goes to the building\'s own recipient', async () => {
+  addOwnAndOneOffContacts();
+  setOwnRecipient();
+  await oneOff();
+  // A new draft for the same building, sent with nothing chosen.
+  world.invoice = freshInvoice();
+  world.xeroLog.length = 0;
+  const res = await call({ invoiceId: 'inv-1' });
+  assert.equal(((await res.json()) as any).recipientSource, 'building_recipient');
+  assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Contact.ContactID, OWN);
+});
+
+test('ONE-OFF OVERRIDE: renamed since chosen (CONTACT_CHANGED), missing, archived, merged or email-less is refused - nothing created, never substituted', async () => {
+  const cases: [string, () => void, string, string?][] = [
+    ['renamed', () => { world.xeroContacts[ONE_OFF].Name = 'DCI Finance Ltd'; }, 'CONTACT_CHANGED'],
+    ['missing', () => { delete world.xeroContacts[ONE_OFF]; }, 'CONTACT_NOT_IN_ORGANISATION'],
+    ['archived', () => { world.xeroContacts[ONE_OFF].ContactStatus = 'ARCHIVED'; }, 'CONTACT_NOT_ACTIVE'],
+    ['merged', () => { world.xeroContacts[ONE_OFF].MergedToContactID = OWN; }, 'CONTACT_MERGED'],
+    ['no email', () => { delete world.xeroContacts[ONE_OFF].EmailAddress; }, 'CONTACT_NO_EMAIL'],
+  ];
+  for (const [label, breakIt, code] of cases) {
+    reset();
+    addOwnAndOneOffContacts();
+    setOwnRecipient();
+    breakIt();
+    const out = await (await oneOff()).json();
+    assert.equal(out.code, code, label);
+    assert.equal(invoiceCreatesOrUpdates().length, 0, `${label}: nothing created`);
+    assert.ok(!contactReads().some((r) => r.path.endsWith(`/Contacts/${OWN}`)), `${label}: the building's recipient is not used instead`);
+    assert.notEqual(world.invoice.xero_contact_id, OWN);
+  }
+});
+
+test('ONE-OFF OVERRIDE: the request must carry a valid id AND the confirmed name, and never a person contactId as well - refused before anything', async () => {
+  addOwnAndOneOffContacts();
+  for (const body of [
+    { invoiceId: 'inv-1', xeroContactId: ONE_OFF },
+    { invoiceId: 'inv-1', xeroContactId: ONE_OFF, expectedXeroContactName: '  ' },
+    { invoiceId: 'inv-1', xeroContactId: 'ap@dci.test', expectedXeroContactName: 'x' },
+    { invoiceId: 'inv-1', xeroContactId: 42, expectedXeroContactName: 'x' },
+    { invoiceId: 'inv-1', xeroContactId: ONE_OFF, expectedXeroContactName: '137 Randolph DCI Finance Limited', contactId: 'ct-1' },
+  ]) {
+    const res = await call(body as Record<string, unknown>);
+    assert.equal(res.status, 400, JSON.stringify(body));
+  }
+  assert.equal(world.invoice.status, 'draft');
+  assert.equal(world.xeroLog.length, 0);
+});
+
+test('LOCKED: an invoice Xero already holds cannot be reassigned to another Xero contact - refused, recorded recipient unchanged, nothing sent', async () => {
+  addOwnAndOneOffContacts();
+  xeroHoldsInvoice();
+  const res = await oneOff();
+  const out = await res.json();
+  assert.equal(out.code, 'RECIPIENT_LOCKED');
+  assert.equal(invoiceCreatesOrUpdates().length, 0);
+  assert.equal(emailCalls().length, 0);
+  assert.equal(world.invoice.xero_contact_id, CONTACT);
+  assert.equal(recipientWrites().filter((r) => r.body.xero_contact_id !== CONTACT).length, 0);
+});
+
+test('LOCKED: naming the SAME Xero contact the invoice was created for is accepted (an honest retry)', async () => {
+  addOwnAndOneOffContacts();
+  xeroHoldsInvoice();
+  const res = await call({ invoiceId: 'inv-1', xeroContactId: CONTACT, expectedXeroContactName: 'Oak Estates Ltd' });
+  assert.equal(res.status, 200);
+  assert.equal(invoiceCreatesOrUpdates()[0].path, `/api.xro/2.0/Invoices/${XERO_INVOICE}`);
+  assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Contact.ContactID, CONTACT);
+});
+
+test('RETRY keeps the ORIGINAL Xero Contact ID: the building\'s recipient changed after the invoice reached Xero - the retry still goes to the original', async () => {
+  addOwnAndOneOffContacts();
+  xeroHoldsInvoice(); // created in Xero for CONTACT
+  setOwnRecipient(OWN); // the building's recipient was changed afterwards
+  const res = await call({ invoiceId: 'inv-1' });
+  const out = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(out.recipientSource, 'locked');
+  assert.equal(invoiceCreatesOrUpdates().length, 1);
+  assert.equal(invoiceCreatesOrUpdates()[0].path, `/api.xro/2.0/Invoices/${XERO_INVOICE}`, 'the same Xero invoice is updated, none created');
+  assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Contact.ContactID, CONTACT);
+  assert.equal(world.invoice.xero_contact_id, CONTACT);
+  assert.ok(!contactReads().some((r) => r.path.endsWith(`/Contacts/${OWN}`)), 'the building\'s new recipient is not even looked up');
+});
+
+test('BUILDING CHANGE vs EXISTING INVOICES: changing or clearing the building\'s recipient leaves invoices already in Xero exactly as they were', async () => {
+  for (const change of [() => setOwnRecipient(OWN), () => setOwnRecipient(ONE_OFF), () => setBuildingDefault(), () => {
+    world.building.default_invoice_contact_id = null; world.building.default_invoice_xero_contact_id = null; world.building.default_invoice_xero_org_id = null;
+  }]) {
+    reset();
+    addOwnAndOneOffContacts();
+    xeroHoldsInvoice();
+    world.invoice.xero_recipient_name = 'Oak Estates Ltd';
+    change();
+    const res = await call({ invoiceId: 'inv-1' });
+    assert.equal(res.status, 200);
+    assert.equal(world.invoice.xero_contact_id, CONTACT);
+    assert.equal(world.invoice.xero_org_id, ORG);
+    assert.equal(world.invoice.xero_recipient_name, 'Oak Estates Ltd');
+    assert.equal(invoiceCreatesOrUpdates()[0].body.Invoices[0].Contact.ContactID, CONTACT);
+  }
+});
+
+test('STEP 3 never writes a Xero contact or a building: only invoice writes reach Xero, and the database is never asked to change a building', async () => {
+  addOwnAndOneOffContacts();
+  setOwnRecipient();
+  await call({ invoiceId: 'inv-1' });
+  world.invoice = freshInvoice();
+  await oneOff();
+  assert.equal(buildingWrites().length, 0);
+  assert.deepEqual(world.contactViolations, []);
+  assert.ok(xeroWrites().every((r) => /\/Invoices(\/[^/]+)?(\/Email)?$/.test(r.path)));
 });

@@ -17,7 +17,9 @@ of what was executed, not a guess.
 Three directories, each meant for a different, non-overlapping target. Which folder a
 file lives in is what determines whether a tool can ever apply it somewhere — there is
 no other Supabase-native way to scope a migration to one environment, so **file
-location is the actual safety mechanism** here, not just organization.
+location is the actual safety mechanism** here, not just organization. A fourth folder,
+`supabase/rollbacks/`, holds hand-run undo scripts that no tool ever applies (see its
+section below).
 
 ## `supabase/migrations/` (this folder) — shared, canonical, used for BOTH dev and production
 
@@ -126,6 +128,46 @@ its own `schema_migrations` table permanently records this as applied, and every
 new migration goes through `supabase/migrations/` exactly like production. It's only
 needed again if a dev-style project is ever rebuilt from scratch or `supabase db
 reset` is run against one.
+
+## `supabase/rollbacks/` — undo scripts, run by hand only, never by a tool
+
+A rollback undoes one migration from `supabase/migrations/`. It lives outside that folder
+on purpose: `supabase db push` (and every other migration tool) only ever reads
+`supabase/migrations/`, so a rollback can never be applied by accident as if it were a
+new migration. Each file is named after the migration it undoes:
+`<migration version>_<name>.rollback.sql`.
+
+Rules for every rollback script:
+
+- **Run by hand, as one transaction**, DEV first, and only after the change has been
+  reviewed and approved for that environment (same as any production change).
+- **Checks before it changes anything** - if undoing the migration would lose data a
+  manager entered, it refuses (raises an error) and changes nothing, saying what to
+  clear first. It never deletes or rewrites that data itself.
+- **Roll back the code that depends on the migration first** (Edge Functions, then the
+  frontend), so nothing is still reading or writing what the rollback removes.
+- **Afterwards, mark the migration as reverted** in that project's migration history,
+  so it can be applied again later: `supabase migration repair --status reverted
+  <version>` (or delete that version's row from `supabase_migrations.schema_migrations`).
+  The rollback script itself does not touch the migration history.
+
+Current scripts:
+
+- **`20261110100000_building_invoice_recipient.rollback.sql`** - undoes
+  `20261110100000_building_invoice_recipient.sql` (a building's own Xero invoice
+  recipient). Refuses while any building has a recipient chosen without a person contact
+  (clear those in the Building File's "Invoices · default recipient in Xero" panel
+  first). Otherwise it drops the `buildings_invoice_recipient_details` trigger and the
+  `set_building_invoice_recipient` / `clear_building_invoice_recipient` functions,
+  restores the old `buildings_default_invoice_recipient_all_or_none` rule, the original
+  column comments and the original `change_building_client` function, and drops the four
+  columns the migration added (`default_invoice_xero_contact_name`,
+  `default_invoice_xero_contact_email`, `default_invoice_set_at`,
+  `default_invoice_set_by`). Contact-based defaults, every contact and its Xero link, and
+  every invoice are kept exactly as they are. Tested on an in-memory Postgres: migrate
+  then roll back leaves the schema, function definitions, grants, comments and every row
+  identical to before. Before running it, roll back `xero-link-contact`,
+  `xero-create-invoice` and the frontend to their versions from before the migration.
 
 ## Known outstanding gap (not resolved by this reconciliation)
 

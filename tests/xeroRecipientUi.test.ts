@@ -3,8 +3,6 @@
 // DOM library in this repo, so the components' wiring is checked in their source, and the click-through is the DEV browser test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readSourceFile } from './helpers/sourceCode';
 
 import {
@@ -82,27 +80,26 @@ test('the invoice editor no longer guesses a recipient from the primary or only 
   assert.match(code, /usableDefaultContactId/);
 });
 
-test('the invoice editor locks the recipient once the invoice exists in Xero (shown, no picker), and offers every contact (linked or not)', () => {
+test('the invoice editor locks the recipient once the invoice exists in Xero (shown, no choice), and no longer offers people as recipients', () => {
   const code = stripComments(src('components', 'jobs', 'InvoiceEditor.tsx'));
   assert.match(code, /const recipientLocked = !!invoice\?\.xeroInvoiceId;/);
-  assert.match(code, /const showContactPicker = needsXeroContactChoice\(\{ recipientLocked, usableDefault: !!usableDefaultContactId, chooseOther: chooseOtherContact \}\);/);
   assert.match(code, /\{recipientLocked \? \(\s*<>[\s\S]*?locked: this invoice is already in Xero\./);
-  assert.match(code, /\.\.\.clientContacts\.map\(\(c\) => \(\{\s+value: c\.id,\s+text: `\$\{c\.name\}\$\{c\.email \? ` — \$\{c\.email\}` : ''\}`,/);
   assert.match(code, /LOCKED_RECIPIENT_MESSAGE/);
+  assert.doesNotMatch(code, /clientContacts\.map\(|RecipientSelect|showContactPicker|needsXeroContactChoice/, 'no person picker (removed 2026-11-11)');
+  assert.match(code, /const recipientChosen = recipientLocked \|\| usingOneOffXero \|\| hasBuildingRecipient \|\| usingContactDefault;/);
 });
 
 test('the Ready for accounts page hands the invoice editor the building default', () => {
   assert.match(src('pages', 'ReadyForAccountsPage.tsx'), /buildingDefault=\{selected\.job\.buildingDefaultRecipient\}/);
 });
 
-test('the link dialog selects nothing for the manager, searches only on submit, and links only on an explicit confirm', () => {
-  const code = stripComments(src('components', 'jobs', 'LinkXeroContactDialog.tsx'));
-  assert.match(code, /useState<XeroContactCandidate \| null>\(null\)/, 'nothing is chosen initially');
-  assert.match(code, /onSubmit=/, 'a search needs a submit');
+test('the person link dialog is gone; the one Xero search left selects nothing for the manager and refuses blocked contacts', () => {
+  assert.throws(() => src('components', 'jobs', 'LinkXeroContactDialog.tsx'), undefined, 'removed 2026-11-11');
+  const code = stripComments(src('components', 'jobs', 'XeroRecipientSearch.tsx'));
+  assert.match(code, /onSubmit=/, 'Enter / Search searches at once');
   assert.doesNotMatch(code, /results\.length === 1|results\[0\]/, 'a single result is never auto-chosen');
-  assert.match(code, /disabled=\{blocked\}/, 'archived / merged / email-less candidates cannot be chosen');
-  assert.match(code, /expectedName: c\.name/, 'the name the manager saw is confirmed to the server');
-  assert.match(code, /replacing && !replace/, 'replacing an existing link needs an explicit confirmation');
+  assert.match(code, /disabled=\{disabled \|\| c\.blockedReason !== null\}/, 'archived / merged / email-less candidates cannot be chosen');
+  assert.equal((code.match(/onChoose\(/g) ?? []).length, 1, 'a contact is chosen only from its own button');
 });
 
 test('the Xero link repository only ever calls the manager-only link function, with explicit actions', () => {
@@ -131,7 +128,7 @@ test('only an explicitly LINKED contact can be invoiced: an unlinked one never i
 });
 
 test('no screen or helper offers automatic matching or creation any more', () => {
-  for (const f of [['lib', 'xeroLinkStatus.ts'], ['lib', 'invoiceRecipient.ts'], ['components', 'jobs', 'InvoiceEditor.tsx'], ['components', 'jobs', 'UnlinkedRecipientsList.tsx'], ['lib', 'contactForm.ts']]) {
+  for (const f of [['lib', 'xeroLinkStatus.ts'], ['lib', 'invoiceRecipient.ts'], ['components', 'jobs', 'InvoiceEditor.tsx'], ['components', 'jobs', 'XeroRecipientSearch.tsx'], ['lib', 'contactForm.ts']]) {
     const code = src(...f);
     assert.doesNotMatch(code, /canLinkAutomatically|autoXeroContact|matched or created|created in Xero on send/, f.join('/'));
   }

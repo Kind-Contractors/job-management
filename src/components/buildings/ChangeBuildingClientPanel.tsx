@@ -272,6 +272,12 @@ export default function ChangeBuildingClientPanel({
             {building.defaultRecipient && (
               <li className="text-due-fg">The building&apos;s default invoice recipient belongs to the current client, so it will be cleared.</li>
             )}
+            {building.invoiceRecipient && (
+              <li className="text-due-fg">
+                The building&apos;s invoice recipient in Xero ({building.invoiceRecipient.name}) was chosen for the current client, so it will be
+                cleared: choose the new client&apos;s one afterwards.
+              </li>
+            )}
             {impact.notYetInvoiced > 0 && (
               <li className="text-due-fg">
                 {impact.notYetInvoiced} completed {impact.notYetInvoiced === 1 ? 'visit is' : 'visits are'} not invoiced yet and would be invoiced to{' '}

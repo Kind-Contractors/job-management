@@ -1,12 +1,17 @@
 // Creates OR updates and sends a Xero sales invoice for an existing local
 // draft invoice — the only place this app ever writes to Xero. POST only,
 // manager-gated (see ../_shared/auth.ts), body:
-// { invoiceId: string; contactId?: string }. contactId is the LOCAL
-// contacts.id the manager chose for this invoice. On a first send, when it
-// is omitted the building's saved default recipient is used, and with no
-// default the send is refused (a recipient is never guessed). Once Xero
-// holds the invoice the recipient is LOCKED: a retry may omit contactId or
-// name the same contact, and any other contact is refused (safeguard 5).
+// { invoiceId: string; contactId?: string; xeroContactId?: string; expectedXeroContactName?: string }.
+// xeroContactId (with the name the manager saw) is a Xero contact chosen for
+// THIS invoice only - a one-off override that never changes the building's
+// saved recipient. contactId is the LOCAL contacts.id the manager chose for
+// this invoice (legacy, person-based; refused when the building has its own
+// Xero recipient). The two are never sent together. On a first send, when
+// neither is given the building's own Xero recipient is used, else its
+// contact-based default, and with neither the send is refused (a recipient
+// is never guessed). Once Xero holds the invoice the recipient is LOCKED: a
+// retry may omit the recipient or name the same Xero contact, and any other
+// contact is refused (safeguard 5).
 //
 // A Send action always reflects whatever is CURRENTLY saved on the local
 // invoice row at the moment this runs (description/works_order_number/
@@ -95,13 +100,23 @@ import {
   find20PercentSalesTaxRate,
   findSalesAccount,
   getXeroAccessToken,
+  isXeroId,
   xeroGet,
   type XeroAccount,
   type XeroInvoiceLineItemInput,
   type XeroTaxRate,
 } from '../_shared/xeroClient.ts';
 import { InvoiceRelationshipError, loadAndValidateInvoice, type ValidatedInvoice } from '../_shared/invoiceRelationships.ts';
-import { loadContactForClient, resolveFirstSendRecipient, resolveLockedRecipient, type ResolvedRecipient } from '../_shared/invoiceRecipients.ts';
+import {
+  hasOwnXeroRecipient,
+  loadContactForClient,
+  loadInvoiceBuilding,
+  PERSON_OVERRIDE_REFUSED_TEXT,
+  resolveFirstSendRecipient,
+  resolveLockedRecipient,
+  type RequestedXeroContact,
+  type ResolvedRecipient,
+} from '../_shared/invoiceRecipients.ts';
 import { decideAutoInvoiceEmail } from '../_shared/invoiceEmailSetting.ts';
 import {
   assertConnectedToExpectedOrganisation,
@@ -285,6 +300,7 @@ Deno.serve(async (req: Request) => {
 
   let invoiceId: string;
   let contactId: string | undefined;
+  let requestedXeroContact: RequestedXeroContact | undefined;
   try {
     if (!body) throw new Error(bodyError ?? 'the body must be a JSON object.');
     invoiceId = body.invoiceId as string;
@@ -295,6 +311,14 @@ Deno.serve(async (req: Request) => {
     // Contact is reused as a fallback rather than failing outright.
     if (body.contactId !== undefined && typeof body.contactId !== 'string') throw new Error('contactId must be a string.');
     contactId = (body.contactId as string) || undefined;
+    // A Xero contact chosen for this invoice only: its exact ContactID AND the name the manager saw (a renamed contact is refused).
+    if (body.xeroContactId !== undefined && body.xeroContactId !== null) {
+      if (typeof body.xeroContactId !== 'string' || !isXeroId(body.xeroContactId.trim())) throw new Error('xeroContactId must be a Xero contact id.');
+      const expectedName = typeof body.expectedXeroContactName === 'string' ? body.expectedXeroContactName.trim() : '';
+      if (!expectedName) throw new Error('expectedXeroContactName (the name of the Xero contact you chose) is required with xeroContactId.');
+      requestedXeroContact = { xeroContactId: body.xeroContactId.trim(), expectedName };
+    }
+    if (requestedXeroContact && contactId) throw new Error('send either a Xero contact (xeroContactId) or a contact (contactId) for this invoice, not both.');
   } catch (err) {
     return json({ error: `Invalid request body: ${errorMessage(err)}` }, 400);
   }
@@ -314,6 +338,15 @@ Deno.serve(async (req: Request) => {
   // contact can never be the locked recipient of an invoice Xero already holds either. Any other problem with the chosen
   // contact (not found, another client's) is reported by the full check after the claim, exactly as before.
   if (contactId) {
+    // A person's Xero link never takes the place of a building's own Xero recipient: refused here, before anything happens.
+    let ownRecipient = false;
+    try {
+      ownRecipient = hasOwnXeroRecipient(await loadInvoiceBuilding(callerClient, validated.buildingId));
+    } catch {
+      ownRecipient = false; // a failed read is checked again (and refused) by the full check after the claim
+    }
+    if (ownRecipient) return json({ status: 'blocked', code: 'USE_XERO_RECIPIENT', error: PERSON_OVERRIDE_REFUSED_TEXT }, 409);
+
     let chosen: Awaited<ReturnType<typeof loadContactForClient>> | null = null;
     try {
       chosen = await loadContactForClient(callerClient, contactId, validated.clientId);
@@ -408,11 +441,12 @@ Deno.serve(async (req: Request) => {
     // before any invoice is created, updated or authorised.
     const recipientContext = { db: callerClient, accessToken, connectedOrgId, clientId: client.id };
     const recipient: ResolvedRecipient = existingXeroInvoice
-      ? await resolveLockedRecipient({ ...recipientContext, invoice: row, existingXeroInvoice, requestedContactId: contactId })
+      ? await resolveLockedRecipient({ ...recipientContext, invoice: row, existingXeroInvoice, requestedContactId: contactId, requestedXeroContact })
       : await resolveFirstSendRecipient({
           ...recipientContext,
           buildingId: recheck.buildingId,
           requestedContactId: contactId,
+          requestedXeroContact,
         });
     const xeroContactId = recipient.xeroContactId;
 
