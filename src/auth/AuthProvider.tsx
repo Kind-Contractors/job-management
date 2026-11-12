@@ -10,6 +10,7 @@ import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 import { purgePersistedQueryCache } from '../lib/userQueryCache';
 import { setCurrentUserId } from './currentUser';
+import { createSessionEndHandler, onSessionEndedReply } from './sessionEnded';
 
 /**
  * 'check_failed' is distinct from 'unauthorized': it means the app_users
@@ -30,6 +31,11 @@ export interface AuthContextValue {
   signOut: () => Promise<void>;
   /** Re-runs the app_users lookup for the current session — for the 'check_failed' screen's "Try again". */
   recheck: () => void;
+  /**
+   * True after the server ended this browser's sign-in (it was signed out elsewhere, removed, or expired) and the app signed this
+   * browser out because of it: the sign-in page says so. Cleared by the next sign-in.
+   */
+  sessionEnded?: boolean;
 }
 
 // Exported so a test can render a page that calls useAuth() with a fake signed-in session; the app itself only reads it through useAuth().
@@ -60,6 +66,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [status, setStatus] = useState<AuthStatus>('loading');
   const [role, setRole] = useState<AppRole | null>(null);
+  const [sessionEnded, setSessionEnded] = useState(false);
+
+  // A reply that rejected the sign-in itself (see ./sessionEnded.ts): if the sign-in service confirms the session is gone, this
+  // browser is signed out (this browser only - the session no longer exists anywhere else anyway) and the sign-in page says why,
+  // instead of the app staying "signed in" while its requests are refused. A real side effect (a subscription to replies), so an
+  // effect; it never runs a check by itself.
+  useEffect(() => {
+    const handle = createSessionEndHandler({
+      getUser: () => supabase.auth.getUser(),
+      signOutHere: async () => {
+        const { data } = await supabase.auth.getSession();
+        const userId = data.session?.user.id;
+        await supabase.auth.signOut({ scope: 'local' });
+        if (userId) purgePersistedQueryCache(userId);
+      },
+      onEnded: () => setSessionEnded(true),
+    });
+    return onSessionEndedReply(() => void handle());
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -86,6 +111,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const result = await checkAuthorization(nextSession.user.id);
 
       if (cancelled) return;
+      // A new sign-in: the "your sign-in has ended" message belongs to the previous one.
+      setSessionEnded(false);
       // Only an authorized identity may own offline-queue work (see auth/currentUser.ts).
       setCurrentUserId(result.status === 'authorized' ? nextSession.user.id : null);
       setSession(nextSession);
@@ -150,7 +177,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    */
   const signOut = async () => {
     const userId = session?.user.id;
-    const { error } = await supabase.auth.signOut();
+    // THIS browser only: signing out here must not end the same account's sign-in in another window or on another device.
+    const { error } = await supabase.auth.signOut({ scope: 'local' });
     if (!error && userId) purgePersistedQueryCache(userId);
   };
 
@@ -166,7 +194,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  return <AuthContext.Provider value={{ status, role, session, signOut, recheck }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ status, role, session, signOut, recheck, sessionEnded }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {
