@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { WasteDraft, WasteMedia } from './offline/wasteDb';
 import {
-  addWasteMedia,
+  addWasteFiles,
   discardWasteDraft,
   getOrCreateEditingDraft,
   listWasteMedia,
@@ -109,13 +109,9 @@ export default function NewWasteReportPage() {
 
   const handleAdd = async (phase: WastePhase, kind: WasteMediaKind, files: File[]) => {
     setAddErrors((e) => ({ ...e, [phase]: undefined }));
-    for (const file of files) {
-      const result = await addWasteMedia(draft.reportId, phase, kind, file);
-      if (!result.ok) {
-        setAddErrors((e) => ({ ...e, [phase]: result.message }));
-        break;
-      }
-    }
+    // Never rejects: a file that couldn't be added (or saved on the phone) comes back as the message to show.
+    const problem = await addWasteFiles(draft.reportId, phase, kind, files);
+    if (problem) setAddErrors((e) => ({ ...e, [phase]: problem }));
   };
 
   const send = async () => {

@@ -29,7 +29,7 @@ import {
   waitForWasteWorker,
   type WasteEngineDeps,
 } from '../src/waste/offline/wasteSyncEngine';
-import { getDraft, getMedia, listDrafts, listMediaForOwner, deleteDraft, deleteMedia, updateMediaIfPresent } from '../src/waste/offline/wasteDb';
+import { getDraft, getMedia, listDrafts, listMediaForOwner, deleteDraft, deleteMedia, putMedia, updateMediaIfPresent } from '../src/waste/offline/wasteDb';
 import { WasteRpcError, type FileCheckOutcome, type SubmitWasteReportInput, type VideoUploadOptions } from '../src/waste/wasteApi';
 import { UploadPausedError } from '../src/waste/wasteTus';
 import { UploadError } from '../src/lib/reportVideoUpload';
@@ -990,7 +990,8 @@ test('READ: a file with nothing saved (or saved empty) is identified as unreadab
   const a = await draftWith();
   await addWasteMedia(a, 'before', 'photo', photo());
   const m = (await listWasteMedia(a))[0];
-  await updateMediaIfPresent({ ...m, blob: new Blob([]) });
+  // Saved empty: the file's record as first written holds nothing (a status update can't replace a saved file - see wasteDb.ts).
+  await putMedia({ ...m, blob: new Blob([]) });
   online = true;
   useDeps({ isReadable: async (b) => b.size > 0 });
   await settle();

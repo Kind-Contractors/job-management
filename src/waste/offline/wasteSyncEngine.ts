@@ -22,7 +22,7 @@ import { getCurrentUserId } from '../../auth/currentUser';
 import { preparePhotoForUpload } from '../../technician/offline/photoCompression';
 import { readVideoMetadata, type VideoMetadata } from '../../lib/videoMetadata';
 import { UploadCancelledError, UploadError } from '../../lib/reportVideoUpload';
-import { UploadPausedError } from '../wasteTus';
+import { UploadNoProgressError, UploadPausedError } from '../wasteTus';
 import { otherReportHasWaitingVideo, pickNext, type UploadLane } from './wasteUploadScheduler';
 import {
   checkUploadedFile,
@@ -330,10 +330,65 @@ export async function addWasteMedia(reportId: string, phase: WastePhase, kind: W
     sortOrder: existing.length,
     createdAt: deps.now().toISOString(),
   };
-  await putMedia(media);
+  try {
+    await putMedia(media);
+  } catch (err) {
+    // Not saved on the phone (its save was rolled back as a whole, so nothing was stored): it is NOT added and nothing is queued.
+    lastMediaSaveError = { kind: pick.kind, name: errName(err), message: errMessage(err), at: deps.now().toISOString() };
+    return { ok: false, message: mediaNotSavedMessage(pick.kind, err) };
+  }
   notify();
   kick();
   return { ok: true, media };
+}
+
+/** The browser's own error from the last photo/video that could not be saved on this phone (this page load only), for the device check. */
+export interface MediaSaveErrorInfo {
+  kind: WasteMediaKind;
+  name: string | null;
+  message: string | null;
+  at: string;
+}
+let lastMediaSaveError: MediaSaveErrorInfo | null = null;
+export function getLastMediaSaveError(): MediaSaveErrorInfo | null {
+  return lastMediaSaveError;
+}
+const errName = (err: unknown): string | null => {
+  const n = (err as { name?: unknown } | null)?.name;
+  return typeof n === 'string' ? n.slice(0, 100) : null;
+};
+const errMessage = (err: unknown): string | null => {
+  const message = err instanceof Error ? err.message : err == null ? null : String(err);
+  return message == null ? null : message.slice(0, 300);
+};
+
+/**
+ * Why a picked file could not be saved on the phone, in plain words. Out of space says so; anything else most often means a private
+ * browsing tab (Safari's private tabs cannot keep photos or videos for the app), so it says what to do about that.
+ */
+export function mediaNotSavedMessage(kind: WasteMediaKind, err: unknown): string {
+  const what = kind === 'photo' ? 'photo' : 'video';
+  if ((err as { name?: unknown } | null)?.name === 'QuotaExceededError') {
+    return `This ${what} couldn’t be saved on this phone, so it hasn’t been added: the phone is out of storage space. Free up some space and add it again.`;
+  }
+  return `This ${what} couldn’t be saved on this phone, so it hasn’t been added. If you’re using a private browsing tab, open the app in a normal tab and add it again.`;
+}
+
+/**
+ * Adds picked files to a section one by one, stopping at the first that can't be added. Never rejects: the answer is null when
+ * every file was added, or the plain-words problem to show under the section's buttons.
+ */
+export async function addWasteFiles(reportId: string, phase: WastePhase, kind: WasteMediaKind, files: File[]): Promise<string | null> {
+  for (const file of files) {
+    let result: AddMediaResult;
+    try {
+      result = await addWasteMedia(reportId, phase, kind, file);
+    } catch (err) {
+      return mediaNotSavedMessage(kind, err);
+    }
+    if (!result.ok) return result.message;
+  }
+  return null;
 }
 
 /** Removes a file from a draft that has not been sent. An uploaded copy is removed from the server too (best effort). */
@@ -726,6 +781,7 @@ function failureReason(err: unknown, status: number | null): { reason: string; d
   const raw = err instanceof Error ? err.message : String(err);
   const detail = (status != null ? `HTTP ${status}: ${raw}` : raw || 'No answer').slice(0, 300);
   if (err instanceof StalledError) return { reason: 'The connection stopped responding.', detail: 'No answer or progress for 2 minutes' };
+  if (err instanceof UploadNoProgressError) return { reason: 'No data reached the server. The upload will be tried again.', detail };
   if (status == null) return { reason: 'The upload was interrupted - no answer from the server.', detail };
   if (status === 401 || status === 403) return { reason: 'The upload wasn’t allowed just now. If this keeps happening, sign out and back in.', detail };
   if (status === 404 || status === 410) return { reason: 'The upload had to start again - the server no longer had the earlier part.', detail };

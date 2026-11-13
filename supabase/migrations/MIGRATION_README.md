@@ -168,6 +168,13 @@ Current scripts:
   then roll back leaves the schema, function definitions, grants, comments and every row
   identical to before. Before running it, roll back `xero-link-contact`,
   `xero-create-invoice` and the frontend to their versions from before the migration.
+- **`20261113100000_waste_device_checks.rollback.sql`** - undoes
+  `20261113100000_waste_device_checks.sql` (the Waste Reports "Device compatibility check":
+  the `waste_device_checks` table and `waste_submit_device_check()`). The stored checks are
+  deleted (technical diagnostics, kept 30 days at most). Nothing else is touched. Remove
+  the app's Device compatibility check page, link and route first. Retention: checks older
+  than 30 days are deleted on every submission; to clear them by hand:
+  `delete from public.waste_device_checks where received_at < now() - interval '30 days';`
 
 ## Known outstanding gap (not resolved by this reconciliation)
 
