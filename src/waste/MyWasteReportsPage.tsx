@@ -104,6 +104,11 @@ export default function MyWasteReportsPage() {
       )}
       {!isPending && !isError && sending.length === 0 && (data ?? []).length === 0 && <p className="px-4 text-[13px] text-neutral-500">You haven’t sent any reports yet.</p>}
       <MyWasteReportsList sending={sending} reports={data ?? []} uploads={uploads} />
+      <div className="px-4 pt-6 text-center">
+        <Link to="/waste/device-check" className="text-[12px] text-neutral-500 underline">
+          Device compatibility check
+        </Link>
+      </div>
     </div>
   );
 }

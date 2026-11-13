@@ -6,7 +6,7 @@
 //
 // A draft stays here until the server has confirmed its report (waste_submit_report); only then are the draft and its files
 // deleted. Files upload as soon as they are added (big videos get a head start), each one checked by the server afterwards.
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { openDB, unwrap, type DBSchema, type IDBPDatabase } from 'idb';
 import type { WasteMediaKind, WastePhase } from '../wasteRules';
 
 export interface WasteDraft {
@@ -85,6 +85,30 @@ export interface WasteMedia {
   posterSkipped?: string | null;
 }
 
+// ---- a saved file is written ONCE; its progress is kept beside it ----------------------------------------------------------------
+//
+// Safari (WebKit) can lose a saved photo or video when a record holding it is written again with the file it read back: after the
+// page has been reloaded or reopened, putting that file back under the same key can make it unreadable - the copy in storage too
+// (WebKit bugs 235687 / 240216, reproduced with the app's own pattern). Every status change used to write the whole record again,
+// files included, so a file could be lost while it was waiting or uploading.
+//
+// So the record with the file(s) is written once, when the file is added, and never again. Everything that changes afterwards (status,
+// attempts, upload URL, errors...) is written to a separate small record in the same store - key `<id>::state`, no files, no ownerId
+// (so the existing indexes never list it; no database upgrade). Reading a file merges the two. The files themselves can only be
+// dropped from use (a skipped poster), never replaced, after the first save.
+const STATE_SUFFIX = '::state';
+const stateKey = (id: string) => `${id}${STATE_SUFFIX}`;
+
+/** The changing part of a file's record (never a Blob, never the owner/report that the indexes use). */
+type MediaState = Omit<WasteMedia, 'id' | 'ownerId' | 'reportId' | 'blob' | 'thumbnail'> & {
+  /** The poster was dropped (skipped): read as thumbnail null. The stored poster itself is never rewritten. */
+  noThumbnail: boolean;
+};
+interface MediaStateRow {
+  id: string;
+  state: MediaState;
+}
+
 interface WasteQueueDB extends DBSchema {
   drafts: {
     key: [string, string];
@@ -93,10 +117,26 @@ interface WasteQueueDB extends DBSchema {
   };
   media: {
     key: string;
-    value: WasteMedia;
+    value: WasteMedia | MediaStateRow;
     indexes: { 'by-owner': string; 'by-owner-report': [string, string] };
   };
 }
+
+function stateOf(media: WasteMedia): MediaState {
+  const { id: _id, ownerId: _owner, reportId: _report, blob: _blob, thumbnail, ...rest } = media;
+  const state: Record<string, unknown> = { ...rest, noThumbnail: thumbnail == null };
+  // Defensive: a Blob is never written again after the first save.
+  for (const [k, v] of Object.entries(state)) if (typeof Blob !== 'undefined' && v instanceof Blob) delete state[k];
+  return state as MediaState;
+}
+
+function merged(base: WasteMedia, row: MediaStateRow | undefined): WasteMedia {
+  if (!row) return base;
+  const { noThumbnail, ...state } = row.state;
+  return { ...base, ...state, id: base.id, ownerId: base.ownerId, reportId: base.reportId, blob: base.blob, thumbnail: noThumbnail ? null : base.thumbnail };
+}
+
+const isFileRecord = (v: WasteMedia | MediaStateRow | undefined): v is WasteMedia => !!v && !v.id.endsWith(STATE_SUFFIX);
 
 export const WASTE_DB_NAME = 'kind-contractors-waste-reports';
 const DB_VERSION = 1;
@@ -116,6 +156,14 @@ function getDb(): Promise<IDBPDatabase<WasteQueueDB>> {
     });
   }
   return dbPromise;
+}
+
+/**
+ * The app's own database connection (opened - and created if new - exactly as the app does), for the device compatibility check only:
+ * it writes its own test records, never linked to anyone (no ownerId, so no list ever returns them), and removes them again.
+ */
+export async function wasteDbForDeviceCheck(): Promise<IDBDatabase> {
+  return unwrap(await getDb()) as IDBDatabase;
 }
 
 export async function putDraft(draft: WasteDraft): Promise<void> {
@@ -149,37 +197,55 @@ export async function deleteDraft(ownerId: string, reportId: string): Promise<vo
   await (await getDb()).delete('drafts', [ownerId, reportId]);
 }
 
+/** The FIRST and only write of a file's record, with its file(s) - when it is added. Later changes: updateMediaIfPresent. */
 export async function putMedia(media: WasteMedia): Promise<void> {
   await (await getDb()).put('media', media);
 }
 
 export async function getMedia(id: string): Promise<WasteMedia | undefined> {
-  return (await getDb()).get('media', id);
+  const tx = (await getDb()).transaction('media', 'readonly');
+  const [base, row] = await Promise.all([tx.store.get(id), tx.store.get(stateKey(id))]);
+  await tx.done;
+  return isFileRecord(base) ? merged(base, row as MediaStateRow | undefined) : undefined;
 }
 
-/** Same rule as updateDraftIfPresent: a removed file is never recreated by a late status update. */
+/**
+ * Saves what changed about a file (status, attempts, upload URL, errors...) - never the file itself (see above). Same rule as
+ * updateDraftIfPresent: a removed file is never recreated by a late status update.
+ */
 export async function updateMediaIfPresent(media: WasteMedia): Promise<boolean> {
   const db = await getDb();
   const tx = db.transaction('media', 'readwrite');
   const current = await tx.store.get(media.id);
-  if (!current) {
+  if (!isFileRecord(current)) {
     await tx.done;
     return false;
   }
-  await tx.store.put(media);
+  await tx.store.put({ id: stateKey(media.id), state: stateOf(media) });
   await tx.done;
   return true;
 }
 
+async function withState(bases: (WasteMedia | MediaStateRow)[]): Promise<WasteMedia[]> {
+  const files = bases.filter(isFileRecord);
+  if (files.length === 0) return [];
+  const tx = (await getDb()).transaction('media', 'readonly');
+  const rows = await Promise.all(files.map((m) => tx.store.get(stateKey(m.id))));
+  await tx.done;
+  return files.map((m, i) => merged(m, rows[i] as MediaStateRow | undefined));
+}
+
 export async function listMediaForReport(ownerId: string, reportId: string): Promise<WasteMedia[]> {
-  const media = await (await getDb()).getAllFromIndex('media', 'by-owner-report', [ownerId, reportId]);
+  const media = await withState(await (await getDb()).getAllFromIndex('media', 'by-owner-report', [ownerId, reportId]));
   return media.sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt));
 }
 
 export async function listMediaForOwner(ownerId: string): Promise<WasteMedia[]> {
-  return (await getDb()).getAllFromIndex('media', 'by-owner', ownerId);
+  return withState(await (await getDb()).getAllFromIndex('media', 'by-owner', ownerId));
 }
 
 export async function deleteMedia(id: string): Promise<void> {
-  await (await getDb()).delete('media', id);
+  const tx = (await getDb()).transaction('media', 'readwrite');
+  await Promise.all([tx.store.delete(id), tx.store.delete(stateKey(id))]);
+  await tx.done;
 }

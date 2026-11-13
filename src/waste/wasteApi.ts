@@ -34,8 +34,9 @@ export async function uploadSmallFile(path: string, blob: Blob, contentType: str
   const token = await currentAccessToken();
   const body = new FormData();
   body.append('cacheControl', '3600');
-  // The stored type comes from the file part, as with the Supabase client; slice() only relabels it (no copy).
-  body.append('', blob.type === contentType ? blob : blob.slice(0, blob.size, contentType));
+  // Always a slice (no copy; it also sets the stored type). Safari 26 can send an EMPTY body for a picked File or one read back from
+  // the phone's storage when it is sent as is - a slice of it is sent correctly (WebKit bug 319985).
+  body.append('', blob.slice(0, blob.size, contentType));
   const url = `${base.replace(/\/$/, '')}/storage/v1/object/${WASTE_BUCKET}/${path.split('/').map(encodeURIComponent).join('/')}`;
   const res = await fetch(url, { method: 'POST', headers: { apikey: apiKey, Authorization: `Bearer ${token}`, 'x-upsert': 'false' }, body, signal });
   if (res.ok) return;
@@ -76,7 +77,8 @@ export async function uploadVideoFile(path: string, blob: Blob, contentType: str
     apiKey: import.meta.env.VITE_SUPABASE_ANON_KEY as string,
     bucket: WASTE_BUCKET,
     objectName: path,
-    file: blob,
+    // A slice (no copy), as for photos: Safari 26 can send an empty body for a stored File itself (WebKit bug 319985).
+    file: blob.slice(0, blob.size, contentType),
     contentType,
     getAccessToken: currentAccessToken,
     uploadUrl: options.tusUrl,
@@ -188,6 +190,16 @@ export interface MySubmittedWasteReport {
   submittedAt: string;
   photoCount: number;
   videoCount: number;
+}
+
+/**
+ * Sends one device compatibility check (see ./deviceCheck.ts) - only when he taps "Send". The database stamps who and when, checks it
+ * is a waste-reports check from an active waste reporter, keeps it 30 days, and never shows it back to the phone.
+ */
+export async function submitDeviceCheck(check: object): Promise<{ id: string }> {
+  const { data, error } = await supabase.rpc('waste_submit_device_check', { p_check: check });
+  if (error) throw new Error(error.message);
+  return { id: String((data as { id?: unknown } | null)?.id ?? '') };
 }
 
 /** His own submitted reports, newest first (the database only ever returns his own). */

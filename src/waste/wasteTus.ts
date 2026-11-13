@@ -41,6 +41,49 @@ export interface WasteTusArgs {
 
 const CHUNK_BYTES = 6 * 1024 * 1024; // Supabase requires exactly 6 MB chunks
 
+/**
+ * The server kept confirming the same offset: the requests arrive without the data (Safari 26 can send an empty body - WebKit bug
+ * 319985). tus would otherwise send them again and again forever, each answer looking like a sign of life; this attempt stops instead
+ * (the upload stays resumable) and the engine tries again after its usual pause.
+ */
+export class UploadNoProgressError extends UploadError {
+  constructor(offset: number) {
+    super(`The server received no data (it stayed at ${offset} bytes)`, null);
+  }
+}
+/** Confirmations in a row without the offset moving before an attempt is stopped. */
+export const NO_PROGRESS_LIMIT = 2;
+
+/**
+ * Gives tus each chunk as a fresh IN-MEMORY copy of exactly those bytes (read with slice().arrayBuffer()), never a slice of the stored
+ * file itself. Safari/WebKit sends a slice of a file kept on disk (a picked file, or one read back from the phone's storage) from the
+ * START of the file instead of its offset, so every chunk after the first arrived as the wrong bytes (and could be stored as a
+ * "complete" but broken video); a copy in memory is sent correctly. Only one chunk (6 MB) is held at a time. A read that fails rejects,
+ * which tus reports as an error and the engine handles as a read problem (checked again, never counted as uploaded).
+ */
+export const inMemoryChunks = {
+  openFile: async (input: Blob) => ({
+    size: input.size,
+    slice: async (start: number, end: number) => {
+      const stop = Math.min(end, input.size);
+      const bytes = await input.slice(start, stop).arrayBuffer();
+      return { value: new Blob([bytes], { type: input.type }), done: stop >= input.size };
+    },
+    close: () => undefined,
+  }),
+};
+
+/** Fed each offset the server confirms; true once it has failed to move NO_PROGRESS_LIMIT times in a row. */
+export function noProgressGuard(limit = NO_PROGRESS_LIMIT): (accepted: number) => boolean {
+  let last: number | null = null;
+  let stuck = 0;
+  return (accepted) => {
+    stuck = last !== null && accepted <= last ? stuck + 1 : 0;
+    last = accepted;
+    return stuck >= limit;
+  };
+}
+
 export async function wasteResumableUpload(args: WasteTusArgs): Promise<void> {
   const { Upload } = await import('tus-js-client');
   return new Promise<void>((resolve, reject) => {
@@ -49,6 +92,7 @@ export async function wasteResumableUpload(args: WasteTusArgs): Promise<void> {
       return;
     }
     let settled = false;
+    const noProgress = noProgressGuard();
     const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
@@ -60,6 +104,7 @@ export async function wasteResumableUpload(args: WasteTusArgs): Promise<void> {
       // The engine retries with its own pauses; tus only covers a brief blip within one attempt.
       retryDelays: [0, 3000, 5000],
       chunkSize: CHUNK_BYTES,
+      fileReader: inMemoryChunks,
       uploadDataDuringCreation: true,
       storeFingerprintForResuming: false,
       removeFingerprintOnSuccess: true,
@@ -73,6 +118,11 @@ export async function wasteResumableUpload(args: WasteTusArgs): Promise<void> {
       },
       onProgress: (sent, total) => args.onProgress(sent, total),
       onChunkComplete: (_chunk, accepted, total) => {
+        if (noProgress(accepted) && accepted < total) {
+          void upload.abort(false);
+          settle(() => reject(new UploadNoProgressError(accepted)));
+          return;
+        }
         args.onChunkComplete?.(accepted, total);
         // tus checks for an abort before it starts the next chunk, so this pauses exactly at the confirmed offset.
         if (accepted < total && args.pauseAtChunkBoundary?.()) {

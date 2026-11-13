@@ -30,6 +30,7 @@ import WasteShell from './waste/WasteShell';
 import NewWasteReportPage from './waste/NewWasteReportPage';
 import WasteReportSentPage from './waste/WasteReportSentPage';
 import MyWasteReportsPage from './waste/MyWasteReportsPage';
+import DeviceCheckPage from './waste/DeviceCheckPage';
 
 function AuthLoadingScreen() {
   return (
@@ -86,6 +87,7 @@ function AppRoutes({ status, role }: Pick<ReturnType<typeof useAuth>, 'status' |
           <Route path="/waste" element={<NewWasteReportPage />} />
           <Route path="/waste/sent/:reportId" element={<WasteReportSentPage />} />
           <Route path="/waste/reports" element={<MyWasteReportsPage />} />
+          <Route path="/waste/device-check" element={<DeviceCheckPage />} />
           <Route path="*" element={<Navigate to="/waste" replace />} />
         </Route>
       </Routes>
