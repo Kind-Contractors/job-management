@@ -19,6 +19,7 @@ import {
   type TechnicianVisitSummary,
 } from './api';
 import { useSyncStatus } from './offline/syncEngine';
+import { useDayUploadStatuses, type DayUploadStatus } from './dayUploadStatus';
 import { technicianKeys, useTechnicianUserId } from './queryKeys';
 import { formatTimeRange } from '../lib/timeRange';
 
@@ -62,11 +63,45 @@ const PAST_DATE_FORMAT = new Intl.DateTimeFormat('en-GB', { weekday: 'short', da
  * on Today. No reordering affordance exists here or anywhere else in this
  * list; it's read-only, chronological, server-sorted.
  */
+/**
+ * A job's photos/videos still on their way to the office (see dayUploadStatus.ts): label, a thin bar of photos uploaded, and a short
+ * supporting line. Part of the card - tapping it opens the job like the rest of the card.
+ */
+export function UploadStatusSection({ status }: { status: DayUploadStatus }) {
+  const tone =
+    status.tone === 'bad'
+      ? { text: 'text-missed-fg', bar: 'bg-missed', box: 'border-missed/40 bg-missed/5' }
+      : status.tone === 'waiting'
+        ? { text: 'text-due-fg', bar: 'bg-due', box: 'border-due/40 bg-due/5' }
+        : { text: 'text-teal-700', bar: 'bg-teal', box: 'border-teal/30 bg-teal-100/60' };
+  const pct = status.progress ? Math.round((status.progress.done / Math.max(1, status.progress.total)) * 100) : null;
+  return (
+    <div data-testid="day-upload-status" role="status" className={`mt-2 border px-2 py-1.5 ${tone.box}`}>
+      <div className={`text-[12px] font-semibold tabular-nums ${tone.text}`}>{status.label}</div>
+      {pct != null && (
+        <div
+          role="progressbar"
+          aria-label="Photos uploaded"
+          aria-valuemin={0}
+          aria-valuemax={status.progress!.total}
+          aria-valuenow={status.progress!.done}
+          className="mt-1 h-1 w-full bg-neutral-200"
+        >
+          <div className={`h-1 ${tone.bar}`} style={{ width: `${pct}%` }} />
+        </div>
+      )}
+      {status.detail && <div className="mt-1 text-[11px] text-neutral-600">{status.detail}</div>}
+      {status.videos && <div className="mt-0.5 text-[11px] text-neutral-600">{status.videos}</div>}
+    </div>
+  );
+}
+
 export function StopRow({
   visit,
   index,
   isNext,
   dateLabel,
+  upload,
   onSelect,
 }: {
   /** A job; on Today it also carries its optional time of day (display only). */
@@ -74,31 +109,36 @@ export function StopRow({
   index: number;
   isNext: boolean;
   dateLabel?: string;
+  /** Its photos/videos still on their way to the office, if any (none: the card is exactly as before). */
+  upload?: DayUploadStatus | null;
   onSelect: () => void;
 }) {
   const done = isVisitDoneForMe(visit);
   const timeLabel = formatTimeRange(visit.startTime ?? null, visit.endTime ?? null);
+  // A done card is faded; with an upload in progress only its details fade, so the upload status stays readable.
+  const fadeParts = done && upload ? 'opacity-50' : '';
   return (
     <div
       onClick={onSelect}
       className={`flex cursor-pointer items-center gap-3 border-b border-l-4 border-divider px-4 py-3 hover:bg-neutral-100 ${
-        done ? 'border-l-transparent bg-white opacity-50' : isNext ? 'border-l-teal bg-teal-100' : 'border-l-transparent bg-white'
+        done ? `border-l-transparent bg-white ${upload ? '' : 'opacity-50'}` : isNext ? 'border-l-teal bg-teal-100' : 'border-l-transparent bg-white'
       }`}
     >
       {dateLabel ? (
-        <span className="flex h-10 w-12 flex-none flex-col items-center justify-center border border-neutral-300 font-heading text-[10px] font-semibold text-neutral-600 uppercase">
+        <span className={`flex h-10 w-12 flex-none flex-col items-center justify-center border border-neutral-300 font-heading text-[10px] font-semibold text-neutral-600 uppercase ${fadeParts}`}>
           {dateLabel}
         </span>
       ) : (
         <span
           className={`flex h-6 w-6 flex-none items-center justify-center rounded-full font-heading text-[11px] font-semibold ${
             done ? 'bg-neutral-300 text-neutral-600' : isNext ? 'bg-teal text-white' : 'border border-neutral-400 text-neutral-600'
-          }`}
+          } ${fadeParts}`}
         >
           {done ? '✓' : index + 1}
         </span>
       )}
       <div className="min-w-0 flex-1">
+        <div className={fadeParts}>
         {isNext && (
           <div className="mb-0.5 font-heading text-[9.5px] font-semibold tracking-[0.13em] text-teal-700 uppercase">Next stop</div>
         )}
@@ -116,8 +156,10 @@ export function StopRow({
             {!visit.reportSubmitted && ' · your part is still to do'}
           </div>
         )}
+        </div>
+        {upload && <UploadStatusSection status={upload} />}
       </div>
-      <span className="text-neutral-400">›</span>
+      <span className={`text-neutral-400 ${fadeParts}`}>›</span>
     </div>
   );
 }
@@ -253,6 +295,7 @@ export default function DayViewPage() {
   };
 
   const { online } = useSyncStatus();
+  const uploads = useDayUploadStatuses(online);
   const userId = useTechnicianUserId();
 
   const queryClient = useQueryClient();
@@ -419,6 +462,7 @@ export default function DayViewPage() {
                     visit={item}
                     index={index}
                     isNext={index === nextIndex}
+                    upload={uploads.get(item.visitId) ?? null}
                     onSelect={() => navigate(`/technician/visits/${item.visitId}`)}
                   />
                 ),
@@ -462,6 +506,7 @@ export default function DayViewPage() {
                   index={index}
                   isNext={false}
                   dateLabel={PAST_DATE_FORMAT.format(new Date(`${visit.scheduledDate}T00:00:00`))}
+                  upload={uploads.get(visit.visitId) ?? null}
                   onSelect={() => navigate(`/technician/visits/${visit.visitId}`)}
                 />
               ))}
