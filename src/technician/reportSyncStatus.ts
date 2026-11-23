@@ -28,7 +28,7 @@ export function photoProblemText(photo: Pick<PendingPhoto, 'failureKind'>): stri
     case 'rejected':
       return 'The server didn’t accept this photo. Please contact the office.';
     case 'timeout':
-      return 'The upload took too long (weak signal). Trying again automatically.';
+      return 'The upload stopped (weak or no signal). Trying again automatically.';
     case 'verify':
       return 'The upload couldn’t be confirmed. Uploading it again automatically.';
     default:
@@ -54,12 +54,4 @@ export function isReportSyncedToServer(
   // A failed draft that a check found the server already holds exactly (see offline/draftReconciliation.ts) counts as sent - unless
   // the visit, as just loaded from the server, says the report has since been returned (the mark is only re-checked next session).
   return !!draft.serverConfirmedAt && visit.reportReviewStatus !== 'returned_for_correction';
-}
-
-/**
- * The Completed screen's secondary "Back to jobs list" button: only once the report has reached the office, and only next to a
- * "Next stop" that goes to a job - a next ACTIVITY already goes to the jobs list, so a second button there would duplicate it.
- */
-export function showBackToJobsList(isSyncedToServer: boolean, nextStop: { kind: 'visit' | 'activity' } | null | undefined): boolean {
-  return isSyncedToServer && nextStop?.kind === 'visit';
 }

@@ -571,18 +571,69 @@ export async function checkVisitPhotoOnServer(storagePath: string, signal?: Abor
   return { found: true, sizeBytes: size };
 }
 
+/** Upload progress: bytes of the request body handed to the network so far, out of the body's total. */
+export type UploadProgress = (sentBytes: number, totalBytes: number) => void;
+
+/**
+ * POSTs a form with upload progress. XMLHttpRequest, not fetch: fetch has no upload progress in browsers, and the queue needs it to
+ * tell a slow upload that is still moving (keep going) from one that has stopped (cancel and retry). Same request as fetch would send:
+ * the given headers only, no cookies (withCredentials stays false). Settles exactly once: the response, a TypeError for a network
+ * failure (like fetch), or an AbortError when `signal` cancels it (the request itself is aborted, freeing the connection).
+ * Exported for the network-simulation harness, which sends the real request through it to a local stand-in server.
+ */
+export function sendFormWithProgress(
+  url: string,
+  headers: Record<string, string>,
+  body: FormData,
+  signal?: AbortSignal,
+  onProgress?: UploadProgress,
+): Promise<{ status: number; text: string }> {
+  if (typeof XMLHttpRequest === 'undefined') {
+    // Not a browser (every browser has XMLHttpRequest) - e.g. the Node test runner: the same request through fetch, without progress.
+    return fetch(url, { method: 'POST', headers, body, signal }).then(async (res) => ({ status: res.status, text: await res.text() }));
+  }
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('The upload was cancelled.', 'AbortError'));
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    const cancel = () => xhr.abort();
+    const finish = () => signal?.removeEventListener('abort', cancel);
+    xhr.open('POST', url);
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
+    if (onProgress) xhr.upload.onprogress = (e) => onProgress(e.loaded, e.lengthComputable ? e.total : 0);
+    xhr.onload = () => { finish(); resolve({ status: xhr.status, text: xhr.responseText }); };
+    xhr.onerror = () => { finish(); reject(new TypeError('Network request failed')); };
+    xhr.onabort = () => { finish(); reject(new DOMException('The upload was cancelled.', 'AbortError')); };
+    signal?.addEventListener('abort', cancel, { once: true });
+    xhr.send(body);
+  });
+}
+
 /**
  * Sends one photo (the exact bytes given - the queue passes an in-memory copy, never the stored Blob itself) as a new object
  * (x-upsert false: technicians may only add files). 'exists' when a file was already there (an earlier attempt that did arrive) - the
- * caller then checks that copy's size.
+ * caller then checks that copy's size. `onProgress` reports how much has been sent, so the queue can tell slow from stalled.
  */
-export async function uploadVisitPhotoBytes(storagePath: string, body: Blob, contentType: string, signal?: AbortSignal): Promise<'created' | 'exists'> {
+export async function uploadVisitPhotoBytes(
+  storagePath: string,
+  body: Blob,
+  contentType: string,
+  signal?: AbortSignal,
+  onProgress?: UploadProgress,
+): Promise<'created' | 'exists'> {
   const form = new FormData();
   form.append('cacheControl', '3600');
   form.append('', body.type === contentType ? body : new Blob([body], { type: contentType }));
-  const res = await fetch(storageObjectUrl('object', storagePath), { method: 'POST', headers: { ...(await storageAuthHeaders()), 'x-upsert': 'false' }, body: form, signal });
-  if (res.ok) return 'created';
-  const detail = (await res.json().catch(() => ({}))) as { statusCode?: string | number; message?: string; error?: string };
+  const res = await sendFormWithProgress(storageObjectUrl('object', storagePath), { ...(await storageAuthHeaders()), 'x-upsert': 'false' }, form, signal, onProgress);
+  if (res.status >= 200 && res.status < 300) return 'created';
+  let detail: { statusCode?: string | number; message?: string; error?: string } = {};
+  try {
+    detail = JSON.parse(res.text) as typeof detail;
+  } catch {
+    /* not JSON - the HTTP status alone decides */
+  }
   const status = Number(detail.statusCode ?? res.status);
   const message = detail.message ?? detail.error ?? `Upload failed (HTTP ${res.status}).`;
   if (status === 409 || /already exists|duplicate/i.test(message)) return 'exists';

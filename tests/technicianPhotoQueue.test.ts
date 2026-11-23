@@ -16,6 +16,7 @@ import {
   markReadyToSubmit,
   removeQueuedPhoto,
   retryPhoto,
+  resetUploadQueueStateForTests,
   runSyncSweepForTests,
   setTechnicianUploadDepsForTests,
   takeTurnsByVisit,
@@ -72,6 +73,7 @@ function countBlobPuts() {
 }
 
 beforeEach(async () => {
+  resetUploadQueueStateForTests();
   online.onLine = true;
   setCurrentUserId(OWNER);
   // a clean queue for this owner (the app's own code opens - and on first use creates - the database first)
@@ -97,8 +99,12 @@ beforeEach(async () => {
       removed.push(path);
       server.delete(path);
     },
-    uploadTimeoutMs: 60,
+    uploadStallMs: 60,
+    uploadResponseMs: 60,
+    uploadMaxMs: 2000,
     checkTimeoutMs: 60,
+    coolDownBaseMs: 1,
+    coolDownMaxMs: 4,
   });
   blobPuts = 0;
   countBlobPuts();
@@ -167,27 +173,27 @@ test('OLDER RECORDS (saved by the previous version, one record with everything) 
 });
 
 // ---- 2. hung requests -------------------------------------------------------------------------------------------------------------
-test('TIMEOUT: an upload that never answers is abandoned within the time limit, recorded as such, kept, and retried', async () => {
+test('STALLED: an upload that sends nothing is abandoned within the stall limit, recorded as such, kept, and retried', async () => {
   await putDraft(draft('v2'));
   uploadImpl = async (_p, _b, signal) => hang(signal);
   const p = await enqueuePhoto('v2', 'after', jpeg());
   await settle(150);
   const after = await getPhoto(p.id);
   assert.deepEqual([after?.status, after?.failureKind, after?.attempts], ['pending', 'timeout', 1]);
-  assert.match(after!.lastError ?? '', /took too long/);
+  assert.match(after!.lastError ?? '', /stopped - nothing sent/);
   uploadImpl = (path, body) => realUpload(path, body);
   await retryPhoto(after!);
   await settle(50);
   assert.equal((await getPhoto(p.id))?.status, 'uploaded');
 });
 
-test('SLOTS: three hung uploads do not block the queue - their places are freed and other photos (other reports) still upload', async () => {
+test('ONE SLOT: hung uploads do not block the queue - each is cancelled when it stalls, and the other report goes next', async () => {
   await putDraft(draft('stuck'));
   await putDraft(draft('other'));
   uploadImpl = async (path, body, signal) => (path.startsWith('stuck/') ? hang(signal) : realUpload(path, body));
   const stuck = await Promise.all([1, 2, 3].map((s) => enqueuePhoto('stuck', 'after', jpeg(1000, s))));
-  const other = await enqueuePhoto('other', 'after', jpeg(1000, 9)); // waits for a free place
-  await settle(250);
+  const other = await enqueuePhoto('other', 'after', jpeg(1000, 9)); // waits for the slot
+  await settle(500);
   assert.equal((await getPhoto(other.id))?.status, 'uploaded', 'got a place once the hung ones timed out');
   for (const s of stuck) assert.equal((await getPhoto(s.id))?.failureKind, 'timeout');
 });

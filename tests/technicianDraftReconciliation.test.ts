@@ -2,13 +2,11 @@
 // accepted, the second refused with "This report is not awaiting correction." and kept as a permanent failure) must not say
 // "report not sent" for ever. It is checked against the server once per app session (src/technician/offline/draftReconciliation.ts,
 // syncEngine.ts reconcilePermanentFailures): only an exact match marks it as confirmed - it is never deleted, never re-sent, and its
-// photos are never touched. No match, or no answer, changes nothing. Plus the Completed screen's "Back to jobs list" rule.
+// photos are never touched. No match, or no answer, changes nothing.
 // The real engine over a fake IndexedDB; the server is faked - nothing real.
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { openDB } from 'idb';
 
 import { setCurrentUserId } from '../src/auth/currentUser';
@@ -16,12 +14,13 @@ import { getDraft, getPhoto, listPhotosForVisit, putDraft, putPhoto, type DraftR
 import {
   readSyncStatusForTests,
   resetDraftReconciliationForTests,
+  resetUploadQueueStateForTests,
   runSyncSweepForTests,
   setTechnicianUploadDepsForTests,
   trySubmitIfReady,
 } from '../src/technician/offline/syncEngine';
 import { draftMatchesServerReport, type ServerReportForDraft } from '../src/technician/offline/draftReconciliation';
-import { isReportSyncedToServer, showBackToJobsList } from '../src/technician/reportSyncStatus';
+import { isReportSyncedToServer } from '../src/technician/reportSyncStatus';
 import { getMyServerReportForVisit } from '../src/technician/api';
 import { headerSyncBadge } from '../src/technician/headerSyncBadge';
 
@@ -105,6 +104,7 @@ async function uploadedPhoto(visitId: string, id: string, fill: number): Promise
 }
 
 beforeEach(async () => {
+  resetUploadQueueStateForTests();
   online.onLine = true;
   setCurrentUserId(OWNER);
   await listPhotosForVisit(OWNER, 'none'); // the app's own code creates the database first
@@ -129,7 +129,9 @@ beforeEach(async () => {
     uploadBytes: async (path) => { storageCalls.push(`upload ${path}`); return 'created'; },
     removeObject: async (path) => { storageCalls.push(`remove ${path}`); },
     checkTimeoutMs: 60,
-    uploadTimeoutMs: 60,
+    uploadStallMs: 60,
+    coolDownBaseMs: 1,
+    coolDownMaxMs: 4,
   });
 });
 afterEach(() => setTechnicianUploadDepsForTests(null));
@@ -258,19 +260,6 @@ test('ONLY permanent failures are checked: pending reports and retrying failures
   assert.deepEqual(rpcCalls, [], 'nothing sent either');
   assert.deepEqual(serverChecks, [], 'none of them is checked against the server');
   assert.equal((await readSyncStatusForTests()).failedDraftCount, 1, 'the genuinely retrying failure still counts as not sent');
-});
-
-test('BACK TO JOBS LIST: only once the report is sent, and only next to a "Next stop" job (not an activity)', () => {
-  assert.equal(showBackToJobsList(true, { kind: 'visit' }), true);
-  assert.equal(showBackToJobsList(false, { kind: 'visit' }), false, 'waiting to send / failed: not shown');
-  assert.equal(showBackToJobsList(true, { kind: 'activity' }), false, 'the activity button already goes to the jobs list');
-  assert.equal(showBackToJobsList(true, null), false, 'no next stop: "Back to your day" is already the button');
-  assert.equal(showBackToJobsList(true, undefined), false);
-
-  const src = readFileSync(join(process.cwd(), 'src', 'technician', 'CompletedPage.tsx'), 'utf8');
-  assert.match(src, /showBackToJobsList\(isSyncedToServer, nextStop\) && \(/, 'the Completed screen uses that rule');
-  assert.match(src, /Back to jobs list/);
-  assert.match(src, /`Next stop — \$\{nextStop\.buildingName \?\? nextStop\.buildingAddress\}`/, '"Next stop" is unchanged');
 });
 
 test('NO FALSE POSITIVE from missing or odd data: unknown/missing review state, or a resubmission without its report id', () => {

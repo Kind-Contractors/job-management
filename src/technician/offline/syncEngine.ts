@@ -68,6 +68,7 @@ import {
   getMyServerReportForVisit,
   newVisitPhotoStoragePath,
   removePhotoObject,
+  type UploadProgress,
   resubmitReport,
   submitReport,
   uploadVisitPhotoBytes,
@@ -140,28 +141,87 @@ const uploadingIds = new Set<string>();
 const submittingKeys = new Set<string>();
 
 /**
- * At most this many photo uploads run at the same time. Selecting several
- * photos used to start every upload at once; over mobile data that many
- * parallel requests share one connection, so each takes longer and any
- * dropped request fails a photo. The rest simply wait their turn.
+ * ONE photo uploads at a time. Uploads running side by side share the phone's uplink: on a weak mobile signal each then got a third
+ * of it, none finished in time, and every one was cancelled and restarted from zero - nothing got through (reproduced: 0 of 20
+ * photos in 8 minutes at 160 kbit/s with 3 at a time; 8 in 6 minutes one at a time). One at a time, every byte sent counts.
  */
-const MAX_CONCURRENT_UPLOADS = 3;
+const MAX_CONCURRENT_UPLOADS = 1;
 let activeUploads = 0;
-const slotWaiters: (() => void)[] = [];
 
-function acquireUploadSlot(): Promise<void> {
+/** A photo waiting for the upload slot. */
+export interface SlotCandidate {
+  visitId: string;
+  createdAt: string;
+  /** When it started waiting (ms). */
+  waitingSince: number;
+}
+interface SlotWaiter extends SlotCandidate {
+  resolve: () => void;
+}
+const slotWaiters: SlotWaiter[] = [];
+
+/** A photo that has waited this long goes next whatever else is waiting - no report can be held back indefinitely. */
+const MAX_SLOT_WAIT_MS = 10 * 60_000;
+
+/**
+ * Which waiting photo uploads next (index into `waiting`), chosen at the moment the slot frees - not in the order photos were taken,
+ * which made a second report wait behind every photo of the first. In order:
+ *  1. anything that has waited MAX_SLOT_WAIT_MS or more (longest first) - nothing starves;
+ *  2. photos of completed reports before reports still being filled in;
+ *  3. the report with the fewest photos still waiting - closest to being sent;
+ *  4. the oldest photo.
+ * Pure; exported for tests.
+ */
+export function pickNextUpload(waiting: SlotCandidate[], readyVisits: Set<string>, now: number): number {
+  if (waiting.length === 0) return -1;
+  const starving = waiting
+    .map((w, i) => ({ w, i }))
+    .filter(({ w }) => now - w.waitingSince >= MAX_SLOT_WAIT_MS)
+    .sort((a, b) => a.w.waitingSince - b.w.waitingSince);
+  if (starving.length > 0) return starving[0].i;
+  const left = new Map<string, number>();
+  for (const w of waiting) left.set(w.visitId, (left.get(w.visitId) ?? 0) + 1);
+  let best = 0;
+  const rank = (w: SlotCandidate) => [readyVisits.has(w.visitId) ? 0 : 1, left.get(w.visitId) ?? 0] as const;
+  for (let i = 1; i < waiting.length; i++) {
+    const [ra, la] = rank(waiting[i]);
+    const [rb, lb] = rank(waiting[best]);
+    if (ra !== rb ? ra < rb : la !== lb ? la < lb : waiting[i].createdAt < waiting[best].createdAt) best = i;
+  }
+  return best;
+}
+
+/** Visits whose report is completed and waiting only for its photos - kept up to date by the sweep and by "Complete job". */
+const readyVisitsHint = new Set<string>();
+
+function acquireUploadSlot(photo: PendingPhoto): Promise<void> {
   if (activeUploads < MAX_CONCURRENT_UPLOADS) {
     activeUploads += 1;
     return Promise.resolve();
   }
-  // The waiter inherits the releasing upload's slot, so activeUploads is unchanged on hand-off.
-  return new Promise((resolve) => slotWaiters.push(resolve));
+  // The chosen waiter inherits the releasing upload's slot, so activeUploads is unchanged on hand-off.
+  return new Promise((resolve) => slotWaiters.push({ visitId: photo.visitId, createdAt: photo.createdAt, waitingSince: Date.now(), resolve }));
 }
 
 function releaseUploadSlot(): void {
-  const next = slotWaiters.shift();
-  if (next) next();
-  else activeUploads -= 1;
+  const i = pickNextUpload(slotWaiters, readyVisitsHint, Date.now());
+  if (i < 0) {
+    activeUploads -= 1;
+    return;
+  }
+  const [next] = slotWaiters.splice(i, 1);
+  next.resolve();
+}
+
+/**
+ * After an upload fails because of the connection, the next one waits a moment (2 s, doubling per failure in a row, at most 30 s;
+ * reset by any success): with no usable signal, photos would otherwise fail one after another in seconds and use up all their
+ * automatic tries before the signal is back.
+ */
+let connectionFailuresInARow = 0;
+function connectionCoolDownMs(): number {
+  if (connectionFailuresInARow === 0) return 0;
+  return Math.min(uploadDeps.coolDownBaseMs * 2 ** (connectionFailuresInARow - 1), uploadDeps.coolDownMaxMs);
 }
 
 /**
@@ -174,7 +234,9 @@ function releaseUploadSlot(): void {
  */
 const MAX_UPLOAD_ATTEMPTS = 4;
 const RETRY_BACKOFF_MS = [2_000, 6_000, 15_000];
-const FAILED_RETRY_MS = [60_000, 3 * 60_000, 10 * 60_000];
+// At most 5 minutes apart (was 10): a photo stuck behind a long wait while the signal is fine again keeps the report from the office.
+// Any successful upload, or the phone coming back online, retries the waiting photos at once anyway (see recoverWaitingUploads).
+const FAILED_RETRY_MS = [60_000, 3 * 60_000, 5 * 60_000];
 
 function backoffDelayMs(attemptsSoFar: number): number {
   const base = RETRY_BACKOFF_MS[Math.min(attemptsSoFar, RETRY_BACKOFF_MS.length) - 1];
@@ -195,17 +257,76 @@ function isPermanentUploadFailure(err: unknown): boolean {
 }
 
 // ---- time limits: a request that hangs never holds a queue place for long ------------------------------------------------------------
-/** The upload of one photo (they are resized to at most 1600 px, normally well under 1 MB). */
-const PHOTO_UPLOAD_TIMEOUT_MS = 90_000;
+// An upload is never cancelled just for being slow - only for having STOPPED (see withProgressLimit). The old fixed 90 s limit for the
+// whole upload cancelled slow uploads that were still moving, and each restart began again from zero.
+/** No bytes sent for this long = the upload has stopped (signal lost; a slow upload still sends something every few seconds). */
+const PHOTO_UPLOAD_STALL_MS = 60_000;
+/** Everything was handed over but no answer came for this long (on top of the allowance below). */
+const PHOTO_UPLOAD_RESPONSE_MS = 60_000;
+/**
+ * The slowest uplink still treated as usable (32 kbit/s). "Sent" in upload progress means handed to the phone's network buffers, not
+ * received: WebKit reported ~97% of a 720 KB photo as sent within ~40 s on a 64 kbit/s link, then nothing more while it drained -
+ * a pure "no progress for 60 s" rule cancelled it just before it finished, every time. So an upload is always given at least the time
+ * to deliver what it has handed over at this rate (about 3 minutes for a 740 KB photo) before it can count as stopped.
+ */
+const PHOTO_UPLOAD_MIN_BYTES_PER_SEC = 4 * 1024;
+/** A generous ceiling for one photo even while it keeps moving (a 1 MB photo at 16 kbit/s still fits). */
+const PHOTO_UPLOAD_MAX_MS = 10 * 60_000;
 /** Reading the server's copy of one photo (a small request). */
 const PHOTO_CHECK_TIMEOUT_MS = 20_000;
 
 class UploadTimeoutError extends Error {
-  constructor(what: string) {
-    super(`No answer from the server (${what} took too long)`);
+  constructor(what: string, why?: string) {
+    super(why ?? `No answer from the server (${what} took too long)`);
     this.name = 'UploadTimeoutError';
   }
 }
+/**
+ * Runs an upload with progress-aware limits: it is cancelled (request aborted) and rejected only when
+ *  - no bytes have been handed over for `stallMs` (it has stopped),
+ *  - everything was handed over but no answer came within `responseMs`, or
+ *  - it is still going after `maxMs` (a ceiling - a stalled upload never holds the queue for long);
+ * and never before it has had the time to deliver what it handed over at `minBytesPerSec` (buffered bytes still draining over a slow
+ * link are progress the browser does not report). A slow upload that keeps moving is never cancelled for being slow.
+ */
+async function withProgressLimit<T>(
+  limits: { stallMs: number; responseMs: number; maxMs: number; minBytesPerSec: number },
+  work: (signal: AbortSignal, onProgress: (sent: number, total: number) => void) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let fail: (err: Error) => void = () => {};
+  const limit = new Promise<never>((_, reject) => {
+    fail = (err) => {
+      controller.abort();
+      reject(err);
+    };
+  });
+  let idle: ReturnType<typeof setTimeout> | undefined;
+  const startedAt = Date.now();
+  const arm = (ms: number, why: string, handedOver = 0) => {
+    clearTimeout(idle);
+    const drainBy = startedAt + (handedOver / limits.minBytesPerSec) * 1000; // what was handed over may still be on its way
+    const wait = Math.max(ms, drainBy - Date.now());
+    idle = unrefTimer(setTimeout(() => fail(new UploadTimeoutError('the upload', why)), wait));
+  };
+  const ceiling = unrefTimer(setTimeout(() => fail(new UploadTimeoutError('the upload', `The upload was still not finished after ${Math.round(limits.maxMs / 60_000)} minutes`)), limits.maxMs));
+  const stalled = `The upload stopped - nothing sent for ${Math.round(limits.stallMs / 1000)} s (weak or no signal)`;
+  arm(limits.stallMs, stalled);
+  let lastSent = -1;
+  const onProgress = (sent: number, total: number) => {
+    if (sent <= lastSent) return;
+    lastSent = sent;
+    if (total > 0 && sent >= total) arm(limits.responseMs, 'The photo was sent but the server did not answer', sent);
+    else arm(limits.stallMs, stalled, sent);
+  };
+  try {
+    return await Promise.race([work(controller.signal, onProgress), limit]);
+  } finally {
+    clearTimeout(idle);
+    clearTimeout(ceiling);
+  }
+}
+
 /** The upload went through but the server's copy isn't this exact photo (or couldn't be confirmed) - never counted as uploaded. */
 class UploadNotConfirmedError extends Error {
   constructor(message: string) {
@@ -239,19 +360,29 @@ async function withTimeLimit<T>(ms: number, what: string, work: (signal: AbortSi
 /** The network side of the queue (photo upload, and checking a failed report against the server) - real by default, replaced in tests. */
 export interface TechnicianUploadDeps {
   checkOnServer: (storagePath: string, signal: AbortSignal) => Promise<ServerPhotoCopy>;
-  uploadBytes: (storagePath: string, body: Blob, contentType: string, signal: AbortSignal) => Promise<'created' | 'exists'>;
+  uploadBytes: (storagePath: string, body: Blob, contentType: string, signal: AbortSignal, onProgress?: UploadProgress) => Promise<'created' | 'exists'>;
   removeObject: (storagePath: string) => Promise<void>;
   fetchMyServerReport: (visitId: string) => Promise<ServerReportForDraft | null>;
-  uploadTimeoutMs: number;
+  uploadStallMs: number;
+  uploadResponseMs: number;
+  uploadMaxMs: number;
+  uploadMinBytesPerSec: number;
   checkTimeoutMs: number;
+  coolDownBaseMs: number;
+  coolDownMaxMs: number;
 }
 const defaultUploadDeps: TechnicianUploadDeps = {
   checkOnServer: checkVisitPhotoOnServer,
   uploadBytes: uploadVisitPhotoBytes,
   removeObject: removePhotoObject,
   fetchMyServerReport: getMyServerReportForVisit,
-  uploadTimeoutMs: PHOTO_UPLOAD_TIMEOUT_MS,
+  uploadStallMs: PHOTO_UPLOAD_STALL_MS,
+  uploadResponseMs: PHOTO_UPLOAD_RESPONSE_MS,
+  uploadMaxMs: PHOTO_UPLOAD_MAX_MS,
+  uploadMinBytesPerSec: PHOTO_UPLOAD_MIN_BYTES_PER_SEC,
   checkTimeoutMs: PHOTO_CHECK_TIMEOUT_MS,
+  coolDownBaseMs: 2_000,
+  coolDownMaxMs: 30_000,
 };
 let uploadDeps: TechnicianUploadDeps = defaultUploadDeps;
 /** Test hook. */
@@ -306,7 +437,10 @@ async function uploadAndConfirm(attempt: AttemptState, body: Blob): Promise<void
     await moveToFreshPath(`An incomplete copy (${before.sizeBytes} of ${body.size} bytes) was found and replaced`);
   }
 
-  await withTimeLimit(uploadDeps.uploadTimeoutMs, 'the upload', (signal) => uploadDeps.uploadBytes(attempt.photo.storagePath, body, contentType, signal));
+  const limits = { stallMs: uploadDeps.uploadStallMs, responseMs: uploadDeps.uploadResponseMs, maxMs: uploadDeps.uploadMaxMs, minBytesPerSec: uploadDeps.uploadMinBytesPerSec };
+  await withProgressLimit(limits, (signal, onProgress) =>
+    uploadDeps.uploadBytes(attempt.photo.storagePath, body, contentType, signal, onProgress),
+  );
 
   const after = await check(attempt.photo.storagePath);
   if (after.found && after.sizeBytes === body.size) return;
@@ -334,6 +468,12 @@ function describeUploadFailure(err: unknown, photo: PendingPhoto, attempts: numb
 }
 
 /** The sweep also runs after a backoff delay elapses — due photos are picked up from storage, so nothing is lost if the page reloads in between. */
+/** In Node (tests) a pending queue timer must not keep the process alive; browsers have no unref and are unaffected. */
+function unrefTimer<T>(timer: T): T {
+  (timer as unknown as { unref?: () => void }).unref?.();
+  return timer;
+}
+
 function scheduleRetrySweep(delayMs: number): void {
   const timer = setTimeout(() => {
     void retryEverything();
@@ -392,7 +532,8 @@ async function attemptUploadPhoto(photo: PendingPhoto): Promise<void> {
   // Claimed synchronously (before any await) so two triggers can never both start this photo.
   uploadingIds.add(photo.id);
   try {
-    await acquireUploadSlot();
+    await acquireUploadSlot(photo);
+    let coolDown = 0;
     try {
       // Time may have passed waiting for a slot — re-check before touching the network.
       if (!navigator.onLine || !isStillCurrentOwner(photo.ownerId)) return;
@@ -418,6 +559,8 @@ async function attemptUploadPhoto(photo: PendingPhoto): Promise<void> {
         }
         if (body) {
           await uploadAndConfirm(attempt, body);
+          if (connectionFailuresInARow > 0) recoverWaitingUploads(); // the connection works again: don't leave photos waiting out a long retry
+          connectionFailuresInARow = 0;
           const kept = await updatePhotoIfPresent({ ...attempt.photo, status: 'uploaded', lastError: null, failureKind: null, attempts: 0, nextAttemptAt: null });
           if (!kept) {
             // Deleted while the upload was in flight: the file now exists but nothing will ever reference
@@ -426,10 +569,16 @@ async function attemptUploadPhoto(photo: PendingPhoto): Promise<void> {
           }
         }
       } catch (err) {
-        await recordUploadFailure(attempt.photo, err);
+        const kind = failureKindOf(err);
+        if (kind === 'network' || kind === 'timeout') {
+          connectionFailuresInARow += 1;
+          coolDown = connectionCoolDownMs();
+        }
+        await recordUploadFailure(attempt.photo, err, kind);
       }
       notify();
     } finally {
+      if (coolDown > 0) await new Promise<void>((r) => unrefTimer(setTimeout(r, coolDown))); // the slot stays taken: nothing else starts meanwhile
       releaseUploadSlot();
     }
   } finally {
@@ -515,6 +664,7 @@ async function sendReport(ownerId: string, visitId: string, draft: DraftReport, 
     // Positively confirmed by the server — only now is it safe to clear
     // the local queue. Never delete a photo's blob before this point.
     await deleteDraft(ownerId, visitId);
+    readyVisitsHint.delete(visitId);
     await deletePhotosForVisit(ownerId, visitId);
     notifyReportSynced(visitId);
   } catch (err) {
@@ -529,6 +679,7 @@ async function sendReport(ownerId: string, visitId: string, draft: DraftReport, 
       // synced, exactly like a genuine success — never touches the
       // existing server-side report.
       await deleteDraft(ownerId, visitId);
+      readyVisitsHint.delete(visitId);
       await deletePhotosForVisit(ownerId, visitId);
       notifyReportSynced(visitId);
     } else if (isPermanentSubmitError(err)) {
@@ -578,10 +729,14 @@ async function retryEverything(includeFailed = false): Promise<void> {
   if (!ownerId) return;
   const [readyVisitIds, unuploaded] = await Promise.all([listReadyDraftVisitIds(ownerId), listUnuploadedPhotos(ownerId)]);
   const readyVisits = new Set(readyVisitIds);
+  readyVisitsHint.clear();
+  for (const id of readyVisitIds) readyVisitsHint.add(id);
   const now = Date.now();
 
+  // includeFailed = the connection is (back) up - the phone came online, or an upload just succeeded after failures: every waiting
+  // photo is tried now, whatever its schedule said.
   const due = unuploaded.filter((photo) => {
-    if (photo.nextAttemptAt && Date.parse(photo.nextAttemptAt) > now) return false;
+    if (!includeFailed && photo.nextAttemptAt && Date.parse(photo.nextAttemptAt) > now) return false;
     if (photo.status === 'failed') return includeFailed || readyVisits.has(photo.visitId);
     return true;
   });
@@ -595,6 +750,23 @@ async function retryEverything(includeFailed = false): Promise<void> {
   }
 
   await reconcilePermanentFailures(ownerId);
+}
+
+/** Test hook: the queue's in-memory state as at app start (no failures in a row, no readiness hints). */
+export function resetUploadQueueStateForTests(): void {
+  connectionFailuresInARow = 0;
+  readyVisitsHint.clear();
+}
+
+let recoverySweepQueued = false;
+/** One sweep that tries every waiting photo now (connection evidently working again); never more than one queued at a time. */
+function recoverWaitingUploads(): void {
+  if (recoverySweepQueued) return;
+  recoverySweepQueued = true;
+  setTimeout(() => {
+    recoverySweepQueued = false;
+    void retryEverything(true);
+  }, 0);
 }
 
 /** Permanently failed drafts already checked against the server in this app session (owner:visit) - one check each per session. */
@@ -843,6 +1015,7 @@ export async function markReadyToSubmit(visitId: string): Promise<DraftReport> {
     updatedAt: new Date().toISOString(),
   };
   await putDraft(updated);
+  readyVisitsHint.add(visitId); // its photos now go ahead of reports still being filled in
   notify();
   void trySubmitIfReady(visitId);
   return updated;
@@ -884,6 +1057,47 @@ async function computeSyncStatus(): Promise<SyncStatus> {
 
 /** Test hook: the header's counts, as useSyncStatus() would report them now. */
 export const readSyncStatusForTests = (): Promise<SyncStatus> => computeSyncStatus();
+
+/** Where one completed report's photos are on this phone - for the job card on My day (see dayUploadStatus.ts). */
+export interface VisitPhotoUpload {
+  visitId: string;
+  /** Photos queued with the report (they stay, marked uploaded, until the report has been sent). */
+  total: number;
+  uploaded: number;
+  /** Being sent right now. */
+  uploading: number;
+  /** Waiting for their turn (one photo uploads at a time). */
+  waiting: number;
+  /** Tried and failed; tried again automatically (the queue spaces these out). */
+  retrying: number;
+  /** The report itself: still to be sent / its last send failed and is retried / refused for good (contact the office). */
+  report: 'waiting' | 'send-failed' | 'refused';
+}
+
+/**
+ * Per completed report (draft marked "Complete job" and not yet sent), how far its photos are - read from the same local queue the
+ * engine works from; nothing extra is stored or fetched. A report the server is confirmed to hold already is left out.
+ */
+export async function listPhotoUploadsByVisit(): Promise<VisitPhotoUpload[]> {
+  const ownerId = getCurrentUserId();
+  if (!ownerId) return [];
+  const drafts = (await listAllDrafts(ownerId)).filter((d) => d.readyToSubmit && !d.serverConfirmedAt);
+  return Promise.all(
+    drafts.map(async (d) => {
+      const photos = await listPhotosForVisit(ownerId, d.visitId);
+      const count = (pick: (p: PendingPhoto) => boolean) => photos.filter(pick).length;
+      return {
+        visitId: d.visitId,
+        total: photos.length,
+        uploaded: count((p) => p.status === 'uploaded'),
+        uploading: count((p) => p.status === 'uploading'),
+        waiting: count((p) => p.status === 'pending' && !(p.attempts ?? 0)),
+        retrying: count((p) => p.status === 'failed' || (p.status === 'pending' && (p.attempts ?? 0) > 0)),
+        report: d.permanentFailure ? 'refused' : d.submitError ? 'send-failed' : 'waiting',
+      };
+    }),
+  );
+}
 
 /** For TechnicianShell.tsx's header badge — the only consumer of a truly global (cross-visit) summary. */
 export function useSyncStatus(): SyncStatus {

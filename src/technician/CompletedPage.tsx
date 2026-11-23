@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { getVisitDetail, isDayItemDone, listTodayItems } from './api';
+import { getVisitDetail, isDayItemDone, listTodayItems, type TechnicianDayItem } from './api';
 import { getDraft, getVisitPhotos, removeQueuedPhoto, retryPhoto, subscribeSyncEngine, trySubmitIfReady } from './offline/syncEngine';
 import type { DraftReport, PendingPhoto } from './offline/db';
 import { technicianKeys, useTechnicianUserId } from './queryKeys';
-import { isReportSyncedToServer, photoProblemText, reportSyncSummary, showBackToJobsList } from './reportSyncStatus';
+import { isReportSyncedToServer, photoProblemText, reportSyncSummary } from './reportSyncStatus';
 
 const PHASE_LABEL: Record<PendingPhoto['phase'], string> = { before: 'Before', during: 'During', after: 'After' };
 
@@ -45,6 +45,43 @@ interface CompletedNavState {
 }
 
 const timeFormatter = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+/**
+ * The completion screen's buttons. "Back to My day" is ALWAYS there - also while photos/videos are uploading or the report is still
+ * being sent: that work carries on in the background whatever screen is open (the engines run for the whole technician app, not this
+ * page). "Next stop", when there is one, stays the main button exactly as before.
+ */
+export function CompletedActions({ nextStop, onNavigate }: { nextStop: TechnicianDayItem | undefined; onNavigate: (to: string) => void }) {
+  return (
+    <div className="p-4">
+      {nextStop ? (
+        <>
+          <button
+            onClick={() => onNavigate(nextStop.kind === 'visit' ? `/technician/visits/${nextStop.visitId}` : '/technician')}
+            className="w-full cursor-pointer bg-teal px-3 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+          >
+            {nextStop.kind === 'visit'
+              ? `Next stop — ${nextStop.buildingName ?? nextStop.buildingAddress}`
+              : `Next — Activity: ${nextStop.description}`}
+          </button>
+          <button
+            onClick={() => onNavigate('/technician')}
+            className="mt-2 w-full cursor-pointer border border-teal bg-white px-3 py-2.5 text-sm font-semibold text-teal-700 hover:bg-teal-100"
+          >
+            Back to My day
+          </button>
+        </>
+      ) : (
+        <button
+          onClick={() => onNavigate('/technician')}
+          className="w-full cursor-pointer bg-teal px-3 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+        >
+          Back to My day
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function CompletedPage() {
   const navigate = useNavigate();
@@ -232,36 +269,7 @@ export default function CompletedPage() {
         </div>
       )}
 
-      <div className="p-4">
-        {nextStop ? (
-          <>
-            <button
-              onClick={() => navigate(nextStop.kind === 'visit' ? `/technician/visits/${nextStop.visitId}` : '/technician')}
-              className="w-full cursor-pointer bg-teal px-3 py-2.5 text-sm font-semibold text-white hover:opacity-90"
-            >
-              {nextStop.kind === 'visit'
-                ? `Next stop — ${nextStop.buildingName ?? nextStop.buildingAddress}`
-                : `Next — Activity: ${nextStop.description}`}
-            </button>
-            {/* Secondary: a way back to the day's jobs list without being sent on to the next stop (see showBackToJobsList). */}
-            {showBackToJobsList(isSyncedToServer, nextStop) && (
-              <button
-                onClick={() => navigate('/technician')}
-                className="mt-2 w-full cursor-pointer border border-teal bg-white px-3 py-2.5 text-sm font-semibold text-teal-700 hover:bg-teal-100"
-              >
-                Back to jobs list
-              </button>
-            )}
-          </>
-        ) : (
-          <button
-            onClick={() => navigate('/technician')}
-            className="w-full cursor-pointer bg-teal px-3 py-2.5 text-sm font-semibold text-white hover:opacity-90"
-          >
-            Back to your day
-          </button>
-        )}
-      </div>
+      <CompletedActions nextStop={nextStop} onNavigate={navigate} />
     </div>
   );
 }
