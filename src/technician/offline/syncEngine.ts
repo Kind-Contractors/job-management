@@ -7,9 +7,15 @@
 //
 // Idempotency, the central design constraint:
 // - Each photo's storage path is generated ONCE, at capture time (see
-//   enqueuePhoto), and reused on every retry — combined with
-//   uploadVisitPhotoToPath's upsert:true, a retried upload is a harmless
-//   overwrite of the same object, never a duplicate.
+//   enqueuePhoto), and reused on every retry; a retry that finds a file
+//   already there checks that file's SIZE against the photo - a complete
+//   copy counts as uploaded, an incomplete one is replaced under a fresh
+//   path (the photo's status record carries the new path), so a photo is
+//   never counted twice and never counted as uploaded on existence alone.
+// - The photo itself is written to IndexedDB once (db.ts): every status
+//   change below writes only the photo's separate status record.
+// - Every network step of a photo upload has a time limit; a request that
+//   hangs is abandoned and its queue place freed (see withTimeLimit).
 // - A draft's `submitting` flag is an in-flight guard: two retry triggers
 //   firing close together (e.g. the 'online' event and the 30s tick) can
 //   never both start a submit RPC call for the same visit.
@@ -37,7 +43,6 @@ import { useEffect, useState } from 'react';
 import { getCurrentUserId, subscribeCurrentUser } from '../../auth/currentUser';
 import {
   countUnattributedRecords,
-  countUnuploadedPhotos,
   deleteDraft,
   deletePhoto,
   deletePhotosForVisit,
@@ -52,16 +57,22 @@ import {
   updatePhotoIfPresent,
   type DraftReport,
   type PendingPhoto,
+  type PhotoFailureKind,
 } from './db';
+import { draftMatchesServerReport, type ServerReportForDraft } from './draftReconciliation';
 import { formatBytes, preparePhotoForUpload } from './photoCompression';
 import {
+  PhotoUploadError,
   RpcError,
+  checkVisitPhotoOnServer,
+  getMyServerReportForVisit,
   newVisitPhotoStoragePath,
   removePhotoObject,
   resubmitReport,
   submitReport,
-  uploadVisitPhotoToPath,
+  uploadVisitPhotoBytes,
   type PhotoPhase,
+  type ServerPhotoCopy,
 } from '../api';
 
 const RETRY_INTERVAL_MS = 30_000;
@@ -157,21 +168,160 @@ function releaseUploadSlot(): void {
  * Automatic retries for a failed upload: the first attempt plus up to three
  * more, spaced out so a brief signal drop (lift, stairwell, cell hand-off) has
  * time to clear. After that the photo shows "Failed — tap to retry" with the
- * reason; a manual tap starts a fresh round, and the periodic/online sweep
- * keeps retrying photos whose report has already been completed.
+ * reason; a manual tap starts a fresh round, and the sweep keeps trying photos
+ * whose report has already been completed - at growing intervals
+ * (FAILED_RETRY_MS), never every few seconds.
  */
 const MAX_UPLOAD_ATTEMPTS = 4;
 const RETRY_BACKOFF_MS = [2_000, 6_000, 15_000];
+const FAILED_RETRY_MS = [60_000, 3 * 60_000, 10 * 60_000];
 
 function backoffDelayMs(attemptsSoFar: number): number {
   const base = RETRY_BACKOFF_MS[Math.min(attemptsSoFar, RETRY_BACKOFF_MS.length) - 1];
   return base + Math.round(Math.random() * 500); // jitter so several photos don't retry in lockstep
 }
 
+function failedRetryDelayMs(attemptsSoFar: number, kind: PhotoFailureKind): number {
+  if (kind === 'rejected') return FAILED_RETRY_MS[FAILED_RETRY_MS.length - 1]; // a refusal rarely clears by itself
+  const beyond = Math.max(0, attemptsSoFar - MAX_UPLOAD_ATTEMPTS);
+  return FAILED_RETRY_MS[Math.min(beyond, FAILED_RETRY_MS.length - 1)] + Math.round(Math.random() * 2_000);
+}
+
 /** Server-side rejections that retrying can't fix (not allowed / too large) — these go straight to Failed instead of burning retries. */
 function isPermanentUploadFailure(err: unknown): boolean {
+  if (err instanceof PhotoUploadError && (err.status === 413 || err.status === 415)) return true;
   const message = err instanceof Error ? err.message : '';
   return /row-level security|exceeded the maximum|payload too large|invalid mime|not allowed/i.test(message);
+}
+
+// ---- time limits: a request that hangs never holds a queue place for long ------------------------------------------------------------
+/** The upload of one photo (they are resized to at most 1600 px, normally well under 1 MB). */
+const PHOTO_UPLOAD_TIMEOUT_MS = 90_000;
+/** Reading the server's copy of one photo (a small request). */
+const PHOTO_CHECK_TIMEOUT_MS = 20_000;
+
+class UploadTimeoutError extends Error {
+  constructor(what: string) {
+    super(`No answer from the server (${what} took too long)`);
+    this.name = 'UploadTimeoutError';
+  }
+}
+/** The upload went through but the server's copy isn't this exact photo (or couldn't be confirmed) - never counted as uploaded. */
+class UploadNotConfirmedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UploadNotConfirmedError';
+  }
+}
+
+/**
+ * Runs `work` with a cancel signal and settles within `ms` whatever happens: on time-out the request is cancelled (aborted) AND the
+ * promise rejects at once, even if the browser keeps the request open - so the caller's queue place is always freed.
+ */
+async function withTimeLimit<T>(ms: number, what: string, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work(controller.signal),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new UploadTimeoutError(what));
+        }, ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The network side of the queue (photo upload, and checking a failed report against the server) - real by default, replaced in tests. */
+export interface TechnicianUploadDeps {
+  checkOnServer: (storagePath: string, signal: AbortSignal) => Promise<ServerPhotoCopy>;
+  uploadBytes: (storagePath: string, body: Blob, contentType: string, signal: AbortSignal) => Promise<'created' | 'exists'>;
+  removeObject: (storagePath: string) => Promise<void>;
+  fetchMyServerReport: (visitId: string) => Promise<ServerReportForDraft | null>;
+  uploadTimeoutMs: number;
+  checkTimeoutMs: number;
+}
+const defaultUploadDeps: TechnicianUploadDeps = {
+  checkOnServer: checkVisitPhotoOnServer,
+  uploadBytes: uploadVisitPhotoBytes,
+  removeObject: removePhotoObject,
+  fetchMyServerReport: getMyServerReportForVisit,
+  uploadTimeoutMs: PHOTO_UPLOAD_TIMEOUT_MS,
+  checkTimeoutMs: PHOTO_CHECK_TIMEOUT_MS,
+};
+let uploadDeps: TechnicianUploadDeps = defaultUploadDeps;
+/** Test hook. */
+export function setTechnicianUploadDepsForTests(over: Partial<TechnicianUploadDeps> | null): void {
+  uploadDeps = over ? { ...defaultUploadDeps, ...over } : defaultUploadDeps;
+}
+
+/** A fresh storage path for the same photo (same visit, phase and extension) - used when the old path holds an incomplete copy. */
+function freshStoragePath(photo: PendingPhoto): string {
+  const ext = photo.storagePath.includes('.') ? photo.storagePath.split('.').pop() : 'jpg';
+  return newVisitPhotoStoragePath(photo.visitId, photo.phase, `photo.${ext}`);
+}
+
+/**
+ * Reads the saved photo completely into memory. That copy - not the stored Blob itself - is what gets sent: Safari can send a stored
+ * file's body empty or wrong (WebKit bugs 319985 and others), a copy in memory is sent correctly. It doubles as the readability check:
+ * a photo the phone can no longer read fails here, plainly, instead of as a confusing network error.
+ */
+async function readPhotoForUpload(photo: PendingPhoto): Promise<Blob> {
+  const bytes = await photo.blob.arrayBuffer();
+  if (bytes.byteLength === 0 || bytes.byteLength !== photo.blob.size) {
+    throw new Error(`The saved photo could not be read in full (${bytes.byteLength} of ${photo.blob.size} bytes)`);
+  }
+  return new Blob([bytes], { type: photo.blob.type || 'image/jpeg' });
+}
+
+/** Holds the photo as it changes during one attempt (its storage path can move), so a failure records the latest version. */
+interface AttemptState {
+  photo: PendingPhoto;
+}
+
+/**
+ * Makes sure the server holds THIS photo, complete, at the photo's storage path - uploading it if needed - and only then returns.
+ * Every step is time-limited. A file found at the path counts only if its size equals the photo's; an incomplete copy is removed
+ * (best effort) and the photo moves to a fresh path, so the report can only ever reference a complete copy.
+ */
+async function uploadAndConfirm(attempt: AttemptState, body: Blob): Promise<void> {
+  const contentType = body.type || 'image/jpeg';
+  const check = (path: string) => withTimeLimit(uploadDeps.checkTimeoutMs, 'the check', (signal) => uploadDeps.checkOnServer(path, signal));
+  const moveToFreshPath = async (reason: string) => {
+    const old = attempt.photo.storagePath;
+    void withTimeLimit(uploadDeps.checkTimeoutMs, 'the clean-up', () => uploadDeps.removeObject(old)).catch(() => {});
+    attempt.photo = { ...attempt.photo, storagePath: freshStoragePath(attempt.photo) };
+    if (!(await updatePhotoIfPresent(attempt.photo))) throw new UploadNotConfirmedError('The photo was removed meanwhile');
+    return reason;
+  };
+
+  const before = await check(attempt.photo.storagePath);
+  if (before.found) {
+    if (before.sizeBytes === body.size) return; // an earlier attempt did arrive, complete
+    if (before.sizeBytes == null) throw new UploadNotConfirmedError('The server did not report the size of its copy');
+    await moveToFreshPath(`An incomplete copy (${before.sizeBytes} of ${body.size} bytes) was found and replaced`);
+  }
+
+  await withTimeLimit(uploadDeps.uploadTimeoutMs, 'the upload', (signal) => uploadDeps.uploadBytes(attempt.photo.storagePath, body, contentType, signal));
+
+  const after = await check(attempt.photo.storagePath);
+  if (after.found && after.sizeBytes === body.size) return;
+  if (!after.found) throw new UploadNotConfirmedError('The server did not keep the photo');
+  if (after.sizeBytes == null) throw new UploadNotConfirmedError('The server did not report the size of its copy');
+  const stored = after.sizeBytes;
+  await moveToFreshPath('incomplete');
+  throw new UploadNotConfirmedError(`The server kept an incomplete copy (${stored} of ${body.size} bytes); it will be uploaded again`);
+}
+
+function failureKindOf(err: unknown): PhotoFailureKind {
+  if (err instanceof UploadTimeoutError) return 'timeout';
+  if (err instanceof UploadNotConfirmedError) return 'verify';
+  if (isPermanentUploadFailure(err)) return 'rejected';
+  return 'network';
 }
 
 /** The text stored on a photo (and shown to the technician) when an upload fails: the real reason plus the size of what was being uploaded. */
@@ -185,16 +335,28 @@ function describeUploadFailure(err: unknown, photo: PendingPhoto, attempts: numb
 
 /** The sweep also runs after a backoff delay elapses — due photos are picked up from storage, so nothing is lost if the page reloads in between. */
 function scheduleRetrySweep(delayMs: number): void {
-  setTimeout(() => {
+  const timer = setTimeout(() => {
     void retryEverything();
   }, delayMs + 250);
+  // In Node (tests) a pending retry must not keep the process alive; browsers have no unref and are unaffected.
+  (timer as unknown as { unref?: () => void }).unref?.();
 }
 
-async function recordUploadFailure(photo: PendingPhoto, err: unknown): Promise<void> {
+async function recordUploadFailure(photo: PendingPhoto, err: unknown, kind: PhotoFailureKind = failureKindOf(err)): Promise<void> {
   const attempts = (photo.attempts ?? 0) + 1;
-  const giveUp = attempts >= MAX_UPLOAD_ATTEMPTS || isPermanentUploadFailure(err);
+  const giveUp = attempts >= MAX_UPLOAD_ATTEMPTS || kind === 'rejected' || kind === 'unreadable';
   if (giveUp) {
-    await updatePhotoIfPresent({ ...photo, status: 'failed', attempts, lastError: describeUploadFailure(err, photo, attempts, true), nextAttemptAt: null });
+    // Shown as failed, but still tried again by itself (spaced out) while its report waits - see retryEverything().
+    const delay = failedRetryDelayMs(attempts, kind);
+    const kept = await updatePhotoIfPresent({
+      ...photo,
+      status: 'failed',
+      attempts,
+      failureKind: kind,
+      lastError: describeUploadFailure(err, photo, attempts, true),
+      nextAttemptAt: new Date(Date.now() + delay).toISOString(),
+    });
+    if (kept) scheduleRetrySweep(delay);
     return;
   }
   const delay = backoffDelayMs(attempts);
@@ -203,6 +365,7 @@ async function recordUploadFailure(photo: PendingPhoto, err: unknown): Promise<v
     ...photo,
     status: 'pending',
     attempts,
+    failureKind: kind,
     lastError: describeUploadFailure(err, photo, attempts, false),
     nextAttemptAt: new Date(Date.now() + delay).toISOString(),
   });
@@ -235,23 +398,35 @@ async function attemptUploadPhoto(photo: PendingPhoto): Promise<void> {
       if (!navigator.onLine || !isStillCurrentOwner(photo.ownerId)) return;
       // A photo the technician deleted while it waited for a slot must never be uploaded: the write
       // only happens if the record still exists, and its absence ends the attempt here.
+      // Only the photo's status record is written - never the photo itself (db.ts).
       if (!(await updatePhotoIfPresent({ ...photo, status: 'uploading' }))) return;
       notify();
+      const attempt: AttemptState = { photo };
       try {
         if (!isStillCurrentOwner(photo.ownerId)) {
           // The user changed between claiming this photo and uploading it — put it back untouched for its owner's next retry.
           await updatePhotoIfPresent(photo);
           return;
         }
-        await uploadVisitPhotoToPath(photo.storagePath, photo.blob);
-        const kept = await updatePhotoIfPresent({ ...photo, status: 'uploaded', lastError: null, attempts: 0, nextAttemptAt: null });
-        if (!kept) {
-          // Deleted while the upload was in flight: the file now exists but nothing will ever reference
-          // it, so remove it again rather than leave an orphan. Best effort - it cannot affect the UI.
-          void removePhotoObject(photo.storagePath).catch(() => {});
+        let body: Blob | null = null;
+        try {
+          body = await readPhotoForUpload(photo);
+        } catch (readErr) {
+          // The phone can't read the saved photo: not a network problem and not counted as one. It is checked again later
+          // (it can be a passing problem) and kept - never deleted.
+          await recordUploadFailure(photo, readErr, 'unreadable');
+        }
+        if (body) {
+          await uploadAndConfirm(attempt, body);
+          const kept = await updatePhotoIfPresent({ ...attempt.photo, status: 'uploaded', lastError: null, failureKind: null, attempts: 0, nextAttemptAt: null });
+          if (!kept) {
+            // Deleted while the upload was in flight: the file now exists but nothing will ever reference
+            // it, so remove it again rather than leave an orphan. Best effort - it cannot affect the UI.
+            void removePhotoObject(attempt.photo.storagePath).catch(() => {});
+          }
         }
       } catch (err) {
-        await recordUploadFailure(photo, err);
+        await recordUploadFailure(attempt.photo, err);
       }
       notify();
     } finally {
@@ -283,98 +458,103 @@ async function submitIfReadyForOwner(ownerId: string, visitId: string): Promise<
   const submitKey = `${ownerId}:${visitId}`;
   if (submittingKeys.has(submitKey)) return;
   if (!isStillCurrentOwner(ownerId)) return;
-  const draft = await getDraftForOwner(ownerId, visitId);
-  if (!draft || !draft.readyToSubmit || draft.submitting || draft.permanentFailure) return;
-  if (!navigator.onLine) return;
-
-  const photos = await listPhotosForVisit(ownerId, visitId);
-  // A first report needs at least one photo (the server requires it too). A resubmission of a returned report does not:
-  // a text-only correction is valid, and technician_resubmit_report accepts zero additional photos.
-  if (draft.mode === 'submit' && photos.length === 0) return;
-  // Whatever photos are queued must have finished uploading first.
-  if (photos.some((p) => p.status !== 'uploaded')) return;
-
+  // Claimed in the same step as the check (before any await): two photos of one report finishing together used to both pass the
+  // check above while the other was still reading the database, and send the report twice.
   submittingKeys.add(submitKey);
   try {
-    if (!isStillCurrentOwner(ownerId)) return;
-    await putDraft({ ...draft, submitting: true, submitError: null });
-    notify();
+    const draft = await getDraftForOwner(ownerId, visitId);
+    if (!draft || !draft.readyToSubmit || draft.submitting || draft.permanentFailure || draft.serverConfirmedAt) return;
+    if (!navigator.onLine) return;
 
-    try {
-      // Last check before the network: never submit one user's work under another user's session.
-      if (!isStillCurrentOwner(ownerId)) {
-        await putDraft({ ...draft, submitting: false });
-        return;
-      }
-      if (draft.mode === 'submit') {
-        await submitReport({
-          visitId: draft.visitId,
-          workCarriedOut: draft.workCarriedOut,
-          technicianNotes: draft.technicianNotes,
-          issues: draft.issues,
-          onSiteStart: draft.onSiteStart!,
-          onSiteEnd: draft.onSiteEnd!,
-          photos: photos.map((p) => ({ storagePath: p.storagePath, phase: p.phase })),
-          specMet: draft.specMet,
-        });
-      } else {
-        await resubmitReport({
-          reportId: draft.reportId!,
-          workCarriedOut: draft.workCarriedOut,
-          technicianNotes: draft.technicianNotes,
-          issues: draft.issues,
-          additionalPhotos: photos.map((p) => ({ storagePath: p.storagePath, phase: p.phase })),
-          specMet: draft.specMet,
-        });
-      }
-
-      // Positively confirmed by the server — only now is it safe to clear
-      // the local queue. Never delete a photo's blob before this point.
-      await deleteDraft(ownerId, visitId);
-      await deletePhotosForVisit(ownerId, visitId);
-      notifyReportSynced(visitId);
-    } catch (err) {
-      if (isAlreadyExistsError(err)) {
-        // The server already has a report for this visit — this local
-        // draft is a redundant duplicate (most likely this very submission
-        // having actually succeeded on an earlier attempt whose success
-        // response never made it back, e.g. the connection dropped right
-        // after). The real report is the server's; this branch never
-        // created it and must never try to. Safe to drop the local
-        // duplicate outright and tell the UI to treat this visit as
-        // synced, exactly like a genuine success — never touches the
-        // existing server-side report.
-        await deleteDraft(ownerId, visitId);
-        await deletePhotosForVisit(ownerId, visitId);
-        notifyReportSynced(visitId);
-      } else if (isPermanentSubmitError(err)) {
-        // A definitive server rejection that retrying can never fix (e.g.
-        // the visit was reassigned away). Stop the automatic retry loop —
-        // trySubmitIfReady()'s own guard above skips permanentFailure
-        // drafts — but keep the technician's typed work in place rather
-        // than silently discarding it; they (or the office) need to act on
-        // this deliberately, not have it vanish.
-        await putDraft({
-          ...draft,
-          submitting: false,
-          submitError: err instanceof Error ? err.message : 'Failed to submit report.',
-          permanentFailure: true,
-          updatedAt: new Date().toISOString(),
-        });
-      } else {
-        // Transient (network/connection/timeout) — leave it exactly as
-        // before, retried by every future trigger until it succeeds.
-        await putDraft({
-          ...draft,
-          submitting: false,
-          submitError: err instanceof Error ? err.message : 'Failed to submit report.',
-          updatedAt: new Date().toISOString(),
-        });
-      }
-    }
+    const photos = await listPhotosForVisit(ownerId, visitId);
+    // A first report needs at least one photo (the server requires it too). A resubmission of a returned report does not:
+    // a text-only correction is valid, and technician_resubmit_report accepts zero additional photos.
+    if (draft.mode === 'submit' && photos.length === 0) return;
+    // Whatever photos are queued must have finished uploading first.
+    if (photos.some((p) => p.status !== 'uploaded')) return;
+    await sendReport(ownerId, visitId, draft, photos);
   } finally {
     submittingKeys.delete(submitKey);
     notify();
+  }
+}
+
+async function sendReport(ownerId: string, visitId: string, draft: DraftReport, photos: PendingPhoto[]): Promise<void> {
+  if (!isStillCurrentOwner(ownerId)) return;
+  await putDraft({ ...draft, submitting: true, submitError: null });
+  notify();
+
+  try {
+    // Last check before the network: never submit one user's work under another user's session.
+    if (!isStillCurrentOwner(ownerId)) {
+      await putDraft({ ...draft, submitting: false });
+      return;
+    }
+    if (draft.mode === 'submit') {
+      await submitReport({
+        visitId: draft.visitId,
+        workCarriedOut: draft.workCarriedOut,
+        technicianNotes: draft.technicianNotes,
+        issues: draft.issues,
+        onSiteStart: draft.onSiteStart!,
+        onSiteEnd: draft.onSiteEnd!,
+        photos: photos.map((p) => ({ storagePath: p.storagePath, phase: p.phase })),
+        specMet: draft.specMet,
+      });
+    } else {
+      await resubmitReport({
+        reportId: draft.reportId!,
+        workCarriedOut: draft.workCarriedOut,
+        technicianNotes: draft.technicianNotes,
+        issues: draft.issues,
+        additionalPhotos: photos.map((p) => ({ storagePath: p.storagePath, phase: p.phase })),
+        specMet: draft.specMet,
+      });
+    }
+
+    // Positively confirmed by the server — only now is it safe to clear
+    // the local queue. Never delete a photo's blob before this point.
+    await deleteDraft(ownerId, visitId);
+    await deletePhotosForVisit(ownerId, visitId);
+    notifyReportSynced(visitId);
+  } catch (err) {
+    if (isAlreadyExistsError(err)) {
+      // The server already has a report for this visit — this local
+      // draft is a redundant duplicate (most likely this very submission
+      // having actually succeeded on an earlier attempt whose success
+      // response never made it back, e.g. the connection dropped right
+      // after). The real report is the server's; this branch never
+      // created it and must never try to. Safe to drop the local
+      // duplicate outright and tell the UI to treat this visit as
+      // synced, exactly like a genuine success — never touches the
+      // existing server-side report.
+      await deleteDraft(ownerId, visitId);
+      await deletePhotosForVisit(ownerId, visitId);
+      notifyReportSynced(visitId);
+    } else if (isPermanentSubmitError(err)) {
+      // A definitive server rejection that retrying can never fix (e.g.
+      // the visit was reassigned away). Stop the automatic retry loop —
+      // trySubmitIfReady()'s own guard above skips permanentFailure
+      // drafts — but keep the technician's typed work in place rather
+      // than silently discarding it; they (or the office) need to act on
+      // this deliberately, not have it vanish.
+      await putDraft({
+        ...draft,
+        submitting: false,
+        submitError: err instanceof Error ? err.message : 'Failed to submit report.',
+        permanentFailure: true,
+        updatedAt: new Date().toISOString(),
+      });
+    } else {
+      // Transient (network/connection/timeout) — leave it exactly as
+      // before, retried by every future trigger until it succeeds.
+      await putDraft({
+        ...draft,
+        submitting: false,
+        submitError: err instanceof Error ? err.message : 'Failed to submit report.',
+        updatedAt: new Date().toISOString(),
+      });
+    }
   }
 }
 
@@ -405,13 +585,77 @@ async function retryEverything(includeFailed = false): Promise<void> {
     if (photo.status === 'failed') return includeFailed || readyVisits.has(photo.visitId);
     return true;
   });
-  // The upload slot limiter inside attemptUploadPhoto keeps this to a few at a time.
-  await Promise.all(due.map((photo) => attemptUploadPhoto(photo)));
+  // The upload slot limiter inside attemptUploadPhoto keeps this to a few at a time, in the order started here: reports take turns
+  // (completed reports first), so one report with many photos can't keep the others waiting.
+  await Promise.all(takeTurnsByVisit(due, readyVisits).map((photo) => attemptUploadPhoto(photo)));
 
   for (const visitId of readyVisitIds) {
     if (!isStillCurrentOwner(ownerId)) return;
     await submitIfReadyForOwner(ownerId, visitId);
   }
+
+  await reconcilePermanentFailures(ownerId);
+}
+
+/** Permanently failed drafts already checked against the server in this app session (owner:visit) - one check each per session. */
+const reconciledKeys = new Set<string>();
+
+/**
+ * Checks each of this owner's permanently failed drafts against what the server holds for them (see draftReconciliation.ts) and marks
+ * the draft as confirmed when - and only when - the server already has exactly that report; a later check that no longer matches clears
+ * the mark. Never deletes a draft, never touches its photos, never sends anything. A check that can't be made (offline, time-out,
+ * server error) changes nothing and is tried again on a later sweep.
+ */
+async function reconcilePermanentFailures(ownerId: string): Promise<void> {
+  const drafts = (await listAllDrafts(ownerId)).filter((d) => d.readyToSubmit && d.permanentFailure && !d.submitting);
+  for (const draft of drafts) {
+    const key = `${ownerId}:${draft.visitId}`;
+    if (reconciledKeys.has(key) || !navigator.onLine || !isStillCurrentOwner(ownerId)) continue;
+    reconciledKeys.add(key); // claimed before the request, so two overlapping sweeps never check the same draft twice
+    let server: ServerReportForDraft | null;
+    try {
+      server = await withTimeLimit(uploadDeps.checkTimeoutMs, 'the report check', () => uploadDeps.fetchMyServerReport(draft.visitId));
+    } catch {
+      reconciledKeys.delete(key); // not known - assume nothing, and check again on a later sweep
+      continue;
+    }
+    const photoPaths = (await listPhotosForVisit(ownerId, draft.visitId)).map((p) => p.storagePath);
+    const matches = draftMatchesServerReport(draft, photoPaths, server);
+    const current = await getDraftForOwner(ownerId, draft.visitId);
+    if (!current || current.updatedAt !== draft.updatedAt || !isStillCurrentOwner(ownerId)) continue; // changed meanwhile: leave it
+    if (matches === !!current.serverConfirmedAt) continue;
+    await putDraft({ ...current, serverConfirmedAt: matches ? new Date().toISOString() : null });
+    notify();
+  }
+}
+
+/** Test hook: forget which drafts were checked (= a new app session). */
+export function resetDraftReconciliationForTests(): void {
+  reconciledKeys.clear();
+}
+
+/**
+ * Orders photos so reports take turns - one photo of each report, then the next of each, and so on - with completed reports (whose
+ * report is waiting only for its photos) first and each report's photos oldest first. Exported for tests.
+ */
+export function takeTurnsByVisit(photos: PendingPhoto[], readyVisits: Set<string>): PendingPhoto[] {
+  const byVisit = new Map<string, PendingPhoto[]>();
+  for (const p of [...photos].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
+    const list = byVisit.get(p.visitId) ?? [];
+    list.push(p);
+    byVisit.set(p.visitId, list);
+  }
+  const queues = [...byVisit.entries()].sort(([a], [b]) => Number(readyVisits.has(b)) - Number(readyVisits.has(a))).map(([, list]) => list);
+  const ordered: PendingPhoto[] = [];
+  for (let round = 0; ordered.length < photos.length; round++) {
+    for (const q of queues) if (round < q.length) ordered.push(q[round]);
+  }
+  return ordered;
+}
+
+/** Test hook: one sweep, exactly as the 30 s timer / coming back online / reopening the app runs it. */
+export function runSyncSweepForTests(includeFailed = false): Promise<void> {
+  return retryEverything(includeFailed);
 }
 
 let engineStarted = false;
@@ -433,6 +677,14 @@ export function startSyncEngine(): void {
       }
     })
     .catch(() => undefined);
+
+  // Ask the browser to keep this app's storage (queued reports and photos) rather than clear it when space runs low. Best effort:
+  // some browsers grant it silently, some only for an installed (home-screen) app, some never - nothing depends on the answer.
+  try {
+    void navigator.storage?.persist?.().catch(() => undefined);
+  } catch {
+    /* not supported */
+  }
 
   window.addEventListener('online', () => {
     void retryEverything(true);
@@ -494,11 +746,20 @@ export async function removeQueuedPhoto(photo: PendingPhoto): Promise<void> {
   if (photo.ownerId !== ownerId) throw new Error('This photo belongs to a different account.');
 
   const draft = await getDraftForOwner(ownerId, photo.visitId);
-  if (draft?.readyToSubmit || draft?.submitting) {
-    throw new Error('This report is already being sent, so its photos can no longer be changed.');
+  const current = await getPhoto(photo.id);
+  if (draft?.submitting) throw new Error('This report is being sent right now, so its photos can’t be changed.');
+  if (draft?.readyToSubmit) {
+    // A completed report's photos are fixed - except one this phone can no longer read: it can never upload, and would hold the whole
+    // report back for good. That one may be removed, as long as the report keeps at least one photo (the office needs one).
+    if (!current || current.status === 'uploaded' || current.failureKind !== 'unreadable') {
+      throw new Error('This report is already being sent, so its photos can no longer be changed.');
+    }
+    const others = (await listPhotosForVisit(ownerId, photo.visitId)).filter((p) => p.id !== current.id);
+    if (draft.mode === 'submit' && others.length === 0) {
+      throw new Error('This is the report’s only photo, so it can’t be removed. Please contact the office about this visit.');
+    }
   }
 
-  const current = await getPhoto(photo.id);
   if (!current) return; // already gone
 
   if (current.status === 'uploaded') {
@@ -510,6 +771,7 @@ export async function removeQueuedPhoto(photo: PendingPhoto): Promise<void> {
     if (navigator.onLine) void removePhotoObject(current.storagePath).catch(() => {});
   }
   notify();
+  if (draft?.readyToSubmit) void trySubmitIfReady(photo.visitId); // the removed photo may have been the last one it waited for
 }
 
 /** Manual retry — the UI's "Retry" button on a failed chip. */
@@ -594,25 +856,38 @@ export async function getVisitPhotos(visitId: string): Promise<PendingPhoto[]> {
 
 export interface SyncStatus {
   online: boolean;
+  /** Photos not uploaded yet - waiting, uploading, or failed (failed ones are counted in failedPhotoCount too). */
   pendingPhotoCount: number;
+  /** Photos that failed their automatic attempts (still tried again, spaced out, while their report waits). */
+  failedPhotoCount: number;
+  /** Completed reports whose SEND to the server failed (photos all uploaded; the report itself was not accepted / not delivered). */
   failedDraftCount: number;
+  /** Completed reports still waiting to reach the office (for any reason). */
+  waitingReportCount: number;
 }
+
+const EMPTY_STATUS = (online: boolean): SyncStatus => ({ online, pendingPhotoCount: 0, failedPhotoCount: 0, failedDraftCount: 0, waitingReportCount: 0 });
 
 /** Counts only the signed-in user's own queued work — another user's failed draft never shows up here. */
 async function computeSyncStatus(): Promise<SyncStatus> {
   const ownerId = getCurrentUserId();
-  if (!ownerId) return { online: navigator.onLine, pendingPhotoCount: 0, failedDraftCount: 0 };
-  const [pendingPhotoCount, drafts] = await Promise.all([countUnuploadedPhotos(ownerId), listAllDrafts(ownerId)]);
+  if (!ownerId) return EMPTY_STATUS(navigator.onLine);
+  const [unuploaded, drafts] = await Promise.all([listUnuploadedPhotos(ownerId), listAllDrafts(ownerId)]);
   return {
     online: navigator.onLine,
-    pendingPhotoCount,
-    failedDraftCount: drafts.filter((d) => d.readyToSubmit && !!d.submitError).length,
+    pendingPhotoCount: unuploaded.length,
+    failedPhotoCount: unuploaded.filter((p) => p.status === 'failed').length,
+    failedDraftCount: drafts.filter((d) => d.readyToSubmit && !!d.submitError && !d.serverConfirmedAt).length,
+    waitingReportCount: drafts.filter((d) => d.readyToSubmit && !d.serverConfirmedAt).length,
   };
 }
 
+/** Test hook: the header's counts, as useSyncStatus() would report them now. */
+export const readSyncStatusForTests = (): Promise<SyncStatus> => computeSyncStatus();
+
 /** For TechnicianShell.tsx's header badge — the only consumer of a truly global (cross-visit) summary. */
 export function useSyncStatus(): SyncStatus {
-  const [status, setStatus] = useState<SyncStatus>({ online: navigator.onLine, pendingPhotoCount: 0, failedDraftCount: 0 });
+  const [status, setStatus] = useState<SyncStatus>(EMPTY_STATUS(navigator.onLine));
 
   useEffect(() => {
     let cancelled = false;

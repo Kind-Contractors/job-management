@@ -79,6 +79,12 @@ export interface DraftReport {
    * written before this field existed — treated the same as false.
    */
   permanentFailure?: boolean;
+  /**
+   * Set (never by a submit) when a permanently failed draft was checked against the server and the server already holds exactly this
+   * report - see draftReconciliation.ts. The draft and its photos are kept as they are; it is just no longer counted as "not sent" and
+   * never sent again. Cleared if a later check no longer matches (e.g. the office returned the report). Absent on older drafts.
+   */
+  serverConfirmedAt?: string | null;
   updatedAt: string;
 }
 
@@ -100,7 +106,48 @@ export interface PendingPhoto {
   attempts?: number;
   /** ISO time before which the automatic retry must not run again (backoff). Null/absent = due now. */
   nextAttemptAt?: string | null;
+  /** Why the last attempt failed, in categories the screens can explain in plain words (the technical text stays in lastError). Absent on older photos. */
+  failureKind?: PhotoFailureKind | null;
 }
+
+/** network: no answer / dropped; timeout: took too long; verify: uploaded but the server's copy couldn't be confirmed; rejected: the server refused it (won't succeed by retrying); unreadable: the phone can't read the saved photo. */
+export type PhotoFailureKind = 'network' | 'timeout' | 'verify' | 'rejected' | 'unreadable';
+
+// ---- a saved photo is written ONCE; its upload status is kept beside it ------------------------------------------------------------
+//
+// Safari (WebKit) can lose a saved photo when a record holding it is written again with the photo it read back - after the page has
+// been reloaded or reopened, putting that Blob back under the same key can make it unreadable, the stored copy too (WebKit bugs
+// 235687 / 240216; reproduced in WebKit with exactly this pattern). Every upload status change used to write the whole record again,
+// photo included.
+//
+// So the record with the photo is written once, when the photo is taken, and never again. Everything that changes afterwards (status,
+// attempts, errors, storage path) goes to a separate small record in the same store - key `<id>::state`, no photo, and no
+// ownerId/visitId, so the 'by-owner-visit' index never lists it. Reading a photo merges the two. No database upgrade: records saved
+// by earlier versions are read exactly as before and are never written again either.
+const PHOTO_STATE_SUFFIX = '::state';
+const photoStateKey = (id: string) => `${id}${PHOTO_STATE_SUFFIX}`;
+
+/** The changing part of a photo's record (never the Blob, never the owner/visit the index uses). */
+type PhotoState = Omit<PendingPhoto, 'id' | 'ownerId' | 'visitId' | 'blob'>;
+interface PhotoStateRow {
+  id: string;
+  state: PhotoState;
+}
+
+function photoStateOf(photo: PendingPhoto): PhotoState {
+  const { id: _id, ownerId: _owner, visitId: _visit, blob: _blob, ...rest } = photo;
+  const state: Record<string, unknown> = { ...rest };
+  // Defensive: a Blob is never written again after the photo is first saved.
+  for (const [k, v] of Object.entries(state)) if (typeof Blob !== 'undefined' && v instanceof Blob) delete state[k];
+  return state as PhotoState;
+}
+
+function mergedPhoto(base: PendingPhoto, row: PhotoStateRow | undefined): PendingPhoto {
+  if (!row) return base;
+  return { ...base, ...row.state, id: base.id, ownerId: base.ownerId, visitId: base.visitId, blob: base.blob };
+}
+
+const isPhotoRecord = (v: PendingPhoto | PhotoStateRow | undefined): v is PendingPhoto => !!v && !v.id.endsWith(PHOTO_STATE_SUFFIX);
 
 interface TechnicianOfflineDB extends DBSchema {
   draftReports: {
@@ -109,7 +156,7 @@ interface TechnicianOfflineDB extends DBSchema {
   };
   pendingPhotos: {
     key: string;
-    value: PendingPhoto;
+    value: PendingPhoto | PhotoStateRow;
     indexes: { 'by-owner-visit': [string, string] };
   };
 }
@@ -202,46 +249,61 @@ export async function deleteDraft(ownerId: string, visitId: string): Promise<voi
   await (await getDb()).delete('draftReports', [ownerId, visitId]);
 }
 
-export async function listPhotosForVisit(ownerId: string, visitId: string): Promise<PendingPhoto[]> {
-  return (await getDb()).getAllFromIndex('pendingPhotos', 'by-owner-visit', [ownerId, visitId]);
+/** Merges each photo with its status record (if any) - what every list below returns. */
+async function withPhotoState(rows: (PendingPhoto | PhotoStateRow)[]): Promise<PendingPhoto[]> {
+  const photos = rows.filter(isPhotoRecord);
+  if (photos.length === 0) return [];
+  const tx = (await getDb()).transaction('pendingPhotos', 'readonly');
+  const states = await Promise.all(photos.map((p) => tx.store.get(photoStateKey(p.id))));
+  await tx.done;
+  return photos.map((p, i) => mergedPhoto(p, states[i] as PhotoStateRow | undefined));
 }
 
+export async function listPhotosForVisit(ownerId: string, visitId: string): Promise<PendingPhoto[]> {
+  return withPhotoState(await (await getDb()).getAllFromIndex('pendingPhotos', 'by-owner-visit', [ownerId, visitId]));
+}
+
+/** The FIRST and only write of a photo's record, with its Blob - when the photo is taken. Later changes: updatePhotoIfPresent. */
 export async function putPhoto(photo: PendingPhoto): Promise<void> {
   await (await getDb()).put('pendingPhotos', photo);
 }
 
 export async function getPhoto(id: string): Promise<PendingPhoto | undefined> {
-  return (await getDb()).get('pendingPhotos', id);
+  const tx = (await getDb()).transaction('pendingPhotos', 'readonly');
+  const [base, state] = await Promise.all([tx.store.get(id), tx.store.get(photoStateKey(id))]);
+  await tx.done;
+  return isPhotoRecord(base) ? mergedPhoto(base, state as PhotoStateRow | undefined) : undefined;
 }
 
-/** Removes one queued photo record. Once it is gone the sync engine has nothing left to upload for it. */
+/** Removes one queued photo (and its status record). Once it is gone the sync engine has nothing left to upload for it. */
 export async function deletePhoto(id: string): Promise<void> {
-  await (await getDb()).delete('pendingPhotos', id);
+  const tx = (await getDb()).transaction('pendingPhotos', 'readwrite');
+  await Promise.all([tx.store.delete(id), tx.store.delete(photoStateKey(id))]);
+  await tx.done;
 }
 
 /**
- * Writes a photo record ONLY if it still exists, in one transaction. Every status
- * update the sync engine makes goes through this instead of putPhoto(): a plain put
- * would re-create a record the technician deleted while its upload was in flight,
- * resurrecting the photo. Returns false (and writes nothing) when it has been deleted.
+ * Saves what changed about a photo (status, attempts, errors, storage path) - never the photo itself (see above) - and ONLY if the
+ * photo still exists, in one transaction: a late status write can never bring back a photo the technician deleted while its upload
+ * was in flight. Returns false (and writes nothing) when it has been deleted.
  */
 export async function updatePhotoIfPresent(photo: PendingPhoto): Promise<boolean> {
   const tx = (await getDb()).transaction('pendingPhotos', 'readwrite');
   const existing = await tx.store.get(photo.id);
-  if (!existing) {
+  if (!isPhotoRecord(existing)) {
     await tx.done;
     return false;
   }
-  await tx.store.put(photo);
+  await tx.store.put({ id: photoStateKey(photo.id), state: photoStateOf(photo) });
   await tx.done;
   return true;
 }
 
 export async function deletePhotosForVisit(ownerId: string, visitId: string): Promise<void> {
   const db = await getDb();
-  const photos = await db.getAllFromIndex('pendingPhotos', 'by-owner-visit', [ownerId, visitId]);
+  const photos = (await db.getAllFromIndex('pendingPhotos', 'by-owner-visit', [ownerId, visitId])).filter(isPhotoRecord);
   const tx = db.transaction('pendingPhotos', 'readwrite');
-  await Promise.all(photos.map((p) => tx.store.delete(p.id)));
+  await Promise.all(photos.flatMap((p) => [tx.store.delete(p.id), tx.store.delete(photoStateKey(p.id))]));
   await tx.done;
 }
 
@@ -263,13 +325,12 @@ export async function listAllDrafts(ownerId: string): Promise<DraftReport[]> {
 
 /** This owner's queued photos not yet uploaded, across every visit — used only for the header's global pending-count badge. */
 export async function countUnuploadedPhotos(ownerId: string): Promise<number> {
-  const photos = await (await getDb()).getAllFromIndex('pendingPhotos', 'by-owner-visit', ownerRange(ownerId));
-  return photos.filter((p) => p.status !== 'uploaded').length;
+  return (await listUnuploadedPhotos(ownerId)).length;
 }
 
 /** This owner's photos that haven't finished uploading, across every visit and whether or not their report has been completed yet — what the retry sweep walks. */
 export async function listUnuploadedPhotos(ownerId: string): Promise<PendingPhoto[]> {
-  const photos = await (await getDb()).getAllFromIndex('pendingPhotos', 'by-owner-visit', ownerRange(ownerId));
+  const photos = await withPhotoState(await (await getDb()).getAllFromIndex('pendingPhotos', 'by-owner-visit', ownerRange(ownerId)));
   return photos.filter((p) => p.status !== 'uploaded');
 }
 

@@ -2,10 +2,40 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { getVisitDetail, isDayItemDone, listTodayItems } from './api';
-import { getDraft, getVisitPhotos, subscribeSyncEngine, trySubmitIfReady } from './offline/syncEngine';
+import { getDraft, getVisitPhotos, removeQueuedPhoto, retryPhoto, subscribeSyncEngine, trySubmitIfReady } from './offline/syncEngine';
 import type { DraftReport, PendingPhoto } from './offline/db';
 import { technicianKeys, useTechnicianUserId } from './queryKeys';
-import { isReportSyncedToServer } from './reportSyncStatus';
+import { isReportSyncedToServer, photoProblemText, reportSyncSummary, showBackToJobsList } from './reportSyncStatus';
+
+const PHASE_LABEL: Record<PendingPhoto['phase'], string> = { before: 'Before', during: 'During', after: 'After' };
+
+/** The photos of a completed report that haven't uploaded, each with its reason in plain words, "Try again" and - only for a photo
+ * this phone can't read - "Remove" (it could never upload and would hold the report back for good). */
+export function PhotoProblems({ photos, onRetry, onRemove }: { photos: PendingPhoto[]; onRetry: (p: PendingPhoto) => void; onRemove: (p: PendingPhoto) => void }) {
+  const problems = photos.filter((p) => p.status === 'failed');
+  if (problems.length === 0) return null;
+  return (
+    <ul data-testid="photo-problems" className="mt-3 flex flex-col gap-2 border border-missed/40 bg-missed/5 p-3">
+      {problems.map((p) => (
+        <li key={p.id} className="flex flex-col gap-1 text-[12.5px] text-neutral-700">
+          <span>
+            <span className="font-semibold text-ink">{PHASE_LABEL[p.phase]} photo</span> — {photoProblemText(p)}
+          </span>
+          <span className="flex gap-3">
+            <button type="button" onClick={() => onRetry(p)} className="cursor-pointer text-[12px] text-teal underline">
+              Try again now
+            </button>
+            {p.failureKind === 'unreadable' && (
+              <button type="button" onClick={() => onRemove(p)} className="cursor-pointer text-[12px] text-missed-fg underline">
+                Remove this photo
+              </button>
+            )}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
 import TechnicianVideos from './TechnicianVideos';
 
 interface CompletedNavState {
@@ -127,12 +157,8 @@ export default function CompletedPage() {
       ) : (
         <div className="flex-none border-b border-due/40 bg-due/10 px-4 py-3">
           <h1 className="font-heading text-lg font-semibold text-due-fg">Job completed</h1>
-          <div className="text-[12.5px] text-due-fg">
-            {draft?.permanentFailure
-              ? "Couldn't be sent — contact the office"
-              : draft?.submitError
-                ? 'Sync failed — will retry automatically'
-                : 'Waiting to sync — will send automatically'}
+          <div data-testid="completed-sync-state" className="text-[12.5px] text-due-fg">
+            {reportSyncSummary(false, draft, localPhotos).headline}
           </div>
         </div>
       )}
@@ -181,9 +207,19 @@ export default function CompletedPage() {
             ) : (
               <>
                 This report is saved on your device and will be sent to the office automatically once every photo has
-                finished uploading and you're back online. You can move on to your next stop — nothing else for you to
-                do here.
+                finished uploading and you're back online. Photos upload while this app is open - you can move on to your
+                next stop.
               </>
+            )}
+            {!draft?.permanentFailure && (
+              <PhotoProblems
+                photos={localPhotos}
+                onRetry={(p) => void retryPhoto(p)}
+                onRemove={(p) => {
+                  if (!window.confirm('Remove this photo from the report? It can’t be read from this phone, so it can’t be uploaded.')) return;
+                  void removeQueuedPhoto(p).catch((err: unknown) => window.alert(err instanceof Error ? err.message : 'The photo couldn’t be removed.'));
+                }}
+              />
             )}
           </div>
         )}
@@ -198,14 +234,25 @@ export default function CompletedPage() {
 
       <div className="p-4">
         {nextStop ? (
-          <button
-            onClick={() => navigate(nextStop.kind === 'visit' ? `/technician/visits/${nextStop.visitId}` : '/technician')}
-            className="w-full cursor-pointer bg-teal px-3 py-2.5 text-sm font-semibold text-white hover:opacity-90"
-          >
-            {nextStop.kind === 'visit'
-              ? `Next stop — ${nextStop.buildingName ?? nextStop.buildingAddress}`
-              : `Next — Activity: ${nextStop.description}`}
-          </button>
+          <>
+            <button
+              onClick={() => navigate(nextStop.kind === 'visit' ? `/technician/visits/${nextStop.visitId}` : '/technician')}
+              className="w-full cursor-pointer bg-teal px-3 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+            >
+              {nextStop.kind === 'visit'
+                ? `Next stop — ${nextStop.buildingName ?? nextStop.buildingAddress}`
+                : `Next — Activity: ${nextStop.description}`}
+            </button>
+            {/* Secondary: a way back to the day's jobs list without being sent on to the next stop (see showBackToJobsList). */}
+            {showBackToJobsList(isSyncedToServer, nextStop) && (
+              <button
+                onClick={() => navigate('/technician')}
+                className="mt-2 w-full cursor-pointer border border-teal bg-white px-3 py-2.5 text-sm font-semibold text-teal-700 hover:bg-teal-100"
+              >
+                Back to jobs list
+              </button>
+            )}
+          </>
         ) : (
           <button
             onClick={() => navigate('/technician')}

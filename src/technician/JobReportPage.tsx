@@ -191,9 +191,22 @@ export default function JobReportPage() {
 
   const handleFilesSelected = async (phase: PhotoPhase, files: FileList | null) => {
     if (!files || files.length === 0 || !visitId) return;
+    setPhotoError(null);
     for (const file of Array.from(files)) {
-      const photo = await enqueuePhoto(visitId, phase, file);
-      setPhotos((prev) => [...prev, photo]);
+      try {
+        const photo = await enqueuePhoto(visitId, phase, file);
+        setPhotos((prev) => [...prev, photo]);
+      } catch (err) {
+        // Not saved on this phone (e.g. a private browsing tab, or storage full): it is NOT added - say so plainly instead of
+        // failing silently.
+        const full = (err as { name?: unknown } | null)?.name === 'QuotaExceededError';
+        setPhotoError(
+          full
+            ? 'This photo couldn’t be saved on this phone, so it hasn’t been added: the phone is out of storage space. Free up some space and add it again.'
+            : 'This photo couldn’t be saved on this phone, so it hasn’t been added. If you’re using a private browsing tab, open the app in a normal tab and add it again.',
+        );
+        break;
+      }
     }
   };
 
