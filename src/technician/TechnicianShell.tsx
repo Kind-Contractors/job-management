@@ -7,6 +7,7 @@ import { startSyncEngine, subscribeReportSynced, useSyncStatus } from './offline
 import { startVideoSyncEngine, useVideoSyncStatus } from './offline/videoSyncEngine';
 import { getCurrentTechnician } from './api';
 import { technicianKeys, useTechnicianUserId, visitListQueryKeys } from './queryKeys';
+import { headerSyncBadge } from './headerSyncBadge';
 import kindContractorsLogo from '../assets/kind_Contractors_logo.png';
 
 // The three list queries a newly booked/assigned visit, or a newly
@@ -106,7 +107,8 @@ export default function TechnicianShell() {
     });
   }, [queryClient, userId]);
 
-  const hasPending = sync.pendingPhotoCount > 0 || sync.failedDraftCount > 0 || videoSync.pending > 0;
+  // One accurate label: report not sent / photos not uploaded / uploading / sending (see reportSyncStatus.ts) - never a bare "sync failed".
+  const badge = headerSyncBadge(sync, videoSync);
 
   return (
     <div className="flex h-screen min-h-[640px] flex-col overflow-hidden bg-neutral-200">
@@ -115,21 +117,13 @@ export default function TechnicianShell() {
         <div className="border-l border-divider pl-2.5 font-heading text-[10px] font-semibold tracking-[0.16em] text-neutral-600 uppercase">
           Technician
         </div>
-        {!sync.online ? (
-          <span className="border border-missed bg-missed/10 px-1.5 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.08em] text-missed-fg uppercase">
-            Offline
+        {badge && (
+          <span
+            data-testid="technician-sync-badge"
+            className={`border px-1.5 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.08em] uppercase ${badge.tone === 'bad' ? 'border-missed bg-missed/10 text-missed-fg' : 'border-due bg-due/10 text-due-fg'}`}
+          >
+            {badge.text}
           </span>
-        ) : sync.failedDraftCount > 0 ? (
-          <span className="border border-missed bg-missed/10 px-1.5 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.08em] text-missed-fg uppercase">
-            Sync failed
-          </span>
-        ) : (
-          hasPending && (
-            <span className="border border-due bg-due/10 px-1.5 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.08em] text-due-fg uppercase">
-              Syncing {sync.pendingPhotoCount}
-              {videoSync.pending > 0 && ` + ${videoSync.pending} video${videoSync.pending === 1 ? '' : 's'}`}
-            </span>
-          )
         )}
         {sync.online && sync.failedDraftCount === 0 && videoSync.failed > 0 && (
           <span className="border border-missed bg-missed/10 px-1.5 py-0.5 font-heading text-[9.5px] font-semibold tracking-[0.08em] text-missed-fg uppercase">

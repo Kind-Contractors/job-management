@@ -25,6 +25,7 @@
 
 import { supabase } from '../lib/supabaseClient';
 import { normalizeTime } from '../lib/timeRange';
+import type { ServerReportForDraft } from './offline/draftReconciliation';
 
 /**
  * Thrown by submitReport()/resubmitReport() only — preserves the
@@ -523,6 +524,71 @@ export async function uploadVisitPhotoToPath(storagePath: string, file: Blob): P
   if (error) throw new Error(`Failed to upload photo: ${error.message}`);
 }
 
+// ---- the offline queue's own photo upload: cancellable, and checked against the server's copy ------------------------------------------
+//
+// The queue (offline/syncEngine.ts) uses these two instead of uploadVisitPhotoToPath above. Both can be CANCELLED (AbortSignal), so an
+// upload that hangs on a weak signal is really stopped and frees its place in the queue. And "a file exists at this path" is no longer
+// taken as proof: the stored file's size is read back and must equal the photo's size.
+
+/** The same headers the Supabase client sends: the signed-in user's token, or (as the client does when nobody is signed in) the
+ * public key - Storage's own policies then decide, exactly as before. */
+async function storageAuthHeaders(): Promise<Record<string, string>> {
+  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+  const { data } = await supabase.auth.getSession();
+  return { apikey: anonKey, Authorization: `Bearer ${data.session?.access_token ?? anonKey}` };
+}
+
+function storageObjectUrl(kind: 'object' | 'object/info', storagePath: string): string {
+  const base = (import.meta.env.VITE_SUPABASE_URL as string).replace(/\/$/, '');
+  return `${base}/storage/v1/${kind}/${VISIT_PHOTOS_BUCKET}/${storagePath.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+/** An upload the server refused, with its HTTP status - so the queue can tell a refusal from a dropped connection. */
+export class PhotoUploadError extends Error {
+  readonly status: number | null;
+  constructor(message: string, status: number | null) {
+    super(message);
+    this.name = 'PhotoUploadError';
+    this.status = status;
+  }
+}
+
+/** What the server holds at a photo's storage path: nothing, or a file of this size (null only if the server didn't say). */
+export type ServerPhotoCopy = { found: false } | { found: true; sizeBytes: number | null };
+
+/** Reads the stored file's details (Storage "object info" - the technician's existing SELECT policy covers it). Throws on no answer. */
+export async function checkVisitPhotoOnServer(storagePath: string, signal?: AbortSignal): Promise<ServerPhotoCopy> {
+  const res = await fetch(storageObjectUrl('object/info', storagePath), { headers: await storageAuthHeaders(), signal });
+  if (res.status === 404 || res.status === 400) {
+    // Storage answers "Object not found" as 400 or 404 depending on version.
+    const body = (await res.json().catch(() => ({}))) as { statusCode?: string | number; error?: string; message?: string };
+    if (res.status === 404 || String(body.statusCode) === '404' || /not.?found/i.test(`${body.error ?? ''} ${body.message ?? ''}`)) return { found: false };
+    throw new PhotoUploadError(body.message ?? `Could not check the photo (HTTP ${res.status}).`, res.status);
+  }
+  if (!res.ok) throw new PhotoUploadError(`Could not check the photo (HTTP ${res.status}).`, res.status);
+  const info = (await res.json().catch(() => ({}))) as { size?: unknown; metadata?: { size?: unknown } };
+  const size = typeof info.size === 'number' ? info.size : typeof info.metadata?.size === 'number' ? info.metadata.size : null;
+  return { found: true, sizeBytes: size };
+}
+
+/**
+ * Sends one photo (the exact bytes given - the queue passes an in-memory copy, never the stored Blob itself) as a new object
+ * (x-upsert false: technicians may only add files). 'exists' when a file was already there (an earlier attempt that did arrive) - the
+ * caller then checks that copy's size.
+ */
+export async function uploadVisitPhotoBytes(storagePath: string, body: Blob, contentType: string, signal?: AbortSignal): Promise<'created' | 'exists'> {
+  const form = new FormData();
+  form.append('cacheControl', '3600');
+  form.append('', body.type === contentType ? body : new Blob([body], { type: contentType }));
+  const res = await fetch(storageObjectUrl('object', storagePath), { method: 'POST', headers: { ...(await storageAuthHeaders()), 'x-upsert': 'false' }, body: form, signal });
+  if (res.ok) return 'created';
+  const detail = (await res.json().catch(() => ({}))) as { statusCode?: string | number; message?: string; error?: string };
+  const status = Number(detail.statusCode ?? res.status);
+  const message = detail.message ?? detail.error ?? `Upload failed (HTTP ${res.status}).`;
+  if (status === 409 || /already exists|duplicate/i.test(message)) return 'exists';
+  throw new PhotoUploadError(`Failed to upload photo: ${message}`, Number.isFinite(status) ? status : res.status);
+}
+
 /**
  * Removes one photo FILE from Storage (through the Storage API - never a SQL delete, which
  * would leave the file behind). Storage only lets a technician delete an object they
@@ -592,6 +658,37 @@ export async function listMyReportPhotos(visitId: string): Promise<TechnicianOwn
   const { data, error } = await supabase.rpc('technician_my_photos', { p_visit_id: visitId });
   if (error) return [];
   return ((data ?? []) as RpcMyPhotoRow[]).map((row) => ({ storagePath: row.storage_path, phase: row.phase, canDelete: row.can_delete }));
+}
+
+/**
+ * This technician's own part of a visit's report as the server holds it - for checking a permanently failed local draft against it
+ * (see offline/draftReconciliation.ts). null = no report of theirs, or the visit is no longer theirs to see. Unlike
+ * listMyReportPhotos this is strict: ANY error throws, so a failed check can never be mistaken for "no photos".
+ */
+export async function getMyServerReportForVisit(visitId: string): Promise<ServerReportForDraft | null> {
+  const visit = await getVisitDetail(visitId);
+  if (!visit?.reportId) return null;
+  if (visit.visitId !== visitId) throw new Error('The server answered for a different visit.');
+  // Incomplete or unexpected data proves nothing: a missing field must never compare equal to an empty draft field.
+  const textOk = (v: unknown) => v === null || typeof v === 'string';
+  if (typeof visit.reportReviewStatus !== 'string' || ![visit.reportWorkCarriedOut, visit.reportTechnicianNotes, visit.reportIssues].every(textOk)
+    || !(visit.reportSpecMet === null || typeof visit.reportSpecMet === 'boolean')) {
+    throw new Error('The server returned incomplete report details.');
+  }
+  const { data, error } = await supabase.rpc('technician_my_photos', { p_visit_id: visitId });
+  if (error) throw new Error(`Failed to load report photos: ${error.message}`);
+  if (!Array.isArray(data) || !data.every((row) => typeof (row as RpcMyPhotoRow)?.storage_path === 'string')) {
+    throw new Error('The server returned incomplete photo details.');
+  }
+  return {
+    reportId: visit.reportId,
+    reviewStatus: visit.reportReviewStatus,
+    workCarriedOut: visit.reportWorkCarriedOut,
+    technicianNotes: visit.reportTechnicianNotes,
+    issues: visit.reportIssues,
+    specMet: visit.reportSpecMet,
+    photoPaths: (data as RpcMyPhotoRow[]).map((row) => row.storage_path),
+  };
 }
 
 /** Short-lived signed URLs for thumbnails of photos already in the report; any that fail to sign are simply left out. */
