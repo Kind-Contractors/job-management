@@ -21,6 +21,8 @@ import {
   officeReportBlockedReason,
   officeReportFormError,
   technicianLockoutWarning,
+  isDefiniteRefusal,
+  OfficeReportOutcomeUnknownError,
 } from '../src/repository/officeReportsRepository';
 import OfficeReportForm from '../src/components/jobs/OfficeReportForm';
 import VisitRow from '../src/components/jobs/VisitRow';
@@ -91,13 +93,15 @@ test('SAVE: one database call with every field; the result says which visit and 
   const r = await completeVisitWithOfficeReport({
     visitId: null, jobId: 'job-1', workDate: '2026-10-03', completedAt: '2026-10-03T15:00:00.000Z', priceCharged: 120, workCarriedOut: 'Window cleaning',
     technicianNotes: null, issues: 'Blocked gutter', specMet: false, onSiteStart: '2026-10-03T13:00:00.000Z', onSiteEnd: '2026-10-03T14:30:00.000Z',
+    requestId: 'req-1',
   });
-  assert.deepEqual(r, { visitId: 'v-new', reportId: 'r-1', visitCreated: true });
+  assert.deepEqual(r, { visitId: 'v-new', reportId: 'r-1', visitCreated: true, replayed: false });
   const call = log.filter((l) => l.path === '/rest/v1/rpc/manager_complete_visit_with_report');
   assert.equal(call.length, 1, 'exactly one call - visit and report are saved together');
   assert.deepEqual(call[0].body, {
     p_visit_id: null, p_job_id: 'job-1', p_work_date: '2026-10-03', p_completed_at: '2026-10-03T15:00:00.000Z', p_price_charged: 120, p_work_carried_out: 'Window cleaning',
     p_technician_notes: null, p_issues: 'Blocked gutter', p_spec_met: false, p_on_site_start: '2026-10-03T13:00:00.000Z', p_on_site_end: '2026-10-03T14:30:00.000Z',
+    p_request_id: 'req-1',
   });
   assert.equal(log.filter((l) => l.path === '/rest/v1/reports' || l.path === '/rest/v1/visits').length, 0, 'no separate visit/report writes from the app');
 });
@@ -105,9 +109,66 @@ test('SAVE: one database call with every field; the result says which visit and 
 test('SAVE refused by the database: its message is shown as is (e.g. the visit already has a report)', async () => {
   rpc.manager_complete_visit_with_report = () => json(409, { code: '23505', message: 'This visit already has a report. Open it in Report review or Ready for client to check or edit it.' });
   await assert.rejects(
-    completeVisitWithOfficeReport({ visitId: 'v1', jobId: null, workDate: null, completedAt: 'x', priceCharged: 1, workCarriedOut: null, technicianNotes: null, issues: null, specMet: true, onSiteStart: null, onSiteEnd: null }),
-    /already has a report\. Open it in Report review/,
+    completeVisitWithOfficeReport({ visitId: 'v1', jobId: null, workDate: null, completedAt: 'x', priceCharged: 1, workCarriedOut: null, technicianNotes: null, issues: null, specMet: true, onSiteStart: null, onSiteEnd: null, requestId: 'req-2' }),
+    (e: Error) => /already has a report\. Open it in Report review/.test(e.message) && !(e instanceof OfficeReportOutcomeUnknownError),
   );
+});
+
+const SAVE_INPUT = { visitId: null, jobId: 'job-1', workDate: '2026-10-03', completedAt: '2026-10-03T15:00:00.000Z', priceCharged: 1, workCarriedOut: null, technicianNotes: null, issues: null, specMet: true, onSiteStart: null, onSiteEnd: null, requestId: 'req-3' };
+
+test('SAVE replayed: the same request id answered with the ORIGINAL visit and report - reported as replayed', async () => {
+  rpc.manager_complete_visit_with_report = () => json(200, { visit_id: 'v-1', report_id: 'r-1', visit_created: true, replayed: true });
+  assert.deepEqual(await completeVisitWithOfficeReport(SAVE_INPUT), { visitId: 'v-1', reportId: 'r-1', visitCreated: true, replayed: true });
+});
+
+test('OUTCOME UNKNOWN: no reply (connection lost), a 5xx / gateway timeout, or an unreadable reply - never treated as "nothing saved"', async () => {
+  const unknown = (e: unknown) => e instanceof OfficeReportOutcomeUnknownError && /couldn’t confirm whether the report was saved/.test((e as Error).message);
+  rpc.manager_complete_visit_with_report = () => { throw new TypeError('Failed to fetch'); };
+  await assert.rejects(completeVisitWithOfficeReport(SAVE_INPUT), unknown, 'connection lost');
+  rpc.manager_complete_visit_with_report = () => json(504, { message: 'upstream request timeout' });
+  await assert.rejects(completeVisitWithOfficeReport(SAVE_INPUT), unknown, 'gateway timeout');
+  rpc.manager_complete_visit_with_report = () => json(500, { code: '57014', message: 'canceling statement due to statement timeout' });
+  await assert.rejects(completeVisitWithOfficeReport(SAVE_INPUT), unknown, 'server error');
+  rpc.manager_complete_visit_with_report = () => json(200, {});
+  await assert.rejects(completeVisitWithOfficeReport(SAVE_INPUT), unknown, 'unreadable reply');
+  // ...whereas a 4xx is the server's own refusal: its transaction rolled back, so nothing was saved.
+  rpc.manager_complete_visit_with_report = () => json(400, { code: '22023', message: 'The work can’t be recorded as done in the future.' });
+  await assert.rejects(completeVisitWithOfficeReport(SAVE_INPUT), (e: unknown) => !(e instanceof OfficeReportOutcomeUnknownError) && /in the future/.test((e as Error).message));
+  assert.deepEqual([0, 200, 399, 400, 404, 409, 499, 500, 502, 503, 504].map(isDefiniteRefusal), [false, false, false, true, true, true, true, false, false, false, false]);
+});
+
+test('MIGRATION (20261124120000): idempotent per request id - lock on the id first, replay only the caller\'s own for the same target, recorded in the same transaction', () => {
+  const IDEM = src('supabase', 'migrations', '20261124120000_office_reports_idempotency.sql');
+  const fn = IDEM.slice(IDEM.indexOf('create or replace function public.manager_complete_visit_with_report('));
+  assert.match(IDEM, /drop function if exists public\.manager_complete_visit_with_report\(uuid, uuid, date, timestamptz, numeric, text, text, text, boolean, timestamptz, timestamptz\);/, 'one function, never two overloads');
+  assert.match(fn, /p_on_site_end timestamptz,\n  p_request_id uuid default null\n\)/);
+  assert.match(fn, /security invoker/);
+  const lock = fn.indexOf("pg_advisory_xact_lock(hashtextextended('office-report-request:'");
+  const lookup = fn.indexOf('from private.office_report_requests r');
+  const firstWrite = fn.indexOf('insert into visits');
+  assert.ok(lock > 0 && lock < lookup && lookup < firstWrite, 'lock, then look up, before anything is written');
+  assert.match(fn, /v_prior\.created_by is distinct from auth\.uid\(\)/, 'only the caller\'s own request');
+  assert.match(fn, /p_visit_id is not null and v_prior\.visit_id is distinct from p_visit_id/);
+  assert.match(fn, /p_job_id is not null and v_prior\.job_id is distinct from p_job_id/);
+  assert.match(fn, /'replayed', true\);\n    end if;\n  end if;/, 'a replay returns before any check or write');
+  const record = fn.indexOf('insert into private.office_report_requests');
+  assert.ok(record > fn.indexOf('insert into reports ('), 'recorded after (and in the same transaction as) the report');
+  assert.match(fn, /exception when unique_violation then\n      raise exception 'This save was already used for a different report/);
+  // The guards are all still there, unchanged.
+  for (const guard of ['Not authorized.', 'in the future', 'This visit was cancelled', 'already has a report', 'more than one technician', 'already on an invoice', 'work can\'\'t be recorded on it here']) {
+    assert.ok(fn.includes(guard), guard);
+  }
+  assert.match(IDEM, /create table if not exists private\.office_report_requests \(\n  request_id uuid primary key,/);
+  assert.match(IDEM, /report_id uuid not null unique references public\.reports\(id\) on delete cascade/);
+  assert.match(IDEM, /alter table private\.office_report_requests enable row level security;/);
+  assert.match(IDEM, /revoke all on table private\.office_report_requests from public, anon, authenticated;\ngrant select, insert on table private\.office_report_requests to authenticated;/, 'no update / delete for anyone');
+  assert.match(IDEM, /using \(private\.current_app_role\(\) = 'manager' and created_by = auth\.uid\(\)\)/);
+  assert.match(IDEM, /with check \(private\.current_app_role\(\) = 'manager' and created_by = auth\.uid\(\)\)/);
+  const RB = src('supabase', 'rollbacks', '20261124120000_office_reports_idempotency.rollback.sql');
+  const FUT = src('supabase', 'migrations', '20261124110000_office_reports_no_future_completion.sql');
+  assert.ok(RB.includes(FUT.slice(FUT.indexOf('create or replace function')).trimEnd()), 'the rollback restores the previous function word for word');
+  assert.match(RB, /drop table if exists private\.office_report_requests;/);
+  assert.doesNotMatch(RB, /delete from|drop table if exists public\./, 'no visit/report data touched');
 });
 
 test('ATTRIBUTION: "Written by the office · <who>" for Luke and Tamika; nothing for a technician\'s report or an old (unrecorded) one', async () => {
@@ -182,46 +243,49 @@ test('MIGRATION (follow-up 20261124110000): the function refuses a future comple
 });
 
 // ---- UI ------------------------------------------------------------------------------------------------------------------------------
-test('FORM (no visit): "Record work already done" - date, time, price prefilled, work defaulting to the job summary, spec, optional on-site times', () => {
-  const html = wrap(<OfficeReportForm job={job([])} visit={null} actor="luke@x" onDone={noop} onCancel={noop} />);
-  assert.match(html, /Record work already done/);
+const formProps = { formId: 'f', locked: false, onSubmit: noop, onError: noop };
+
+test('FORM (no visit): work already done - date, time, price prefilled, work defaulting to the job summary, spec, optional on-site times', () => {
+  const html = wrap(<OfficeReportForm job={job([])} visit={null} {...formProps} />);
   assert.match(html, /Date the work was done/);
+  assert.match(html, /Finished at/);
   assert.match(html, /value="55"/, 'fixed price prefilled');
   assert.match(html, />Window cleaning<\/textarea>/);
   assert.match(html, /Everything as specified/);
   assert.match(html, /Something not done/);
   assert.match(html, /On site from \(optional\)/);
-  assert.match(html, /saved as approved, so it goes straight to Ready for client and Ready for accounts/);
   assert.doesNotMatch(html, /office-report-technician-warning/);
 });
 
 test('FORM (assigned visit, today): the strong technician warning is shown; variable-price job asks for the amount', () => {
   const today = new Date();
   const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  const html = wrap(<OfficeReportForm job={job([], { pricePerVisit: null })} visit={visit('v1', { technicianId: 't', technicianName: 'Mo', scheduledDate: iso })} actor="luke@x" onDone={noop} onCancel={noop} />);
-  assert.match(html, /Complete &amp; write report/);
+  const html = wrap(<OfficeReportForm job={job([], { pricePerVisit: null })} visit={visit('v1', { technicianId: 't', technicianName: 'Mo', scheduledDate: iso })} {...formProps} />);
+  assert.match(html, /Date done/);
   assert.match(html, /data-testid="office-report-technician-warning" class="[^"]*border-missed/);
   assert.match(html, /This visit is today\. Mo won’t be able to submit/);
   assert.match(html, /variable job — enter actual amount/);
 });
 
-test('FORM (completed visit, no report): "Write the report" - recorded price and time kept, not asked again', () => {
-  const html = wrap(<OfficeReportForm job={job([])} visit={visit('v1', { status: 'completed', priceCharged: 30, completedAt: '2026-11-01T12:00:00Z' })} actor="luke@x" onDone={noop} onCancel={noop} />);
-  assert.match(html, /Write the report/);
+test('FORM (completed visit, no report): recorded price and time kept, not asked again', () => {
+  const html = wrap(<OfficeReportForm job={job([])} visit={visit('v1', { status: 'completed', priceCharged: 30, completedAt: '2026-11-01T12:00:00Z' })} {...formProps} />);
   assert.match(html, /£30 — kept as recorded/);
   assert.doesNotMatch(html, /Price charged/);
 });
 
-test('VISIT ROW: "Complete & write report" on a booked visit; "Write report" on a completed one; a reason instead for a multi-technician visit', () => {
+test('VISIT ROW: the office report actions are gone (they live in the All live jobs Actions column); the other visit actions are unchanged', () => {
   const booked = wrap(<VisitRow job={job([])} visit={visit('v1')} actor="luke@x" technicians={[]} />);
-  assert.match(booked, /Complete &amp; write report/);
-  assert.match(booked, /Mark complete/, 'the existing actions are unchanged');
+  assert.doesNotMatch(booked, /Complete &amp; write report/);
+  assert.match(booked, /Mark complete/);
+  assert.match(booked, /Mark missed/);
+  assert.match(booked, /Cancel…/);
+  assert.doesNotMatch(booked, /office-report-form/);
   const completed = wrap(<VisitRow job={job([])} visit={visit('v2', { status: 'completed', priceCharged: 30, completedAt: '2026-11-01T12:00:00Z' })} actor="luke@x" technicians={[]} />);
-  assert.match(completed, />Write report</);
-  assert.doesNotMatch(completed, /Create report/, 'the old text-only form is replaced');
+  assert.doesNotMatch(completed, />Write report</);
+  assert.doesNotMatch(completed, /Create report/);
+  assert.match(completed, /No report yet\./);
   const multi = wrap(<VisitRow job={job([])} visit={visit('v3', { additionalTechnicians: [{ technicianId: 't2', name: 'B', contribution: 'pending' }] })} actor="luke@x" technicians={[]} />);
-  assert.doesNotMatch(multi, /Complete &amp; write report</);
-  assert.match(multi, /isn’t available: Visits with more than one technician/);
+  assert.doesNotMatch(multi, /isn’t available/);
 });
 
 test('VISIT ROW with a report: "Written by the office · Tamika" next to the status - nothing for a technician\'s report', () => {

@@ -2,6 +2,10 @@
 // already done before the job was added to JMS (no visit yet). One database call does it all, in one transaction, and the report is
 // saved already approved (the office is the final reviewer) - see supabase/migrations/20261124100000_manager_office_reports.sql,
 // which also enforces every rule below on the server. Technician reporting is untouched.
+//
+// Saving is IDEMPOTENT (20261124120000_office_reports_idempotency.sql): every save carries a request id made once per submission. The same
+// id sent again returns the visit and report it already saved (replayed) and saves nothing again - so a save whose reply was lost can be
+// retried safely with the same id. OfficeReportOutcomeUnknownError tells the caller when that is the situation.
 import { supabase } from '../lib/supabaseClient';
 import type { JobVisitSummary } from '../domain/types';
 
@@ -21,16 +25,43 @@ export interface OfficeReportInput {
   specMet: boolean;
   onSiteStart: string | null;
   onSiteEnd: string | null;
+  /** One per submission, reused for every retry of it (never a new one just because a reply was lost). */
+  requestId: string;
 }
 
 export interface OfficeReportResult {
   visitId: string;
   reportId: string;
   visitCreated: boolean;
+  /** True when this request id had already been saved and the database handed back that result instead of saving again. */
+  replayed: boolean;
+}
+
+/**
+ * The save may or may not have happened: no answer arrived (connection lost, request cut off) or the server failed in a way that says
+ * nothing about it (5xx, gateway timeout). The only safe next step is to send the SAME request again - never a new one.
+ */
+export class OfficeReportOutcomeUnknownError extends Error {
+  /** What actually happened (status and message) - for diagnosis, not shown to the manager. */
+  readonly detail: string;
+  constructor(detail: string) {
+    super('We couldn’t confirm whether the report was saved - the connection dropped or the server didn’t answer in time.');
+    this.name = 'OfficeReportOutcomeUnknownError';
+    this.detail = detail;
+  }
+}
+
+/**
+ * Did the server definitely refuse (so nothing was saved)? Only a 4xx reply does: the function's own checks and the database's rules answer
+ * with one, and their transaction is rolled back. Anything else - no reply at all (status 0), a 5xx, a timeout - leaves the outcome unknown.
+ * Erring towards "unknown" is always safe: retrying with the same request id cannot save twice.
+ */
+export function isDefiniteRefusal(status: number): boolean {
+  return status >= 400 && status < 500;
 }
 
 export async function completeVisitWithOfficeReport(input: OfficeReportInput): Promise<OfficeReportResult> {
-  const { data, error } = await supabase.rpc('manager_complete_visit_with_report', {
+  const { data, error, status } = await supabase.rpc('manager_complete_visit_with_report', {
     p_visit_id: input.visitId,
     p_job_id: input.jobId,
     p_work_date: input.workDate,
@@ -42,10 +73,16 @@ export async function completeVisitWithOfficeReport(input: OfficeReportInput): P
     p_spec_met: input.specMet,
     p_on_site_start: input.onSiteStart,
     p_on_site_end: input.onSiteEnd,
+    p_request_id: input.requestId,
   });
-  if (error) throw new Error(error.message);
-  const r = data as { visit_id: string; report_id: string; visit_created: boolean };
-  return { visitId: r.visit_id, reportId: r.report_id, visitCreated: r.visit_created };
+  if (error) {
+    if (isDefiniteRefusal(status)) throw new Error(error.message);
+    throw new OfficeReportOutcomeUnknownError(`${status} ${error.message}`);
+  }
+  const r = data as { visit_id?: string; report_id?: string; visit_created?: boolean; replayed?: boolean } | null;
+  // A reply we can't read is no proof either way.
+  if (!r?.visit_id || !r.report_id) throw new OfficeReportOutcomeUnknownError(`${status} unreadable reply`);
+  return { visitId: r.visit_id, reportId: r.report_id, visitCreated: r.visit_created === true, replayed: r.replayed === true };
 }
 
 export type ReportSource = 'technician' | 'manager' | null;

@@ -2,13 +2,12 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { JobRow, JobVisitSummary, Technician } from '../../domain/types';
 import { markVisitMissed } from '../../repository/reportsRepository';
-import { getReportAuthorship, officeAuthorLabel, officeReportBlockedReason } from '../../repository/officeReportsRepository';
+import { getReportAuthorship, officeAuthorLabel } from '../../repository/officeReportsRepository';
 import { addVisitTechnician, assignVisitTechnician, removeVisitTechnician, rescheduleVisit } from '../../repository/techniciansRepository';
 import { getReportReviewStatusPresentation, getVisitStatusPresentation } from '../../lib/statusPresentation';
 import StatusPill from './StatusPill';
 import CancelWorkDialog from './CancelWorkDialog';
 import CompleteVisitForm from './CompleteVisitForm';
-import OfficeReportForm from './OfficeReportForm';
 
 function invalidateAfterVisitChange(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: ['jobRows'] });
@@ -25,7 +24,7 @@ interface VisitRowProps {
 
 export default function VisitRow({ job, visit, actor, technicians }: VisitRowProps) {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<'summary' | 'complete' | 'office'>('summary');
+  const [mode, setMode] = useState<'summary' | 'complete'>('summary');
   const [cancelOpen, setCancelOpen] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [dateError, setDateError] = useState<string | null>(null);
@@ -97,7 +96,6 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
     staleTime: 5 * 60_000,
   });
   const officeAuthor = authorship ? officeAuthorLabel(authorship.source, authorship.submittedBy) : null;
-  const officeBlocked = officeReportBlockedReason(visit);
 
   const missedMutation = useMutation({
     mutationFn: () => markVisitMissed(visit.id, actor),
@@ -245,11 +243,6 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
 
       {(visit.status === 'due' || visit.status === 'booked') && mode === 'summary' && (
         <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
-          {!officeBlocked && (
-            <button onClick={() => setMode('office')} className="cursor-pointer text-[11px] font-semibold text-teal-700 hover:underline">
-              Complete &amp; write report
-            </button>
-          )}
           <button onClick={() => setMode('complete')} className="cursor-pointer text-[11px] text-teal-700 hover:underline">
             Mark complete
           </button>
@@ -277,32 +270,9 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
         <CompleteVisitForm job={job} visit={visit} actor={actor} onDone={() => setMode('summary')} onCancel={() => setMode('summary')} />
       )}
 
+      {/* The office writes a missing report with "Complete & report" in All live jobs' Actions column (OfficeReportDialog). */}
       {visit.status === 'completed' && !visit.reportId && mode === 'summary' && (
-        <div className="mt-1">
-          {officeBlocked ? (
-            <span className="text-[11px] text-neutral-500">No report. {officeBlocked}</span>
-          ) : (
-            <button onClick={() => setMode('office')} className="cursor-pointer text-[11px] font-semibold text-teal-700 hover:underline">
-              Write report
-            </button>
-          )}
-        </div>
-      )}
-      {(visit.status === 'due' || visit.status === 'booked') && mode === 'summary' && officeBlocked && !visit.reportId && (
-        <div className="mt-0.5 text-[11px] text-neutral-500">Complete &amp; write report isn’t available: {officeBlocked}</div>
-      )}
-      {/* Stays open after saving (the visit then has a report) for the photo/video step; the database refuses a second report anyway. */}
-      {mode === 'office' && (
-        <OfficeReportForm
-          job={job}
-          visit={visit}
-          actor={actor}
-          onDone={() => {
-            invalidateAfterVisitChange(queryClient);
-            setMode('summary');
-          }}
-          onCancel={() => setMode('summary')}
-        />
+        <div className="mt-1 text-[11px] text-neutral-500">No report yet.</div>
       )}
 
       {/*

@@ -75,9 +75,11 @@ function toInput(form: FormState): JobEditInput | null {
 interface JobEditorProps {
   job: JobRow;
   onDone: () => void;
+  /** Inside a dialog that already has its own frame and title (JobEditDialog): no box or heading of its own. */
+  embedded?: boolean;
 }
 
-export default function JobEditor({ job, onDone }: JobEditorProps) {
+export default function JobEditor({ job, onDone, embedded = false }: JobEditorProps) {
   const queryClient = useQueryClient();
   const [form, setForm] = useState<FormState>(formFromJob(job));
   const [error, setError] = useState<string | null>(null);
@@ -120,10 +122,10 @@ export default function JobEditor({ job, onDone }: JobEditorProps) {
   const pricingPreview = computeDerivedPricing(form.pricingType, form.frequencyType || null, parsedPricePerVisit);
 
   return (
-    <div className="m-3.5 border border-neutral-300 p-3">
-      <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">Edit job</div>
+    <div className={embedded ? '' : 'm-3.5 border border-neutral-300 p-3'}>
+      {!embedded && <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">Edit job</div>}
 
-      <div className="mt-2 flex flex-col gap-2">
+      <div className={embedded ? 'flex flex-col gap-2.5' : 'mt-2 flex flex-col gap-2'}>
         <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
           Job summary
           <input

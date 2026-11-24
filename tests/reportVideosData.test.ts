@@ -200,6 +200,14 @@ test('UPLOAD: poster, then the resumable video file, then the record - source ma
   for (const l of server.log) assert.equal(l.headers.get('apikey'), 'test-key');
 });
 
+test('UPLOAD with includeInClientReport: false (Complete & report) - the record is CREATED excluded; no second request sets it', async () => {
+  server.insertRow = row({ id: 'new2', source: 'manager', include_in_client_report: false });
+  await uploadReportVideo(input({ includeInClientReport: false }), { uploader: okUploader, getAccessToken: async () => 't' });
+  const [insert] = calls(/^POST \/rest\/v1\/report_videos$/);
+  assert.equal(insert.body.include_in_client_report, false);
+  assert.equal(calls(/^PATCH \/rest\/v1\/report_videos/).length, 0, 'no follow-up update');
+});
+
 test('UPLOAD without a poster sends no poster request and records no thumbnail', async () => {
   server.insertRow = row({ id: 'n', thumbnail_path: null });
   await uploadReportVideo(input({ thumbnail: null }), { uploader: okUploader, getAccessToken: async () => 't' });

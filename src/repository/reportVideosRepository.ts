@@ -117,6 +117,11 @@ export interface UploadReportVideoInput {
   /** Called when the upload of the video file itself is done and the record is about to be saved. */
   onSaving?: () => void;
   signal?: AbortSignal;
+  /**
+   * "Include for client" as the record is CREATED. Defaults to true (Report review: added included, unticked afterwards if wanted).
+   * Complete & report passes the choice made before saving, so a video the manager excluded is never, even briefly, included.
+   */
+  includeInClientReport?: boolean;
 }
 
 export interface UploadReportVideoDeps {
@@ -134,7 +139,8 @@ async function currentAccessToken(): Promise<string> {
  * Adds a video to a visit as the signed-in manager:
  *   1. the JPEG poster (small, one request) - if this fails the video still goes ahead without a poster;
  *   2. the video file, resumable, straight to the private bucket under {visit}/{phase}/{new uuid}.{ext};
- *   3. the report_videos record (source 'manager', included for the client by default; the manager can untick it).
+ *   3. the report_videos record (source 'manager', included for the client unless input.includeInClientReport is false; the manager
+ *      can change it later either way).
  * Every attempt uses fresh names, so a retry can never collide with or reuse a half-finished earlier attempt. If anything after
  * the file upload fails, the files THIS attempt uploaded are removed again (allowed because no record points at them yet), so
  * failed attempts do not leave files behind.
@@ -186,7 +192,7 @@ export async function uploadReportVideo(input: UploadReportVideoInput, deps: Upl
         size_bytes: input.file.size,
         duration_seconds: input.durationSeconds,
         source: 'manager',
-        include_in_client_report: true,
+        include_in_client_report: input.includeInClientReport ?? true,
       })
       .select(VIDEO_SELECT)
       .single();
