@@ -6,6 +6,7 @@ import { listTechnicians, createVisit } from '../../repository/techniciansReposi
 import { assignJobTechnician } from '../../repository/jobsRepository';
 import { useAuth } from '../../auth/AuthProvider';
 import VisitRow from './VisitRow';
+import OfficeReportForm from './OfficeReportForm';
 import VisitTechnicianPicker from './VisitTechnicianPicker';
 import { activeSelection, splitPrimary } from '../../lib/visitTechnicianSelection';
 import ScheduleEditor from './ScheduleEditor';
@@ -50,6 +51,7 @@ export default function JobInspectorDrawer({
 }: JobInspectorDrawerProps) {
   const navigate = useNavigate();
   const { session } = useAuth();
+  const [recordingDone, setRecordingDone] = useState(false);
   const actor = session?.user.email ?? 'unknown';
   const [revealed, setRevealed] = useState(false);
   const [editingJob, setEditingJob] = useState(false);
@@ -266,6 +268,23 @@ export default function JobInspectorDrawer({
           {job.visits.map((v) => (
             <VisitRow key={v.id} job={job} visit={v} actor={actor} technicians={activeTechnicians} />
           ))}
+        </div>
+      )}
+
+      {/* Work done before it was in JMS (no visit for it): the office records it as a completed visit and writes its report. */}
+      {(job.lifecycleStatus === 'active' || job.lifecycleStatus === 'on_hold') && (
+        <div className="px-4 pb-2">
+          {recordingDone ? (
+            <OfficeReportForm job={job} visit={null} actor={actor} onDone={() => setRecordingDone(false)} onCancel={() => setRecordingDone(false)} />
+          ) : (
+            <button
+              onClick={() => setRecordingDone(true)}
+              className="cursor-pointer text-[11.5px] font-semibold text-teal-700 hover:underline"
+              data-testid="record-work-done"
+            >
+              + Record work already done
+            </button>
+          )}
         </div>
       )}
 
