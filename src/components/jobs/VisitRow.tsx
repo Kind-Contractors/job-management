@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { JobRow, JobVisitSummary, Technician } from '../../domain/types';
-import { createReport, markVisitMissed } from '../../repository/reportsRepository';
+import { markVisitMissed } from '../../repository/reportsRepository';
+import { getReportAuthorship, officeAuthorLabel } from '../../repository/officeReportsRepository';
 import { addVisitTechnician, assignVisitTechnician, removeVisitTechnician, rescheduleVisit } from '../../repository/techniciansRepository';
 import { getReportReviewStatusPresentation, getVisitStatusPresentation } from '../../lib/statusPresentation';
 import StatusPill from './StatusPill';
@@ -23,7 +24,7 @@ interface VisitRowProps {
 
 export default function VisitRow({ job, visit, actor, technicians }: VisitRowProps) {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<'summary' | 'complete' | 'report'>('summary');
+  const [mode, setMode] = useState<'summary' | 'complete'>('summary');
   const [cancelOpen, setCancelOpen] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [dateError, setDateError] = useState<string | null>(null);
@@ -86,6 +87,15 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
     },
     onError: (err) => setExtraError(err instanceof Error ? err.message : 'Failed to remove technician.'),
   });
+
+  // "Written by the office · Luke" on a report the office wrote (none for a technician's report, or one from before this was recorded).
+  const { data: authorship } = useQuery({
+    queryKey: ['reportAuthorship', visit.reportId],
+    queryFn: () => getReportAuthorship(visit.reportId!),
+    enabled: visit.reportId != null,
+    staleTime: 5 * 60_000,
+  });
+  const officeAuthor = authorship ? officeAuthorLabel(authorship.source, authorship.submittedBy) : null;
 
   const missedMutation = useMutation({
     mutationFn: () => markVisitMissed(visit.id, actor),
@@ -232,7 +242,7 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
       )}
 
       {(visit.status === 'due' || visit.status === 'booked') && mode === 'summary' && (
-        <div className="mt-1 flex gap-2">
+        <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
           <button onClick={() => setMode('complete')} className="cursor-pointer text-[11px] text-teal-700 hover:underline">
             Mark complete
           </button>
@@ -260,23 +270,9 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
         <CompleteVisitForm job={job} visit={visit} actor={actor} onDone={() => setMode('summary')} onCancel={() => setMode('summary')} />
       )}
 
+      {/* The office writes a missing report with "Complete & report" in All live jobs' Actions column (OfficeReportDialog). */}
       {visit.status === 'completed' && !visit.reportId && mode === 'summary' && (
-        <div className="mt-1">
-          <button onClick={() => setMode('report')} className="cursor-pointer text-[11px] text-teal-700 hover:underline">
-            Create report
-          </button>
-        </div>
-      )}
-      {mode === 'report' && !visit.reportId && (
-        <CreateReportForm
-          visitId={visit.id}
-          actor={actor}
-          onDone={() => {
-            invalidateAfterVisitChange(queryClient);
-            setMode('summary');
-          }}
-          onCancel={() => setMode('summary')}
-        />
+        <div className="mt-1 text-[11px] text-neutral-500">No report yet.</div>
       )}
 
       {/*
@@ -291,86 +287,9 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
         <div className="mt-1 flex items-center gap-1.5 text-[11px] text-neutral-600">
           Report:
           <StatusPill presentation={getReportReviewStatusPresentation(visit.reportReviewStatus)} />
+          {officeAuthor && <span data-testid="office-author">· {officeAuthor}</span>}
         </div>
       )}
     </div>
   );
 }
-
-interface CreateReportFormProps {
-  visitId: string;
-  actor: string;
-  onDone: () => void;
-  onCancel: () => void;
-}
-
-function CreateReportForm({ visitId, actor, onDone, onCancel }: CreateReportFormProps) {
-  const [workCarriedOut, setWorkCarriedOut] = useState('');
-  const [technicianNotes, setTechnicianNotes] = useState('');
-  const [issues, setIssues] = useState('');
-  const [error, setError] = useState<string | null>(null);
-
-  const createMutation = useMutation({
-    mutationFn: () =>
-      createReport(visitId, actor, {
-        workCarriedOut: workCarriedOut || null,
-        technicianNotes: technicianNotes || null,
-        issues: issues || null,
-        onSiteStart: null,
-        onSiteEnd: null,
-        includePhotos: true,
-        includeNotes: true,
-        includeIssues: true,
-        includePrice: false,
-      }),
-    onSuccess: onDone,
-    onError: (err) => setError(err instanceof Error ? err.message : 'Failed to create report.'),
-  });
-
-  return (
-    <div className="mt-2 flex flex-col gap-1.5 border border-neutral-300 bg-neutral-100 p-2.5">
-      <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-        Work carried out
-        <textarea
-          value={workCarriedOut}
-          onChange={(e) => setWorkCarriedOut(e.target.value)}
-          rows={2}
-          className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
-        />
-      </label>
-      <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-        Notes
-        <textarea
-          value={technicianNotes}
-          onChange={(e) => setTechnicianNotes(e.target.value)}
-          rows={2}
-          className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
-        />
-      </label>
-      <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-        Issues
-        <textarea
-          value={issues}
-          onChange={(e) => setIssues(e.target.value)}
-          rows={2}
-          className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
-        />
-      </label>
-      <div className="text-[11px] text-neutral-500">No photos on this visit yet.</div>
-      {error && <div className="text-[11px] text-missed-fg">{error}</div>}
-      <div className="flex gap-1.5">
-        <button
-          onClick={() => createMutation.mutate()}
-          disabled={createMutation.isPending}
-          className="cursor-pointer bg-teal px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-60"
-        >
-          {createMutation.isPending ? 'Saving…' : 'Save report'}
-        </button>
-        <button onClick={onCancel} className="cursor-pointer border border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-600">
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
-}
-

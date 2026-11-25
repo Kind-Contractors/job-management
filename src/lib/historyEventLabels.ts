@@ -30,6 +30,8 @@ export const HISTORY_EVENT_LABEL: Record<string, string> = {
   visit_missed: 'Visit missed',
   visit_cancelled: 'Visit cancelled',
   report_submitted: 'Report submitted',
+  report_written_by_office: 'Report written by the office',
+  report_created: 'Report created by the office',
   report_approved: 'Report approved',
   report_returned: 'Report returned for correction',
   report_resubmitted: 'Report resubmitted',

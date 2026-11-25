@@ -70,11 +70,17 @@ export interface AddReportPhotoInput {
   phase: PhotoPhase;
   file: File;
   actor: string;
+  /**
+   * "Include for client" as the row is CREATED. Defaults to true (Report review's behaviour: added included, unticked afterwards if
+   * wanted). Complete & report passes the choice made before saving, so a photo the manager excluded is never, even briefly, included.
+   */
+  includeInClientReport?: boolean;
 }
 
 /**
  * Adds one photo to a report as the signed-in manager. The photo is shrunk to at most 1600 px (JPEG) like technicians' photos, saved
- * under {visit}/{phase}/{new uuid}, and recorded as an uploaded photo included for the client (the manager can untick it). The row has
+ * under {visit}/{phase}/{new uuid}, and recorded as an uploaded photo - included for the client unless the caller says otherwise
+ * (input.includeInClientReport; the manager can change it later either way). The row has
  * no technician (technician_id stays empty): it belongs to the office, not to anyone's submission.
  */
 export async function addReportPhoto(input: AddReportPhotoInput): Promise<ReportPhoto> {
@@ -97,7 +103,7 @@ export async function addReportPhoto(input: AddReportPhotoInput): Promise<Report
       storage_path: path,
       upload_status: 'uploaded',
       uploaded_at: new Date().toISOString(),
-      include_in_client_report: true,
+      include_in_client_report: input.includeInClientReport ?? true,
       technician_id: null,
     })
     .select(PHOTO_SELECT)

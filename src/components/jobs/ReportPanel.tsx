@@ -10,6 +10,7 @@ import {
   ReportTextChangedError,
 } from '../../repository/reportsRepository';
 import type { ReportDetail } from '../../domain/types';
+import { getReportAuthorship, officeAuthorLabel } from '../../repository/officeReportsRepository';
 import { getReportReviewStatusPresentation } from '../../lib/statusPresentation';
 import { getApprovalBlockers } from '../../lib/approvalBlockers';
 import {
@@ -162,6 +163,14 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
     }
   };
 
+  // "Written by the office · Luke" for a report the office wrote; nothing for a technician's (or one from before this was recorded).
+  const { data: authorship } = useQuery({
+    queryKey: ['reportAuthorship', reportId],
+    queryFn: () => getReportAuthorship(reportId),
+    staleTime: 5 * 60_000,
+  });
+  const officeAuthor = authorship ? officeAuthorLabel(authorship.source, authorship.submittedBy) : null;
+
   const { data: contributionOverview } = useQuery({
     queryKey: ['reportContributions', reportId],
     queryFn: () => getReportContributionOverview(reportId),
@@ -216,7 +225,7 @@ export default function ReportPanel({ reportId, reviewStatus, actor, readyForAcc
       {expanded && report && (
         <div className="mt-2 flex flex-col gap-1.5">
           <div className="text-[11px] text-neutral-500">
-            Submitted by {report.submittedBy} · {new Date(report.submittedAt).toLocaleString('en-GB')}
+            {officeAuthor ?? `Submitted by ${report.submittedBy}`} · {new Date(report.submittedAt).toLocaleString('en-GB')}
           </div>
 
           {/* A completed report cannot be returned for correction (or have a technician's section sent back) until it is reopened. */}

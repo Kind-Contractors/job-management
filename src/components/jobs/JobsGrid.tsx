@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import type { ColDef, GetRowIdParams, GridApi, RowClassParams, TabToNextCellParams } from 'ag-grid-community';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
@@ -110,6 +110,7 @@ function buildColumnDefs(
   technicians: Technician[],
   queryClient: QueryClient,
   onOpenContact: (job: JobRow) => void,
+  onJobAction: ((jobId: string, action: JobAction) => void) | undefined,
 ): ColDef<GridBlock>[] {
   const hide = (id: JobsGridColumnId) => hiddenColumns.has(id);
   const technicianById = new Map(technicians.map((t) => [t.id, t]));
@@ -403,7 +404,72 @@ function buildColumnDefs(
         );
       },
     },
+    ...(onJobAction ? [actionsColumn(onJobAction)] : []),
   ];
+}
+
+/** What the Actions column's two buttons ask the page to open (AllLiveJobsPage shows the matching dialog). */
+export type JobAction = 'edit' | 'report';
+
+/**
+ * Actions: "Edit" (JobEditDialog) and "Complete & report" (OfficeReportDialog). Pinned to the right edge so the two buttons stay
+ * in reach however far the table is scrolled sideways - AG Grid's own pinning, not a CSS sticky trick. Not in COLUMN_IDS, so the
+ * Columns menu can't hide it. Clicks never reach the row (stopPropagation, and onCellClicked ignores this column), so the job
+ * panel doesn't open underneath a dialog.
+ */
+export function actionsColumn(onJobAction: (jobId: string, action: JobAction) => void): ColDef<GridBlock> {
+  const btn = 'cursor-pointer border border-neutral-300 bg-white px-1.5 py-0.5 text-[11px] leading-tight text-teal-700 hover:border-teal hover:bg-teal-100';
+  return {
+    colId: 'actions',
+    headerName: 'Actions',
+    pinned: 'right',
+    width: 168,
+    minWidth: 168,
+    maxWidth: 168,
+    resizable: false,
+    sortable: false,
+    suppressMovable: true,
+    editable: false,
+    // Keyboard: Tab reaches this cell (see tabToNextCell), then Tab / Shift+Tab step through its two buttons before the grid moves
+    // on, and Enter / Space on a focused button press it rather than being taken by the grid.
+    suppressKeyboardEvent: ({ event }) => {
+      const cell = (event.target as HTMLElement | null)?.closest('.ag-cell');
+      const buttons = cell ? Array.from(cell.querySelectorAll('button')) : [];
+      const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      if (event.key !== 'Tab') return at !== -1;
+      if (buttons.length === 0 || event.type !== 'keydown') return false;
+      if (at === -1) {
+        event.preventDefault();
+        buttons[event.shiftKey ? buttons.length - 1 : 0].focus();
+        return true;
+      }
+      // Between the two buttons the browser moves focus; past either end the grid takes over.
+      return event.shiftKey ? at > 0 : at < buttons.length - 1;
+    },
+    cellRenderer: (p: { data?: GridBlock }) => {
+      const job = jobOf(p);
+      if (!job) return null;
+      const press = (action: JobAction) => (e: MouseEvent) => {
+        e.stopPropagation();
+        onJobAction(job.id, action);
+      };
+      return (
+        <span className="flex h-full items-center gap-1" data-testid="job-actions">
+          <button type="button" onClick={press('edit')} className={btn} aria-label={`Edit ${job.buildingName} · ${job.jobSummary}`}>
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={press('report')}
+            className={`${btn} font-semibold`}
+            aria-label={`Complete & report: ${job.buildingName} · ${job.jobSummary}`}
+          >
+            Complete &amp; report
+          </button>
+        </span>
+      );
+    },
+  };
 }
 
 interface JobsGridProps {
@@ -412,12 +478,14 @@ interface JobsGridProps {
   selectedJobId: string | null;
   onSelectJob: (jobId: string) => void;
   hiddenColumns?: ReadonlySet<JobsGridColumnId>;
+  /** Shows the pinned Actions column (Edit / Complete & report); the page opens the dialog. Omitted = no Actions column. */
+  onJobAction?: (jobId: string, action: JobAction) => void;
 }
 
 const NO_HIDDEN_COLUMNS: ReadonlySet<JobsGridColumnId> = new Set();
 const NO_COLLAPSED_BANDS: ReadonlySet<string> = new Set();
 
-export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hiddenColumns = NO_HIDDEN_COLUMNS }: JobsGridProps) {
+export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hiddenColumns = NO_HIDDEN_COLUMNS, onJobAction }: JobsGridProps) {
   const queryClient = useQueryClient();
   const [editError, setEditError] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
@@ -464,8 +532,8 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
   );
   const gridContext = useMemo<GridBandContext>(() => ({ onToggleBand: toggleBand }), [toggleBand]);
   const columnDefs = useMemo(
-    () => buildColumnDefs(hiddenColumns, technicians, queryClient, setContactPopoverJob),
-    [hiddenColumns, technicians, queryClient],
+    () => buildColumnDefs(hiddenColumns, technicians, queryClient, setContactPopoverJob, onJobAction),
+    [hiddenColumns, technicians, queryClient, onJobAction],
   );
   const gridApiRef = useRef<GridApi<GridBlock> | null>(null);
 
@@ -543,6 +611,7 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
               const colDef = p.colDef as ColDef<GridBlock> | undefined;
               if (!colDef) return undefined;
               if (colDef.colId === 'contact') return 'Click to view or edit contact';
+              if (colDef.colId === 'actions') return undefined;
               const editableFn = colDef.editable;
               const isEditable =
                 typeof editableFn === 'function'
@@ -578,6 +647,8 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
             // renderer button (onOpenContact) — never the job drawer, and
             // never treated as an "editable" AG Grid cell (see its colDef).
             if (event.column.getColId() === 'contact') return;
+            // The Actions column's buttons open their own dialogs; a click beside them does nothing (never the drawer).
+            if (event.column.getColId() === 'actions') return;
             const editableFn = event.colDef.editable;
             // Narrow, self-contained cast: every `editable` callback defined
             // above only ever reads `.data` (see jobOf()), so a minimal
@@ -639,6 +710,8 @@ export default function JobsGrid({ rows, groupBy, selectedJobId, onSelectJob, hi
                 continue;
               }
 
+              // The Actions cell is a tab stop too (its buttons are reached from there - see actionsColumn).
+              if (candidate.column.getColId() === 'actions') return candidate;
               const editableFn = candidate.column.getColDef().editable;
               const isEditable =
                 typeof editableFn === 'function'

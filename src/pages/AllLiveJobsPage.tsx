@@ -1,10 +1,14 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { listJobRows } from '../repository/jobsRepository';
 import type { JobRow, JobStatus } from '../domain/types';
 import { buildGridBlocks, type GridBlock, type GroupBy } from '../lib/grouping';
-import JobsGrid, { COLUMN_IDS, COLUMN_LABELS, type JobsGridColumnId } from '../components/jobs/JobsGrid';
+import JobsGrid, { COLUMN_IDS, COLUMN_LABELS, type JobAction, type JobsGridColumnId } from '../components/jobs/JobsGrid';
+import JobEditDialog from '../components/jobs/JobEditDialog';
+import OfficeReportDialog from '../components/jobs/OfficeReportDialog';
+import { useAuth } from '../auth/AuthProvider';
+import { listPendingSubmissions } from '../lib/officeReportPending';
 import JobInspectorDrawer from '../components/jobs/JobInspectorDrawer';
 import JobCreator from '../components/jobs/JobCreator';
 import { getStatusPresentation } from '../lib/statusPresentation';
@@ -83,6 +87,22 @@ export default function AllLiveJobsPage() {
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [creatingJob, setCreatingJob] = useState(false);
+  // The Actions column's dialog (Edit / Complete & report). Separate from selectedJobId: opening one never opens or changes the drawer.
+  const [jobAction, setJobAction] = useState<{ jobId: string; action: JobAction } | null>(null);
+  const { session } = useAuth();
+  const userId = session?.user.id ?? null;
+  // This manager's Complete & report submissions still awaiting confirmation, kept on this device (officeReportPending.ts). Read again
+  // whenever the dialog changes one. A storage failure just shows nothing here - the dialog itself reports it.
+  const { data: pendingReports = [] } = useQuery({
+    queryKey: ['officePending', userId],
+    queryFn: () => listPendingSubmissions(userId!),
+    enabled: userId != null,
+    retry: false,
+  });
+  // "Report saved and approved..." once Complete & report has finished everything - stays until dismissed (not a timed toast).
+  const [completedNotice, setCompletedNotice] = useState<string | null>(null);
+  // Stable, so the grid's column definitions (memoised on it) aren't rebuilt on every render.
+  const onJobAction = useCallback((jobId: string, action: JobAction) => setJobAction({ jobId, action }), []);
 
   const {
     data: allRows = [],
@@ -137,6 +157,8 @@ export default function AllLiveJobsPage() {
   };
 
   const selectedJob: JobRow | undefined = allRows.find((j) => j.id === selectedJobId);
+  // Read live from the same rows, so the dialog sees a save (its own or the drawer's) as soon as the list refreshes.
+  const actionJob: JobRow | undefined = jobAction ? allRows.find((j) => j.id === jobAction.jobId) : undefined;
   const siblings = selectedJob ? allRows.filter((j) => j.buildingId === selectedJob.buildingId && j.id !== selectedJob.id) : [];
 
   const title = status
@@ -228,6 +250,50 @@ export default function AllLiveJobsPage() {
           </div>
         </div>
 
+        {pendingReports.filter((r) => !(jobAction?.action === 'report' && jobAction.jobId === r.jobId)).length > 0 && (
+          <div
+            role="status"
+            data-testid="office-report-pending-notice"
+            className="mx-5 mb-2.5 flex flex-none flex-col gap-1 border border-due/50 bg-due/5 px-3 py-2 text-[12.5px] text-due-fg"
+          >
+            {pendingReports
+              .filter((r) => !(jobAction?.action === 'report' && jobAction.jobId === r.jobId))
+              .map((r) => {
+                const live = allRows.some((j) => j.id === r.jobId);
+                return (
+                  <div key={r.requestId} className="flex flex-wrap items-center gap-x-2">
+                    <span className="font-semibold">{r.stage === 'saved' ? 'Photos/videos not added yet' : 'Awaiting confirmation'}:</span>
+                    <span>
+                      Complete &amp; report for {r.buildingName} · {r.jobSummary}
+                      {r.stage === 'saved' ? ' — the report is saved; some files still need adding.' : ' — sent, but no confirmation came back.'}
+                    </span>
+                    {live ? (
+                      <button onClick={() => onJobAction(r.jobId, 'report')} className="cursor-pointer font-semibold underline">
+                        Finish it
+                      </button>
+                    ) : (
+                      <span className="text-neutral-600">(the job isn’t in this list any more)</span>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+        )}
+
+        {completedNotice && (
+          <div
+            role="status"
+            data-testid="office-report-completed"
+            className="mx-5 mb-2.5 flex flex-none items-start gap-3 border border-teal-700/40 bg-teal-100/60 px-3 py-2 text-[12.5px] text-teal-700"
+          >
+            <span className="font-semibold">✓</span>
+            <span className="flex-1">{completedNotice}</span>
+            <button onClick={() => setCompletedNotice(null)} aria-label="Dismiss" className="cursor-pointer px-1 text-[14px] leading-none hover:bg-teal-100">
+              ×
+            </button>
+          </div>
+        )}
+
         <div className="flex flex-none flex-wrap items-center gap-1.5 px-5 pb-3">
           {STATUS_CHIPS.map((chip) => (
             <button
@@ -264,6 +330,7 @@ export default function AllLiveJobsPage() {
                 setSelectedJobId(jobId);
               }}
               hiddenColumns={hiddenColumns}
+              onJobAction={onJobAction}
             />
             <div className="flex h-[34px] flex-none items-center gap-4 border-t border-neutral-400 bg-neutral-200 px-5 text-xs text-neutral-700 tabular-nums">
               <span>Showing {rows.length} of {allRows.length} rows</span>
@@ -295,6 +362,21 @@ export default function AllLiveJobsPage() {
             onSelectSibling={setSelectedJobId}
           />
         )
+      )}
+
+      {jobAction?.action === 'edit' && actionJob && <JobEditDialog key={actionJob.id} job={actionJob} onClose={() => setJobAction(null)} />}
+      {jobAction?.action === 'report' && actionJob && (
+        <OfficeReportDialog
+          key={actionJob.id}
+          job={actionJob}
+          actor={session?.user.email ?? 'unknown'}
+          userId={userId}
+          onClose={() => setJobAction(null)}
+          onCompleted={(message) => {
+            setJobAction(null);
+            setCompletedNotice(message);
+          }}
+        />
       )}
     </div>
   );

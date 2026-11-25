@@ -116,6 +116,23 @@ function isAlreadyExistsError(err: unknown): boolean {
   return err instanceof RpcError && err.message === ALREADY_EXISTS_MESSAGE;
 }
 
+/** Shown (and kept) when the visit already has a report this phone did not send - e.g. one written by the office. */
+export const OFFICE_REPORT_EXISTS_MESSAGE =
+  'The office has already written the report for this visit, so this one can’t be sent. It’s kept on this phone — please tell the office if anything in it is missing.';
+
+/**
+ * After "A report already exists": is it exactly the report this phone was sending (its own earlier attempt, reply lost)? Uses the same
+ * strict match as draft reconciliation (same text and specification, every photo path). Any doubt - no answer, an error - is "no".
+ */
+async function serverHoldsExactlyThisReport(draft: DraftReport, photos: PendingPhoto[]): Promise<boolean> {
+  try {
+    const server = await withTimeLimit(uploadDeps.checkTimeoutMs, 'the report check', () => uploadDeps.fetchMyServerReport(draft.visitId));
+    return draftMatchesServerReport(draft, photos.map((p) => p.storagePath), server);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * True only for a genuine server-side rejection — the RPC actually ran and
  * technician_submit_report()/technician_resubmit_report() explicitly raised
@@ -668,20 +685,23 @@ async function sendReport(ownerId: string, visitId: string, draft: DraftReport, 
     await deletePhotosForVisit(ownerId, visitId);
     notifyReportSynced(visitId);
   } catch (err) {
-    if (isAlreadyExistsError(err)) {
-      // The server already has a report for this visit — this local
-      // draft is a redundant duplicate (most likely this very submission
-      // having actually succeeded on an earlier attempt whose success
-      // response never made it back, e.g. the connection dropped right
-      // after). The real report is the server's; this branch never
-      // created it and must never try to. Safe to drop the local
-      // duplicate outright and tell the UI to treat this visit as
-      // synced, exactly like a genuine success — never touches the
-      // existing server-side report.
+    if (isAlreadyExistsError(err) && (await serverHoldsExactlyThisReport(draft, photos))) {
+      // The server already has THIS report - this very submission succeeded on an earlier attempt whose reply never came back (e.g. the
+      // connection dropped right after). The local copy is a duplicate: drop it and treat the visit as sent, exactly like a success.
       await deleteDraft(ownerId, visitId);
       readyVisitsHint.delete(visitId);
       await deletePhotosForVisit(ownerId, visitId);
       notifyReportSynced(visitId);
+    } else if (isAlreadyExistsError(err)) {
+      // A DIFFERENT report already exists - written by the office (or the check couldn't be made). Never discard the technician's
+      // work: keep the draft and its photos on the phone, never retry, and say plainly why it can't be sent.
+      await putDraft({
+        ...draft,
+        submitting: false,
+        submitError: OFFICE_REPORT_EXISTS_MESSAGE,
+        permanentFailure: true,
+        updatedAt: new Date().toISOString(),
+      });
     } else if (isPermanentSubmitError(err)) {
       // A definitive server rejection that retrying can never fix (e.g.
       // the visit was reassigned away). Stop the automatic retry loop —

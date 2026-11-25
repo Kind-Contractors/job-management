@@ -93,6 +93,15 @@ test('ADD: the record is an UPLOADED photo, INCLUDED for the client by default, 
   assert.match(insert.body.storage_path, new RegExp(`^${VISIT}/before/`));
 });
 
+test('ADD with includeInClientReport: false (Complete & report) - the ONE insert carries false; no second request ever sets it', async () => {
+  await addReportPhoto({ reportId: REPORT, visitId: VISIT, phase: 'after', file: photoFile(), actor: 'luke@x', includeInClientReport: false });
+  const [insert] = calls(/^POST \/rest\/v1\/photos$/);
+  assert.equal(insert.body.include_in_client_report, false);
+  assert.equal(calls(/^PATCH \/rest\/v1\/photos/).length, 0, 'no follow-up update');
+  await addReportPhoto({ reportId: REPORT, visitId: VISIT, phase: 'after', file: photoFile(), actor: 'luke@x', includeInClientReport: true });
+  assert.equal(calls(/^POST \/rest\/v1\/photos$/)[1].body.include_in_client_report, true);
+});
+
 test('ADD: every photo gets its own fresh path (no collisions), and the history says who added it and to which section', async () => {
   await addReportPhoto({ reportId: REPORT, visitId: VISIT, phase: 'after', file: photoFile(), actor: 'luke@x' });
   await addReportPhoto({ reportId: REPORT, visitId: VISIT, phase: 'after', file: photoFile(), actor: 'luke@x' });
