@@ -159,7 +159,6 @@ export default function AllLiveJobsPage() {
   const selectedJob: JobRow | undefined = allRows.find((j) => j.id === selectedJobId);
   // Read live from the same rows, so the dialog sees a save (its own or the drawer's) as soon as the list refreshes.
   const actionJob: JobRow | undefined = jobAction ? allRows.find((j) => j.id === jobAction.jobId) : undefined;
-  const siblings = selectedJob ? allRows.filter((j) => j.buildingId === selectedJob.buildingId && j.id !== selectedJob.id) : [];
 
   const title = status
     ? STATUS_CHIPS.find((c) => c.key === status)?.label
@@ -357,9 +356,7 @@ export default function AllLiveJobsPage() {
           <JobInspectorDrawer
             key={selectedJob.id}
             job={selectedJob}
-            siblings={siblings}
             onClose={() => setSelectedJobId(null)}
-            onSelectSibling={setSelectedJobId}
           />
         )
       )}

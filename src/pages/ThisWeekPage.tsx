@@ -580,7 +580,6 @@ export default function ThisWeekPage() {
   const errorObj = techniciansError ? techniciansErrorObj : visitsError ? visitsErrorObj : jobRowsErrorObj;
 
   const selectedJob: JobRow | undefined = jobRows.find((j) => j.id === selectedJobId);
-  const siblings = selectedJob ? jobRows.filter((j) => j.buildingId === selectedJob.buildingId && j.id !== selectedJob.id) : [];
 
   return (
     <div className="relative flex min-h-0 flex-1">
@@ -750,9 +749,9 @@ export default function ThisWeekPage() {
         <JobInspectorDrawer
           key={selectedJob.id}
           job={selectedJob}
-          siblings={siblings}
           onClose={() => setSelectedJobId(null)}
-          onSelectSibling={setSelectedJobId}
+          allowOfficeReport
+          layout="tabbed"
         />
       )}
       {selectedDate && (

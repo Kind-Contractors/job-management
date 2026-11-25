@@ -13,7 +13,8 @@ export default function ReportReviewPage() {
   const { session } = useAuth();
   const actor = session?.user.email ?? 'unknown';
   const [searchParams] = useSearchParams();
-  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  // `?report=<id>` (the Schedule drawer's "Review") opens on that report; without it nothing is selected, as before.
+  const [selectedReportId, setSelectedReportId] = useState<string | null>(() => searchParams.get('report'));
 
   const division = searchParams.get('division') ?? 'Both';
 

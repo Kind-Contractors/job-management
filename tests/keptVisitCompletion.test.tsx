@@ -117,11 +117,11 @@ test('FORM: the price rule is unchanged - an empty price is refused with the sam
 
 test('VISIT ROW (Job Inspector) regression: an open visit still offers Mark complete / Mark missed / Cancel…; completed ones do not', () => {
   const j = job('a', 'Active', [kept], { pricePerVisit: 100 });
-  const open = wrap(<VisitRow job={j} visit={kept} actor="luke" technicians={[]} />);
+  const open = wrap(<VisitRow job={j} visit={kept} actor="luke" technicians={[]} initiallyExpanded />);
   assert.match(open, />Mark complete</);
   assert.match(open, />Mark missed</);
   assert.match(open, />Cancel…</);
-  const done = wrap(<VisitRow job={j} visit={visit('d', { status: 'completed', priceCharged: 100, completedAt: 'x' })} actor="luke" technicians={[]} />);
+  const done = wrap(<VisitRow job={j} visit={visit('d', { status: 'completed', priceCharged: 100, completedAt: 'x' })} actor="luke" technicians={[]} initiallyExpanded />);
   assert.doesNotMatch(done, />Mark complete</);
 });
 

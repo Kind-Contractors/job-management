@@ -130,9 +130,16 @@ export default function OfficeReportDialog({
   userId,
   onClose,
   onCompleted,
+  visitId,
 }: {
   job: JobRow;
   actor: string;
+  /**
+   * Open for THIS visit only (the Schedule drawer's per-visit action): the dialog is locked to it - no "Which visit?" choice and no
+   * "work already done". Omitted (All live jobs): the visit is chosen in the dialog, as before. An unfinished submission kept on this
+   * device for the job still takes priority, exactly as without it.
+   */
+  visitId?: string;
   /** The signed-in manager's auth user id: unfinished submissions are kept and found per user. Null = none kept. */
   userId: string | null;
   onClose: () => void;
@@ -142,7 +149,11 @@ export default function OfficeReportDialog({
   const queryClient = useQueryClient();
   const formId = `office-report-${useId().replace(/:/g, '')}`;
   const targets = officeReportTargets(job, localToday());
-  const [selected, setSelected] = useState<string | null>(targets.initial);
+  // A visit given by the caller is fixed when the dialog opens (it leaves the eligible list once its report is saved).
+  const [locked] = useState(() =>
+    visitId ? { id: visitId, eligible: targets.available.some((v) => v.id === visitId), reason: targets.blocked.find((b) => b.visit.id === visitId)?.reason ?? null } : null,
+  );
+  const [selected, setSelected] = useState<string | null>(locked ? (locked.eligible ? locked.id : null) : targets.initial);
   const [stage, setStage] = useState<Stage>('editing');
   // ONE request id per submission: made when the dialog opens (or taken over from an unfinished submission kept on this device) and used
   // for every attempt, so the database can recognise a save it already made. Never replaced while the outcome is unknown.
@@ -228,7 +239,8 @@ export default function OfficeReportDialog({
 
   const liveVisit = selected && selected !== NEW_VISIT ? job.visits.find((v) => v.id === selected) ?? null : null;
   const visit = frozen ? frozen.visit : liveVisit;
-  const nothing = !resumed && !checkingPending && stage === 'editing' && targets.available.length === 0 && !targets.canRecordNew;
+  const nothing =
+    !resumed && !checkingPending && stage === 'editing' && (locked ? !locked.eligible : targets.available.length === 0 && !targets.canRecordNew);
 
   // Videos already on the chosen visit count towards the limits (a "work already done" visit has none - it doesn't exist yet).
   const existingVideosQuery = useQuery({
@@ -424,9 +436,9 @@ export default function OfficeReportDialog({
           ? ' It’s kept on this device: you can close this window and finish it later from All live jobs.'
           : '';
 
-  const chooser = frozen ? (
+  const chooser = frozen || locked ? (
     <div className="text-[12.5px] text-ink" data-testid="office-report-chosen">
-      {frozen.label}
+      {frozen ? frozen.label : liveVisit ? visitLabel(liveVisit) : ''}
     </div>
   ) : (
     <fieldset className="flex flex-col gap-1.5" data-testid="office-report-target">
@@ -603,8 +615,9 @@ export default function OfficeReportDialog({
         <PendingSummary record={resumed.record} missing={resumed.missing} media={mediaSection} />
       ) : nothing ? (
         <div className="flex flex-col gap-2 text-[12.5px] text-neutral-700" data-testid="office-report-nothing">
-          <p>There is no visit here the office can complete and report on.</p>
-          {targets.blocked.map(({ visit: v, reason }) => (
+          <p>{locked ? 'This visit can no longer be completed and reported here.' : 'There is no visit here the office can complete and report on.'}</p>
+          {locked?.reason && <p className="text-[11.5px] text-neutral-500">{locked.reason}</p>}
+          {!locked && targets.blocked.map(({ visit: v, reason }) => (
             <p key={v.id} className="text-[11.5px] text-neutral-500">
               {visitLabel(v)} — {reason}
             </p>

@@ -1,18 +1,10 @@
 import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { JobRow, JobVisitSummary, Technician } from '../../domain/types';
-import { markVisitMissed } from '../../repository/reportsRepository';
-import { getReportAuthorship, officeAuthorLabel } from '../../repository/officeReportsRepository';
-import { addVisitTechnician, assignVisitTechnician, removeVisitTechnician, rescheduleVisit } from '../../repository/techniciansRepository';
 import { getReportReviewStatusPresentation, getVisitStatusPresentation } from '../../lib/statusPresentation';
 import StatusPill from './StatusPill';
 import CancelWorkDialog from './CancelWorkDialog';
 import CompleteVisitForm from './CompleteVisitForm';
-
-function invalidateAfterVisitChange(queryClient: ReturnType<typeof useQueryClient>) {
-  queryClient.invalidateQueries({ queryKey: ['jobRows'] });
-  queryClient.invalidateQueries({ queryKey: ['visits'] });
-}
+import { useVisitManagement } from './useVisitManagement';
 
 interface VisitRowProps {
   job: JobRow;
@@ -20,167 +12,80 @@ interface VisitRowProps {
   actor: string;
   /** Active technicians selectable for (re)assignment — the same list callers already fetch via listTechnicians()/['technicians']. */
   technicians: Technician[];
+  /** Start expanded (the Job Details drawer opens its next open visit this way). Collapsed by default. */
+  initiallyExpanded?: boolean;
+  /**
+   * The office report action for this visit, decided by the drawer from the existing eligibility rules (officeReportTargets):
+   * a button ("Complete & report" / "Write report") that asks the DRAWER to open the dialog, or the reason it isn't available.
+   * Omitted (every page but Schedule): nothing is shown.
+   */
+  officeReport?: { label: string; onOpen: () => void } | { blockedReason: string };
 }
 
-export default function VisitRow({ job, visit, actor, technicians }: VisitRowProps) {
-  const queryClient = useQueryClient();
+const officeReportButton = 'cursor-pointer bg-teal px-2 py-0.5 text-[11px] font-semibold text-white hover:opacity-90';
+
+/**
+ * One visit in the Job Details drawer: a one-line summary (date, technicians, visit status, report status) that expands to the
+ * visit's details and actions - the same controls and safeguards as before, only shown when the visit is expanded.
+ */
+export default function VisitRow({ job, visit, actor, technicians, initiallyExpanded = false, officeReport }: VisitRowProps) {
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   const [mode, setMode] = useState<'summary' | 'complete'>('summary');
   const [cancelOpen, setCancelOpen] = useState(false);
-  const [assignError, setAssignError] = useState<string | null>(null);
-  const [dateError, setDateError] = useState<string | null>(null);
-  const [extraError, setExtraError] = useState<string | null>(null);
+  const {
+    rescheduleMutation,
+    assignTechnicianMutation,
+    addTechnicianMutation,
+    removeTechnicianMutation,
+    missedMutation,
+    dateError,
+    setDateError,
+    assignError,
+    extraError,
+    officeAuthor,
+    additionalTechnicians,
+    extrasLocked,
+    extrasLockedReason,
+    showExtras,
+    addableTechnicians,
+    primaryOptions,
+  } = useVisitManagement({ visit, actor, technicians });
 
-  /**
-   * Manually moves THIS visit to a specific date — the exact same
-   * rescheduleVisit() drag-and-drop already uses in Day/Week/Month
-   * (touches only scheduled_date, never technician_id/job_id/status), so a
-   * visit can be moved to a date outside whatever range is currently
-   * visible on the calendar without needing to drag it there. Never
-   * touches jobs/schedules — the job's own recurrence definition is
-   * completely unaffected by moving one of its visits.
-   */
-  const rescheduleMutation = useMutation({
-    mutationFn: (date: string) => rescheduleVisit(visit.id, date),
-    onSuccess: () => {
-      invalidateAfterVisitChange(queryClient);
-      setDateError(null);
-    },
-    onError: (err) => setDateError(err instanceof Error ? err.message : 'Failed to reschedule visit.'),
-  });
-
-  /**
-   * Assigns/reassigns/clears THIS visit's own technician_id only — never
-   * jobs.default_technician_id (see assignVisitTechnician's own doc comment).
-   * Reuses the same invalidation pair every other visit mutation in this
-   * file already uses, so Day/Week/Month/All Live Jobs all pick up the new
-   * technician the same way they already pick up a reschedule.
-   */
-  const assignTechnicianMutation = useMutation({
-    mutationFn: (technicianId: string | null) => assignVisitTechnician(visit.id, technicianId),
-    onSuccess: () => {
-      invalidateAfterVisitChange(queryClient);
-      setAssignError(null);
-    },
-    onError: (err) => setAssignError(err instanceof Error ? err.message : 'Failed to assign technician.'),
-  });
-
-  /**
-   * Additional technicians (`visit_technicians`) — any number, alongside the
-   * unchanged primary above. Same invalidation pair as every other visit
-   * mutation; the database independently refuses inactive technicians,
-   * duplicates, and removing someone who has already contributed/been waived.
-   */
-  const addTechnicianMutation = useMutation({
-    mutationFn: (technicianId: string) => addVisitTechnician(visit.id, technicianId),
-    onSuccess: () => {
-      invalidateAfterVisitChange(queryClient);
-      setExtraError(null);
-    },
-    onError: (err) => setExtraError(err instanceof Error ? err.message : 'Failed to add technician.'),
-  });
-
-  const removeTechnicianMutation = useMutation({
-    mutationFn: (technicianId: string) => removeVisitTechnician(visit.id, technicianId),
-    onSuccess: () => {
-      invalidateAfterVisitChange(queryClient);
-      setExtraError(null);
-    },
-    onError: (err) => setExtraError(err instanceof Error ? err.message : 'Failed to remove technician.'),
-  });
-
-  // "Written by the office · Luke" on a report the office wrote (none for a technician's report, or one from before this was recorded).
-  const { data: authorship } = useQuery({
-    queryKey: ['reportAuthorship', visit.reportId],
-    queryFn: () => getReportAuthorship(visit.reportId!),
-    enabled: visit.reportId != null,
-    staleTime: 5 * 60_000,
-  });
-  const officeAuthor = authorship ? officeAuthorLabel(authorship.source, authorship.submittedBy) : null;
-
-  const missedMutation = useMutation({
-    mutationFn: () => markVisitMissed(visit.id, actor),
-    onSuccess: () => invalidateAfterVisitChange(queryClient),
-  });
-
-  // `?? []`: job rows restored from a cache written before multi-technician visits have no additionalTechnicians.
-  const additionalTechnicians = visit.additionalTechnicians ?? [];
-
-  // A legacy (non-contribution) report has no per-technician tracking, so an
-  // extra technician could never submit into it; an approved report is final.
-  const extrasLocked =
-    (visit.reportId != null && !visit.reportHasContributions) || visit.reportReviewStatus === 'approved';
-  const extrasLockedReason =
-    visit.reportReviewStatus === 'approved'
-      ? 'This visit’s report is already approved.'
-      : 'A single-technician report has already been submitted for this visit.';
-  const showExtras = visit.status !== 'cancelled' && visit.status !== 'missed';
-  const assignedIds = new Set([visit.technicianId, ...additionalTechnicians.map((t) => t.technicianId)]);
-  const addableTechnicians = technicians.filter((t) => t.isActive && !assignedIds.has(t.id));
-  const extraIds = new Set(additionalTechnicians.map((t) => t.technicianId));
-  const primaryOptions = technicians.filter((t) => !extraIds.has(t.id));
-
-  const dateLabel = visit.scheduledDate ? new Date(visit.scheduledDate).toLocaleDateString('en-GB') : 'No date set';
+  const dateLabel = visit.scheduledDate
+    ? new Date(visit.scheduledDate).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+    : 'No date set';
+  const technicianLabel = `${visit.technicianName ?? 'Unassigned'}${additionalTechnicians.length > 0 ? ` + ${additionalTechnicians.length}` : ''}`;
 
   return (
-    <div className="border-b border-divider py-1.5 text-[12.5px]">
-      <div className="flex items-center justify-between gap-3">
-        <span className="flex items-center gap-1.5">
+    <div className="border-b border-divider text-[12.5px]" data-testid="visit-row">
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+        aria-label={`Visit ${dateLabel}, ${technicianLabel}, ${getVisitStatusPresentation(visit.status).label}${expanded ? ' - hide details' : ' - show details'}`}
+        className="flex w-full cursor-pointer items-center gap-2 py-1.5 text-left hover:bg-neutral-50"
+      >
+        <span aria-hidden className={`w-3 flex-none text-[10px] text-neutral-500 transition-transform ${expanded ? 'rotate-90' : ''}`}>
+          ▶
+        </span>
+        <span className="w-[108px] flex-none tabular-nums text-ink">{dateLabel}</span>
+        <span className="min-w-0 flex-1 truncate text-neutral-600" title={technicianLabel}>
+          {technicianLabel}
+        </span>
+        <span className="flex flex-none items-center gap-2">
           <StatusPill presentation={getVisitStatusPresentation(visit.status)} />
-          <span className="text-neutral-500">
-            {' '}
-            · {visit.technicianName ?? 'Unassigned'}
-            {additionalTechnicians.length > 0 && ` + ${additionalTechnicians.length} more`}
-          </span>
-          {visit.priceCharged != null && (
-            <span className="text-neutral-500"> · £{visit.priceCharged.toLocaleString('en-GB')}</span>
+          {visit.reportId && visit.reportReviewStatus && (
+            <span className="border-l border-divider pl-2" data-testid="visit-report-status">
+              <StatusPill presentation={getReportReviewStatusPresentation(visit.reportReviewStatus)} />
+            </span>
           )}
         </span>
-        <span className="tabular-nums text-neutral-600">{dateLabel}</span>
-      </div>
+      </button>
 
-      {showExtras && mode === 'summary' && (additionalTechnicians.length > 0 || !extrasLocked) && (
-        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-neutral-600">
-          <span>Also on this visit:</span>
-          {additionalTechnicians.length === 0 && <span className="text-neutral-400">nobody else</span>}
-          {additionalTechnicians.map((t) => {
-            const locked = t.contribution !== 'pending';
-            return (
-              <span key={t.technicianId} className="inline-flex items-center gap-1 border border-neutral-300 px-1.5 py-0.5 text-ink">
-                {t.name}
-                {t.contribution === 'submitted' && <span className="text-done-fg">· submitted</span>}
-                {t.contribution === 'waived' && <span className="text-neutral-500">· waived</span>}
-                <button
-                  onClick={() => removeTechnicianMutation.mutate(t.technicianId)}
-                  disabled={locked || removeTechnicianMutation.isPending}
-                  title={locked ? "Can't be removed — they have already contributed to (or been waived from) this report." : `Remove ${t.name} from this visit`}
-                  aria-label={`Remove ${t.name}`}
-                  className="cursor-pointer text-neutral-500 hover:text-missed-fg disabled:cursor-not-allowed disabled:text-neutral-300"
-                >
-                  ×
-                </button>
-              </span>
-            );
-          })}
-          {!extrasLocked && (
-            <select
-              value=""
-              onChange={(e) => e.target.value && addTechnicianMutation.mutate(e.target.value)}
-              disabled={addTechnicianMutation.isPending || addableTechnicians.length === 0}
-              aria-label="Add another technician to this visit"
-              className="cursor-pointer border border-neutral-300 px-1.5 py-0.5 text-[11px] text-ink outline-none focus:border-teal disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400"
-            >
-              <option value="">{addableTechnicians.length === 0 ? 'No one else to add' : '+ Add technician'}</option>
-              {addableTechnicians.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          )}
-          {extrasLocked && <span className="text-neutral-500">{extrasLockedReason} Additional technicians can't be added.</span>}
-          {(addTechnicianMutation.isPending || removeTechnicianMutation.isPending) && <span className="text-neutral-500">Saving…</span>}
-          {extraError && <span className="text-missed-fg">{extraError}</span>}
-        </div>
+      {expanded && (
+      <div className="pb-2 pl-5" data-testid="visit-details">
+      {visit.priceCharged != null && (
+        <div className="text-[11px] text-neutral-600">Price charged: £{visit.priceCharged.toLocaleString('en-GB')}</div>
       )}
 
       {(visit.status === 'due' || visit.status === 'booked') && mode === 'summary' && (
@@ -241,8 +146,58 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
         </div>
       )}
 
+      {showExtras && mode === 'summary' && (additionalTechnicians.length > 0 || !extrasLocked) && (
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-neutral-600">
+          <span>Also on this visit:</span>
+          {additionalTechnicians.length === 0 && <span className="text-neutral-400">nobody else</span>}
+          {additionalTechnicians.map((t) => {
+            const locked = t.contribution !== 'pending';
+            return (
+              <span key={t.technicianId} className="inline-flex items-center gap-1 border border-neutral-300 px-1.5 py-0.5 text-ink">
+                {t.name}
+                {t.contribution === 'submitted' && <span className="text-done-fg">· submitted</span>}
+                {t.contribution === 'waived' && <span className="text-neutral-500">· waived</span>}
+                <button
+                  onClick={() => removeTechnicianMutation.mutate(t.technicianId)}
+                  disabled={locked || removeTechnicianMutation.isPending}
+                  title={locked ? "Can't be removed — they have already contributed to (or been waived from) this report." : `Remove ${t.name} from this visit`}
+                  aria-label={`Remove ${t.name}`}
+                  className="cursor-pointer text-neutral-500 hover:text-missed-fg disabled:cursor-not-allowed disabled:text-neutral-300"
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
+          {!extrasLocked && (
+            <select
+              value=""
+              onChange={(e) => e.target.value && addTechnicianMutation.mutate(e.target.value)}
+              disabled={addTechnicianMutation.isPending || addableTechnicians.length === 0}
+              aria-label="Add another technician to this visit"
+              className="cursor-pointer border border-neutral-300 px-1.5 py-0.5 text-[11px] text-ink outline-none focus:border-teal disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400"
+            >
+              <option value="">{addableTechnicians.length === 0 ? 'No one else to add' : '+ Add technician'}</option>
+              {addableTechnicians.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          )}
+          {extrasLocked && <span className="text-neutral-500">{extrasLockedReason} Additional technicians can't be added.</span>}
+          {(addTechnicianMutation.isPending || removeTechnicianMutation.isPending) && <span className="text-neutral-500">Saving…</span>}
+          {extraError && <span className="text-missed-fg">{extraError}</span>}
+        </div>
+      )}
+
       {(visit.status === 'due' || visit.status === 'booked') && mode === 'summary' && (
-        <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+          {officeReport && 'onOpen' in officeReport && (
+            <button type="button" onClick={officeReport.onOpen} className={officeReportButton} data-testid="visit-office-report">
+              {officeReport.label}
+            </button>
+          )}
           <button onClick={() => setMode('complete')} className="cursor-pointer text-[11px] text-teal-700 hover:underline">
             Mark complete
           </button>
@@ -262,17 +217,25 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
         </div>
       )}
 
-      {cancelOpen && (
-        <CancelWorkDialog job={job} visit={visit} onClose={() => setCancelOpen(false)} onDone={() => setCancelOpen(false)} />
-      )}
-
       {mode === 'complete' && (
         <CompleteVisitForm job={job} visit={visit} actor={actor} onDone={() => setMode('summary')} onCancel={() => setMode('summary')} />
       )}
 
       {/* The office writes a missing report with "Complete & report" in All live jobs' Actions column (OfficeReportDialog). */}
       {visit.status === 'completed' && !visit.reportId && mode === 'summary' && (
-        <div className="mt-1 text-[11px] text-neutral-500">No report yet.</div>
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-neutral-500">
+          No report yet.
+          {officeReport && 'onOpen' in officeReport && (
+            <button type="button" onClick={officeReport.onOpen} className={officeReportButton} data-testid="visit-office-report">
+              {officeReport.label}
+            </button>
+          )}
+        </div>
+      )}
+      {officeReport && 'blockedReason' in officeReport && mode === 'summary' && (
+        <div className="mt-1 text-[11px] text-neutral-500" data-testid="visit-office-report-blocked">
+          Complete &amp; report isn’t available: {officeReport.blockedReason}
+        </div>
       )}
 
       {/*
@@ -283,12 +246,17 @@ export default function VisitRow({ job, visit, actor, technicians }: VisitRowPro
         Ready for Accounts/Ready for Client. This drawer stays a job/visit
         management panel, not a second place to review or act on a report.
       */}
-      {visit.reportId && visit.reportReviewStatus && (
-        <div className="mt-1 flex items-center gap-1.5 text-[11px] text-neutral-600">
-          Report:
-          <StatusPill presentation={getReportReviewStatusPresentation(visit.reportReviewStatus)} />
-          {officeAuthor && <span data-testid="office-author">· {officeAuthor}</span>}
+      {/* The report's status is already in the row above; here only who wrote it, when the office did. */}
+      {visit.reportId && officeAuthor && (
+        <div className="mt-1 text-[11px] text-neutral-600">
+          Report: <span data-testid="office-author">{officeAuthor}</span>
         </div>
+      )}
+      </div>
+      )}
+
+      {cancelOpen && (
+        <CancelWorkDialog job={job} visit={visit} onClose={() => setCancelOpen(false)} onDone={() => setCancelOpen(false)} />
       )}
     </div>
   );

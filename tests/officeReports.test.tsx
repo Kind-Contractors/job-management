@@ -274,25 +274,25 @@ test('FORM (completed visit, no report): recorded price and time kept, not asked
 });
 
 test('VISIT ROW: the office report actions are gone (they live in the All live jobs Actions column); the other visit actions are unchanged', () => {
-  const booked = wrap(<VisitRow job={job([])} visit={visit('v1')} actor="luke@x" technicians={[]} />);
+  const booked = wrap(<VisitRow job={job([])} visit={visit('v1')} actor="luke@x" technicians={[]} initiallyExpanded />);
   assert.doesNotMatch(booked, /Complete &amp; write report/);
   assert.match(booked, /Mark complete/);
   assert.match(booked, /Mark missed/);
   assert.match(booked, /Cancel…/);
   assert.doesNotMatch(booked, /office-report-form/);
-  const completed = wrap(<VisitRow job={job([])} visit={visit('v2', { status: 'completed', priceCharged: 30, completedAt: '2026-11-01T12:00:00Z' })} actor="luke@x" technicians={[]} />);
+  const completed = wrap(<VisitRow job={job([])} visit={visit('v2', { status: 'completed', priceCharged: 30, completedAt: '2026-11-01T12:00:00Z' })} actor="luke@x" technicians={[]} initiallyExpanded />);
   assert.doesNotMatch(completed, />Write report</);
   assert.doesNotMatch(completed, /Create report/);
   assert.match(completed, /No report yet\./);
-  const multi = wrap(<VisitRow job={job([])} visit={visit('v3', { additionalTechnicians: [{ technicianId: 't2', name: 'B', contribution: 'pending' }] })} actor="luke@x" technicians={[]} />);
+  const multi = wrap(<VisitRow job={job([])} visit={visit('v3', { additionalTechnicians: [{ technicianId: 't2', name: 'B', contribution: 'pending' }] })} actor="luke@x" technicians={[]} initiallyExpanded />);
   assert.doesNotMatch(multi, /isn’t available/);
 });
 
 test('VISIT ROW with a report: "Written by the office · Tamika" next to the status - nothing for a technician\'s report', () => {
   const v = visit('v4', { status: 'completed', reportId: 'r-4', reportReviewStatus: 'approved', priceCharged: 30, completedAt: '2026-11-01T12:00:00Z' });
-  const office = wrap(<VisitRow job={job([])} visit={v} actor="x" technicians={[]} />, (qc) => qc.setQueryData(['reportAuthorship', 'r-4'], { source: 'manager', submittedBy: 'Tamika' }));
-  assert.match(office, /data-testid="office-author">· Written by the office · Tamika</);
-  const tech = wrap(<VisitRow job={job([])} visit={v} actor="x" technicians={[]} />, (qc) => qc.setQueryData(['reportAuthorship', 'r-4'], { source: 'technician', submittedBy: 'Mo' }));
+  const office = wrap(<VisitRow job={job([])} visit={v} actor="x" technicians={[]} initiallyExpanded />, (qc) => qc.setQueryData(['reportAuthorship', 'r-4'], { source: 'manager', submittedBy: 'Tamika' }));
+  assert.match(office, /data-testid="office-author">Written by the office · Tamika</);
+  const tech = wrap(<VisitRow job={job([])} visit={v} actor="x" technicians={[]} initiallyExpanded />, (qc) => qc.setQueryData(['reportAuthorship', 'r-4'], { source: 'technician', submittedBy: 'Mo' }));
   assert.doesNotMatch(tech, /Written by the office/);
 });
 
