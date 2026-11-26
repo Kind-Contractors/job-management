@@ -152,7 +152,7 @@ test('CONFIRMATION: names the count, says nothing goes to Xero, lists the work; 
   assert.match(pending, /role="alert"[^>]*>The invoice for House B is being sent to Xero right now\.</);
 });
 
-test('PAGE: "Already invoiced in Xero…" on eligible rows only - none on one being sent or needing completion; no selection mode', () => {
+test('PAGE: "Already invoiced in Xero?" on eligible rows only - none on one being sent or needing completion; no selection mode', () => {
   const eligible = job('ok', [visit('a')]);
   const draft = job('dr', [visit('d', { invoiceId: 'i-d', invoiceStatus: 'draft' })]);
   const sending = job('se', [visit('s', { invoiceId: 'i-s', invoiceStatus: 'sending' })]);
@@ -160,8 +160,8 @@ test('PAGE: "Already invoiced in Xero…" on eligible rows only - none on one be
   const html = render(<ReadyForAccountsPage initialSelectedVisitId="a" />, [eligible, draft, sending, kept]);
   const actions = [...html.matchAll(/aria-label="Already invoiced in Xero: ([^,]+), visit [^"]+"/g)].map((m) => m[1]);
   assert.deepEqual(actions.sort(), ['House dr', 'House ok'], 'eligible rows only');
-  assert.match(html, /data-testid="mark-invoiced-action"[^>]*opacity-100[^>]*>Already invoiced in Xero…</, 'always shown on the selected row');
-  assert.match(html, /group-hover:opacity-100[^>]*>Already invoiced in Xero…</, 'shown on hover / focus on the others');
+  assert.match(html, /data-testid="mark-invoiced-action"[^>]*opacity-100[^>]*>Already invoiced in Xero\?</, 'always shown on the selected row');
+  assert.match(html, /group-hover:opacity-100[^>]*>Already invoiced in Xero\?</, 'shown on hover / focus on the others');
   assert.doesNotMatch(html, /mark-invoiced-start|mark-invoiced-bar|mark-invoiced-checkbox|mark-invoiced-dialog/, 'no selection mode, no dialog until asked for');
 });
 
@@ -178,20 +178,26 @@ test('PAGE: the action opens the confirmation for exactly that invoice, never to
   assert.match(page, /Nothing was sent to Xero\./);
 });
 
-test('COMBINING UNCHANGED: the combine checkbox and panel are exactly as before this feature (commit bc95cf1)', () => {
+test('COMBINING UNCHANGED: its logic is exactly as before this feature (commit bc95cf1); the checkbox and panel still work the same', () => {
   const page = src('src', 'pages', 'ReadyForAccountsPage.tsx');
   const before = execFileSync('git', ['show', 'bc95cf1:src/pages/ReadyForAccountsPage.tsx'], { encoding: 'utf8' }).replace(/\r\n/g, '\n');
   const between = (code: string, from: string, to: string) => code.slice(code.indexOf(from), code.indexOf(to, code.indexOf(from)));
   for (const [from, to] of [
-    ['{selectedForInvoiceIds.size >= 2 && (', '<ClosedJobsNotice'],
-    ['{canSelectForInvoice && (', '<span className="text-[12.5px] font-semibold text-ink">{row.job.buildingName}</span>'],
+    ['const selectedForInvoiceRows = rows.filter(', 'const createInvoiceMutation = useMutation({'],
     ['const createCombinedInvoiceMutation = useMutation({', 'onError: (err) => setCombineError('],
   ]) {
     const was = between(before, from, to);
     assert.ok(was.length > 40, from);
     assert.equal(between(page, from, to), was, `unchanged: ${from}`);
   }
-  // A combine checkbox still renders, independent of the new action.
+  // Same checkbox rules: only rows with no invoice (and nothing to complete first), other jobs disabled once one is ticked.
+  assert.match(page, /const canSelectForInvoice = !row\.visit\.invoiceId && !visitNeedsCompletion\(row\.job, row\.visit\);/);
+  assert.match(page, /const selectForInvoiceDisabled = combineJobId !== null && row\.job\.id !== combineJobId;/);
+  assert.match(page, /checked=\{selectedForInvoiceIds\.has\(row\.visit\.id\)\}\s*disabled=\{selectForInvoiceDisabled\}\s*onClick=\{\(e\) => e\.stopPropagation\(\)\}\s*onChange=\{\(\) => toggleSelectedForInvoice\(row\.visit\.id\)\}/);
+  // Same panel: from two ticked visits, with the reference and the same create call.
+  assert.match(page, /\{selectedForInvoiceIds\.size >= 2 && \(/);
+  assert.match(page, /createCombinedInvoiceMutation\.mutate\(\{\s*rows: selectedForInvoiceRows,\s*worksOrderNumber: combinedReference\.trim\(\) \|\| null,\s*\}\)/);
+  // A combine checkbox still renders, independent of the "Already invoiced" action.
   const html = render(<ReadyForAccountsPage />, [job('j', [visit('a'), visit('b')])]);
   assert.equal((html.match(/title="Select for a combined invoice"/g) ?? []).length, 2);
   assert.equal((html.match(/data-testid="mark-invoiced-action"/g) ?? []).length, 2);
