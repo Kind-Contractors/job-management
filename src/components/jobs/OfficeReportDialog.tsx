@@ -36,6 +36,7 @@ import {
 import FormDialog from '../ui/FormDialog';
 import OfficeReportForm from './OfficeReportForm';
 import OfficeReportMedia from './OfficeReportMedia';
+import { FIELD_LABEL } from '../../lib/reportTextAutosave';
 
 export interface OfficeReportTargets {
   /** Visits the office can complete and write the report for: open (due/booked) ones, and completed ones with no report yet. */
@@ -666,8 +667,8 @@ function PendingSummary({ record, missing, media }: { record: PendingOfficeRepor
     ['Finished', new Date(i.completedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })],
     ['Price charged', money(i.priceCharged)],
     ['Work carried out', i.workCarriedOut ?? '—'],
-    ['Notes / issues', i.issues ?? '—'],
-    ['Optional notes', i.technicianNotes ?? '—'],
+    [FIELD_LABEL.issues, i.issues ?? '—'],
+    [FIELD_LABEL.technicianNotes, i.technicianNotes ?? '—'],
     ['Specification', i.specMet ? 'Everything as specified' : 'Something not done'],
   ];
   return (

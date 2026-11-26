@@ -461,7 +461,8 @@ export function actionsColumn(onJobAction: (jobId: string, action: JobAction) =>
           <button
             type="button"
             onClick={press('report')}
-            className={`${btn} font-semibold`}
+            // The dominant action: filled brand green with white text, like the app's other primary buttons.
+            className="cursor-pointer border border-teal bg-teal px-1.5 py-0.5 text-[11px] leading-tight font-semibold text-white hover:border-teal-700 hover:bg-teal-700"
             aria-label={`Complete & report: ${job.buildingName} · ${job.jobSummary}`}
           >
             Complete &amp; report

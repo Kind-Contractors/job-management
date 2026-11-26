@@ -72,6 +72,34 @@ export function accountsQueueRows(jobs: JobRow[], division: string | null | unde
 }
 
 /**
+ * Ready for accounts / Ready for client order: most recently approved first (the report's approval date). Rows without one - a
+ * job row cached before the date was loaded, or an invoice on a visit whose report is no longer approved - go after them; ties
+ * and those fall back to the latest visit date first. Pure comparator, for Array.sort.
+ */
+/**
+ * Report review order: most recently completed visit first. A visit with no completion time goes after them; ties and those fall
+ * back to the latest visit date first. Pure comparator, for Array.sort.
+ */
+export function byCompletedNewestFirst(a: QueueVisitRow, b: QueueVisitRow): number {
+  const doneA = a.visit.completedAt ?? '';
+  const doneB = b.visit.completedAt ?? '';
+  if (doneA !== doneB) return doneB.localeCompare(doneA);
+  return (b.visit.scheduledDate ?? '').localeCompare(a.visit.scheduledDate ?? '');
+}
+
+/** "25/11/2026, 14:05" - an approval moment in the manager's local time (several can share a day; the time orders them). */
+export function formatApprovedAt(iso: string): string {
+  return new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+export function byApprovalNewestFirst(a: QueueVisitRow, b: QueueVisitRow): number {
+  const approvedA = a.visit.reportApprovedAt ?? '';
+  const approvedB = b.visit.reportApprovedAt ?? '';
+  if (approvedA !== approvedB) return approvedB.localeCompare(approvedA);
+  return (b.visit.scheduledDate ?? '').localeCompare(a.visit.scheduledDate ?? '');
+}
+
+/**
  * An open (due/booked) visit that belongs to a job that is no longer active - a "kept" visit: it had a report, so cancelling
  * the job did not cancel it. It must be completed (price + date) before it can be invoiced; completing it never reopens the job.
  */

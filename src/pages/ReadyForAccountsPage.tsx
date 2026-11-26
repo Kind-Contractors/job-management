@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import type { JobRow, JobVisitSummary } from '../domain/types';
-import { accountsQueueRows, useQueueJobRows, visitNeedsCompletion } from '../lib/queueJobs';
+import { accountsQueueRows, byApprovalNewestFirst, formatApprovedAt, useQueueJobRows, visitNeedsCompletion } from '../lib/queueJobs';
 import { createInvoiceDraft } from '../repository/invoicesRepository';
 import { listBuildingRows } from '../repository/buildingsRepository';
 import { useAuth } from '../auth/AuthProvider';
@@ -85,8 +85,8 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
   // failed). Once an invoice has been created in Xero ('sent' or 'in xero, not emailed') the visit leaves this list - its
   // invoice is in Records. The rows come from the same builder as the rail badge, so the two always agree.
   const rows = useMemo<AccountsRow[]>(
-    // Most recent first.
-    () => accountsQueueRows(jobRows, division).sort((a, b) => (b.visit.scheduledDate ?? '').localeCompare(a.visit.scheduledDate ?? '')),
+    // Most recently approved first.
+    () => accountsQueueRows(jobRows, division).sort(byApprovalNewestFirst),
     [jobRows, division],
   );
 
@@ -270,6 +270,7 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
             {rows.map((row) => {
               const isSelected = row.visit.id === selectedVisitId;
               const dateLabel = row.visit.scheduledDate ? new Date(row.visit.scheduledDate).toLocaleDateString('en-GB') : 'No date set';
+              const approvedAt = row.visit.reportApprovedAt ?? null;
               const amount = row.visit.priceCharged ?? row.job.pricePerVisit;
               // An open visit on a cancelled/closed job must be completed first, so it cannot be put on a combined invoice either.
               const canSelectForInvoice = !row.visit.invoiceId && !visitNeedsCompletion(row.job, row.visit);
@@ -307,6 +308,11 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
                     </span>
                     <span>{amount != null ? money(amount) : 'Variable'}</span>
                   </div>
+                  {approvedAt && (
+                    <div className="text-[11px] text-neutral-500 tabular-nums" data-testid="accounts-approved-at">
+                      Approved {formatApprovedAt(approvedAt)}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -343,6 +349,7 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
                 {selected.job.clientName} · {selected.job.jobSummary}
                 {selected.visit.scheduledDate && ` · Visit ${new Date(selected.visit.scheduledDate).toLocaleDateString('en-GB')}`}
                 {selected.visit.technicianName && ` · ${selected.visit.technicianName}`}
+                {selected.visit.reportApprovedAt && ` · Report approved ${formatApprovedAt(selected.visit.reportApprovedAt)}`}
               </div>
               <button
                 onClick={() => navigate(`/buildings/${selected.job.buildingId}`)}

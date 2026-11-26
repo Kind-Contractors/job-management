@@ -235,6 +235,11 @@ export interface JobVisitSummary {
   /** Non-null only once a report has been created for this visit (reports.visit_id is UNIQUE). */
   reportId: string | null;
   reportReviewStatus: ReportReviewStatus | null;
+  /**
+   * When the linked report was (last) approved - `reports.reviewed_at` while it is approved, else null. Cached job rows from
+   * before this existed have no such field; read it as `?? null`.
+   */
+  reportApprovedAt?: string | null;
   /** Mirrors the linked report's send timestamps — null until that report is actually sent. */
   sentToClientAt: string | null;
   sentToAccountsAt: string | null;

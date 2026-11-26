@@ -516,7 +516,7 @@ export default function JobReportPage() {
             {!specMet && (
               <div className="mt-1.5 text-[11.5px] leading-snug text-due-fg">
                 The office will see that part of the specification wasn't completed. You can still add details in
-                Notes/issues below, and change this before you submit.
+                Issue below, and change this before you submit.
               </div>
             )}
           </div>
@@ -528,7 +528,7 @@ export default function JobReportPage() {
 
           <div className="border-b border-divider px-4 py-3">
             <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
-              Notes / issues
+              Issue
             </div>
             <textarea
               value={issues ?? defaultIssues}
@@ -552,6 +552,13 @@ export default function JobReportPage() {
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Separate from Issue: what is written under Issue reaches the client flagged for their attention; Notes do not. */}
+          <div className="border-b border-divider px-4 py-3">
+            <div className="mb-1.5 font-heading text-[10px] font-semibold tracking-[0.13em] text-neutral-500 uppercase">
+              Notes
+            </div>
             <textarea
               value={technicianNotes ?? defaultTechnicianNotes}
               onChange={(e) => {
@@ -560,7 +567,7 @@ export default function JobReportPage() {
               }}
               rows={2}
               placeholder="Any other notes (optional)…"
-              className="mt-2 w-full border border-neutral-300 px-2 py-1.5 text-[13.5px] text-ink outline-none focus:border-teal"
+              className="w-full border border-neutral-300 px-2 py-1.5 text-[13.5px] text-ink outline-none focus:border-teal"
             />
           </div>
 

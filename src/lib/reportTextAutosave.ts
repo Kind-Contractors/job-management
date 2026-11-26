@@ -22,8 +22,9 @@ export const MAX_FLUSH_ROUNDS = 6;
 
 export const FIELD_LABEL: Record<TextField, string> = {
   workCarriedOut: 'Work carried out',
-  issues: 'Notes / Issues',
-  technicianNotes: 'Optional notes',
+  // "Issue" goes to the client as "Flagged for your attention"; anything else belongs in "Notes".
+  issues: 'Issue',
+  technicianNotes: 'Notes',
 };
 
 export interface AutosaveState {

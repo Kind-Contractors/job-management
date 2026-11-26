@@ -159,6 +159,8 @@ interface SupabaseSchedule {
 interface SupabaseReport {
   id: string;
   review_status: ReportReviewStatus;
+  /** Set when the report is approved or returned (and at creation for an office-written report, which is saved approved). */
+  reviewed_at: string | null;
   sent_to_client_at: string | null;
   sent_to_accounts_at: string | null;
   completed_at: string | null;
@@ -377,6 +379,8 @@ export function mapVisitRow(v: SupabaseVisit): JobVisitSummary {
     completedAt: v.completed_at,
     reportId: report?.id ?? null,
     reportReviewStatus: report?.review_status ?? null,
+    // Only an approved report has an approval date; a returned one's reviewed_at is the return, not an approval.
+    reportApprovedAt: report?.review_status === 'approved' ? (report.reviewed_at ?? null) : null,
     sentToClientAt: report?.sent_to_client_at ?? null,
     sentToAccountsAt: report?.sent_to_accounts_at ?? null,
     reportCompletedAt: report?.completed_at ?? null,
