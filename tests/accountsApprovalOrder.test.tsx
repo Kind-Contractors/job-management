@@ -88,7 +88,7 @@ test('PAGE: rows listed newest approval first, each showing "Approved <date, tim
   assert.equal(approved.length, 2);
   assert.match(approved[0], /^24\/11\/2026, \d\d:45$/);
   assert.match(approved[1], /^10\/11\/2026, \d\d:00$/);
-  assert.match(html, /· Report approved 24\/11\/2026, \d\d:45/);
+  assert.match(html, />Report approved 24\/11\/2026, \d\d:45</);
 });
 
 test('PAGE: a row without an approval date (old cache) shows no "Approved" line and still lists', () => {

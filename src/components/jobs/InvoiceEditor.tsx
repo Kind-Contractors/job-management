@@ -280,7 +280,7 @@ export default function InvoiceEditor({
 
   if (isLoading || !invoice) {
     return (
-      <div className="m-3.5 border border-neutral-300 p-3 text-[12.5px] text-neutral-500">
+      <div className="rounded-lg border border-neutral-300 bg-white p-5 text-[13px] text-neutral-500">
         Loading invoice…
       </div>
     );
@@ -289,196 +289,128 @@ export default function InvoiceEditor({
   const subtotal = lines.reduce((sum, l) => sum + l.quantity * l.unitAmount, 0);
   const estimatedVat = subtotal * 0.2;
 
+  // Who the "Bill to" avatar shows - the same recipient the branches below name (display only).
+  const recipientName = recipientLocked
+    ? lockedContact
+      ? (lockedContact.xeroContactName ?? lockedContact.name)
+      : (invoice.xeroRecipientName ?? null)
+    : usingOneOffXero && oneOffXero
+      ? oneOffXero.name
+      : hasBuildingRecipient && buildingRecipient
+        ? buildingRecipient.name
+        : usingContactDefault && defaultContact
+          ? (defaultContact.xeroContactName ?? defaultContact.name)
+          : null;
+  // "Mo (ABC Client)" -> "MO", "Jane Smith" -> "JS": bracketed parts and punctuation are left out.
+  const initialsWords = (recipientName ?? "")
+    .replace(/\([^)]*\)/g, " ")
+    .split(/\s+/)
+    .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ""))
+    .filter(Boolean);
+  const recipientInitials =
+    initialsWords.length === 0
+      ? "?"
+      : (initialsWords.length === 1
+          ? initialsWords[0]!.slice(0, 2)
+          : initialsWords[0]![0]! + initialsWords[1]![0]!
+        ).toUpperCase();
+
+  const fieldClass =
+    "mt-1.5 block w-full rounded-md border border-neutral-300 bg-white px-2.5 py-2 text-[13.5px] font-normal text-ink outline-none focus:border-teal disabled:bg-neutral-100 disabled:text-neutral-500";
+  const lineInputClass =
+    "w-full min-w-0 rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-[13px] text-ink outline-none focus:border-teal disabled:bg-neutral-100 disabled:text-neutral-500";
+  const recipientButtonClass =
+    "ml-auto cursor-pointer rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-teal-700 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60";
+  const noticeWarn = mode.notice.warn;
+  const emailNotice = (
+    <div
+      data-testid="invoice-email-notice"
+      className={
+        noticeWarn
+          ? "border border-due bg-due/10 p-2 text-[12px] text-due-fg rounded-md"
+          : mode.kind === "send"
+            ? "min-w-0 flex-1 text-[12.5px] text-due-fg"
+            : "min-w-0 flex-1 text-[12.5px] text-neutral-600"
+      }
+    >
+      {mode.notice.text}
+    </div>
+  );
+
   return (
-    <div className="mt-3 border border-neutral-300 bg-white p-3">
-      <div className="flex items-center gap-2">
-        <div className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-700 uppercase">
+    <section className="rounded-lg border border-neutral-300 bg-white" data-testid="invoice-editor">
+      <div className="flex items-center gap-2 border-b border-divider px-5 py-2.5">
+        <span className="font-heading text-[10.5px] font-semibold tracking-[0.13em] text-neutral-600 uppercase">
           Invoice · {invoiceStatusLabel(invoice.status)}
-        </div>
+        </span>
         <button
           onClick={onClose}
-          className="ml-auto cursor-pointer text-[11.5px] text-neutral-500 hover:text-ink"
+          className="ml-auto cursor-pointer rounded-md px-2 py-1 text-[12px] text-neutral-500 hover:bg-neutral-100 hover:text-ink"
         >
           Close
         </button>
       </div>
 
       {(invoice.status === "sent" ||
-        invoice.status === "in_xero_not_emailed") && (
-        <div
-          data-testid="invoice-delivery"
-          className="mt-2 border border-teal-700/40 bg-teal-100 p-2 text-[12.5px] text-teal-700"
-        >
-          {deliveryLine(invoice, clientContacts)}
-        </div>
-      )}
-      {invoice.status === "failed" && invoice.xeroInvoiceId && (
-        <div className="mt-2 border border-missed bg-missed/10 p-2 text-[12.5px] text-missed-fg">
-          <div className="font-semibold">
-            Xero invoice {invoice.xeroInvoiceNumber} was created, but sending it
-            failed.
-          </div>
-          <div className="mt-1 text-neutral-600">
-            Clicking "{mode.label}" again will update this same Xero invoice
-            with any changes below
-            {mode.kind === "send" ? " and retry emailing it" : ""} — it will not
-            create another one.
-          </div>
-          {invoice.lastError && <div className="mt-1">{invoice.lastError}</div>}
-        </div>
-      )}
-      {invoice.status === "failed" &&
-        !invoice.xeroInvoiceId &&
-        invoice.lastError && (
-          <div className="mt-2 border border-missed bg-missed/10 p-2 text-[12.5px] text-missed-fg">
-            {invoice.lastError}
-          </div>
-        )}
-      {invoice.status === "sending" && (
-        <div className="mt-2 border border-neutral-300 bg-neutral-100 p-2 text-[12.5px] text-neutral-600">
-          In progress — this invoice is being created in Xero (and emailed, if
-          this system and the app allow it)…
-        </div>
-      )}
-
-      <div className="mt-2.5 flex flex-col gap-2">
-        <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-          Description
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            disabled={!editable}
-            rows={2}
-            className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-100 disabled:text-neutral-500"
-          />
-        </label>
-
-        {/* Side by side — both are short fields; stacked full-width (like Description) left a lot of empty space to the right of each one. */}
-        <div className="flex gap-2">
-          <label className="flex flex-1 flex-col gap-1 text-[11px] text-neutral-600">
-            Invoice reference
-            <input
-              value={worksOrderNumber}
-              onChange={(e) => setWorksOrderNumber(e.target.value)}
-              disabled={!editable}
-              placeholder="Not provided yet — can be added later, before sending"
-              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-100 disabled:text-neutral-500"
-            />
-          </label>
-
-          <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
-            Due date
-            <input
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-              disabled={!editable}
-              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-100 disabled:text-neutral-500"
-            />
-          </label>
-        </div>
-        <div className="text-[10px] text-neutral-400">
-          Invoice reference is sent to Xero as this invoice's Reference field.
-        </div>
-
-        <div className="text-[11px] text-neutral-600">
-          Line items ({lines.length})
-        </div>
-        {lines.map((line, i) => (
-          <div
-            key={line.id}
-            className="flex flex-col gap-1 border border-neutral-300 bg-neutral-100 p-2"
-          >
-            <input
-              value={line.description}
-              onChange={(e) =>
-                setLines((prev) =>
-                  prev.map((l, idx) =>
-                    idx === i ? { ...l, description: e.target.value } : l,
-                  ),
-                )
-              }
-              disabled={!editable}
-              className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-200 disabled:text-neutral-500"
-            />
-            <div className="flex gap-1.5">
-              <label className="flex flex-1 flex-col gap-0.5 text-[10.5px] text-neutral-600">
-                Quantity
-                <input
-                  type="number"
-                  step="1"
-                  min="0"
-                  value={line.quantity}
-                  onChange={(e) =>
-                    setLines((prev) =>
-                      prev.map((l, idx) =>
-                        idx === i
-                          ? { ...l, quantity: Number(e.target.value) }
-                          : l,
-                      ),
-                    )
-                  }
-                  disabled={!editable}
-                  className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-200 disabled:text-neutral-500"
-                />
-              </label>
-              <label className="flex flex-1 flex-col gap-0.5 text-[10.5px] text-neutral-600">
-                Unit price
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={line.unitAmount}
-                  onChange={(e) =>
-                    setLines((prev) =>
-                      prev.map((l, idx) =>
-                        idx === i
-                          ? { ...l, unitAmount: Number(e.target.value) }
-                          : l,
-                      ),
-                    )
-                  }
-                  disabled={!editable}
-                  className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal disabled:bg-neutral-200 disabled:text-neutral-500"
-                />
-              </label>
-              <div className="flex flex-1 flex-col gap-0.5 text-[10.5px] text-neutral-600">
-                Line total
-                <div className="px-2 py-1 text-[12.5px] tabular-nums text-ink">
-                  {money(line.quantity * line.unitAmount)}
-                </div>
-              </div>
-            </div>
-          </div>
-        ))}
-
-        <div className="flex flex-col gap-0.5 border-t border-divider pt-1.5 text-[12.5px] tabular-nums">
-          <div className="flex justify-between text-neutral-600">
-            <span>Subtotal</span>
-            <span>{money(subtotal)}</span>
-          </div>
-          <div className="flex justify-between text-neutral-600">
-            <span>VAT (estimated, 20%)</span>
-            <span>{money(estimatedVat)}</span>
-          </div>
-          <div className="flex justify-between font-semibold text-ink">
-            <span>Estimated total</span>
-            <span>{money(subtotal + estimatedVat)}</span>
-          </div>
-          <div className="text-[10.5px] text-neutral-500">
-            VAT/account code are resolved against Xero when sent — this total is
-            an estimate, not what Xero will charge.
-          </div>
-        </div>
-
-        {editable && (
-          <div className="flex flex-col gap-1.5 border-t border-divider pt-2">
-            {/* Who this invoice is for: the locked contact, this building's default, or a contact chosen for THIS invoice only.
-                Choosing here never changes the building's saved default (Building File → Contacts & Defaults). */}
+        invoice.status === "in_xero_not_emailed" ||
+        invoice.status === "failed" ||
+        invoice.status === "sending") && (
+        <div className="px-5 pt-4">
+          {(invoice.status === "sent" ||
+            invoice.status === "in_xero_not_emailed") && (
             <div
-              data-testid="invoice-recipient"
-              className="border border-neutral-300 bg-neutral-100 p-2 text-[12px] text-neutral-700"
+              data-testid="invoice-delivery"
+              className="rounded-md border border-teal-700/40 bg-teal-100 p-2.5 text-[12.5px] text-teal-700"
             >
+              {deliveryLine(invoice, clientContacts)}
+            </div>
+          )}
+          {invoice.status === "failed" && invoice.xeroInvoiceId && (
+            <div className="rounded-md border border-missed bg-missed/10 p-2.5 text-[12.5px] text-missed-fg">
+              <div className="font-semibold">
+                Xero invoice {invoice.xeroInvoiceNumber} was created, but sending it
+                failed.
+              </div>
+              <div className="mt-1 text-neutral-600">
+                Clicking "{mode.label}" again will update this same Xero invoice
+                with any changes below
+                {mode.kind === "send" ? " and retry emailing it" : ""} — it will not
+                create another one.
+              </div>
+              {invoice.lastError && <div className="mt-1">{invoice.lastError}</div>}
+            </div>
+          )}
+          {invoice.status === "failed" &&
+            !invoice.xeroInvoiceId &&
+            invoice.lastError && (
+              <div className="rounded-md border border-missed bg-missed/10 p-2.5 text-[12.5px] text-missed-fg">
+                {invoice.lastError}
+              </div>
+            )}
+          {invoice.status === "sending" && (
+            <div className="rounded-md border border-neutral-300 bg-neutral-100 p-2.5 text-[12.5px] text-neutral-600">
+              In progress — this invoice is being created in Xero (and emailed, if
+              this system and the app allow it)…
+            </div>
+          )}
+        </div>
+      )}
+
+      {editable && (
+        <div className="border-b border-divider px-5 py-4">
+          {/* Who this invoice is for: the locked contact, this building's default, or a contact chosen for THIS invoice only.
+              Choosing here never changes the building's saved default (Building File → Contacts & Defaults). */}
+          <div
+            data-testid="invoice-recipient"
+            className="flex items-start gap-3 text-[12.5px] text-neutral-700"
+          >
+            <span
+              aria-hidden
+              className="flex h-10 w-10 flex-none items-center justify-center rounded-full bg-teal text-[12px] font-bold text-white"
+            >
+              {recipientInitials}
+            </span>
+            <div className="min-w-0 flex-1">
               {recipientLocked ? (
                 <>
                   {recipientHeadingRow}
@@ -532,7 +464,7 @@ export default function InvoiceEditor({
                       type="button"
                       onClick={() => setOneOffXero(null)}
                       disabled={anyMutationPending}
-                      className="ml-auto cursor-pointer text-[11px] text-teal-700 underline disabled:cursor-not-allowed disabled:opacity-60"
+                      className="ml-auto cursor-pointer text-[12px] font-semibold text-teal-700 underline disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {hasAnyDefault
                         ? "Use the building's default recipient"
@@ -562,7 +494,7 @@ export default function InvoiceEditor({
                       type="button"
                       onClick={() => setSearchingXero(true)}
                       disabled={anyMutationPending}
-                      className="ml-auto cursor-pointer border border-neutral-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-teal-700 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      className={recipientButtonClass}
                     >
                       Use a different Xero contact for this invoice
                     </button>
@@ -586,7 +518,7 @@ export default function InvoiceEditor({
                       type="button"
                       onClick={() => setSearchingXero(true)}
                       disabled={anyMutationPending}
-                      className="ml-auto cursor-pointer border border-neutral-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-teal-700 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      className={recipientButtonClass}
                     >
                       Use a different Xero contact for this invoice
                     </button>
@@ -607,132 +539,247 @@ export default function InvoiceEditor({
                       data-testid="choose-xero-contact"
                       onClick={() => setSearchingXero(true)}
                       disabled={anyMutationPending}
-                      className="ml-auto cursor-pointer border border-neutral-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-teal-700 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      className={recipientButtonClass}
                     >
                       Choose a Xero contact for this invoice
                     </button>
                   </div>
                 </>
               )}
-              {invoiceDetails.trim() && (
-                // The building's invoice details, as entered on the building (read-only here).
-                <div
-                  data-testid="invoice-details"
-                  className="mt-1.5 flex gap-2 border-t border-divider pt-1.5 text-[11.5px]"
-                >
-                  <span className="flex-none text-neutral-600">
-                    Invoice details
-                  </span>
-                  <span className="whitespace-pre-line text-ink">
-                    {invoiceDetails}
-                  </span>
-                </div>
-              )}
-            </div>
-
-            {recipientLocked && (
-              <div className="border border-neutral-300 bg-neutral-100 p-2 text-[11.5px] text-neutral-700">
-                {LOCKED_RECIPIENT_MESSAGE}
-              </div>
-            )}
-            {!recipientLocked &&
-              !usableDefaultContactId &&
-              !hasBuildingRecipient &&
-              !usingOneOffXero && (
-              // No usable default: say why, and where to set one. Opened in a NEW tab so nothing typed on this invoice is lost.
-              <div
-                data-testid="no-invoice-default"
-                className="border border-due bg-due/10 p-2 text-[11.5px] text-due-fg"
-              >
-                {defaultProblem ??
-                  "This building has no default recipient in Xero yet, so a Xero contact is chosen for each invoice."}{" "}
-                {buildingId && (
-                  <>
-                    <a
-                      href={`/buildings/${buildingId}?tab=contacts`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-semibold underline"
-                    >
-                      Set the building&apos;s default recipient
-                    </a>{" "}
-                    (opens in a new tab; this invoice stays as it is), then{" "}
-                  </>
-                )}
-                <button
-                  type="button"
-                  onClick={() =>
-                    void queryClient.invalidateQueries({
-                      queryKey: ["jobRows"],
-                    })
-                  }
-                  className="cursor-pointer underline"
-                >
-                  {buildingId ? "reload recipients" : "Reload recipients"}
-                </button>
-                .
-              </div>
-            )}
-            <div
-              data-testid="invoice-email-notice"
-              className={
-                mode.notice.warn
-                  ? "border border-due bg-due/10 p-2 text-[11.5px] text-due-fg"
-                  : mode.kind === "send"
-                    ? "text-[10px] text-due-fg"
-                    : "text-[10px] text-neutral-400"
-              }
-            >
-              {mode.notice.text}
             </div>
           </div>
-        )}
 
-        {error && <div className="text-[11.5px] text-missed-fg">{error}</div>}
+          {recipientLocked && (
+            <div className="mt-3 rounded-md border border-neutral-300 bg-neutral-100 p-2.5 text-[12px] text-neutral-700">
+              {LOCKED_RECIPIENT_MESSAGE}
+            </div>
+          )}
+          {!recipientLocked &&
+            !usableDefaultContactId &&
+            !hasBuildingRecipient &&
+            !usingOneOffXero && (
+            // No usable default: say why, and where to set one. Opened in a NEW tab so nothing typed on this invoice is lost.
+            <div
+              data-testid="no-invoice-default"
+              className="mt-3 rounded-md border border-due bg-due/10 p-2.5 text-[12px] text-due-fg"
+            >
+              {defaultProblem ??
+                "This building has no default recipient in Xero yet, so a Xero contact is chosen for each invoice."}{" "}
+              {buildingId && (
+                <>
+                  <a
+                    href={`/buildings/${buildingId}?tab=contacts`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-semibold underline"
+                  >
+                    Set the building&apos;s default recipient
+                  </a>{" "}
+                  (opens in a new tab; this invoice stays as it is), then{" "}
+                </>
+              )}
+              <button
+                type="button"
+                onClick={() =>
+                  void queryClient.invalidateQueries({
+                    queryKey: ["jobRows"],
+                  })
+                }
+                className="cursor-pointer underline"
+              >
+                {buildingId ? "reload recipients" : "Reload recipients"}
+              </button>
+              .
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="grid gap-4 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_190px]">
+        <label className="text-[13px] font-semibold text-ink sm:col-span-2">
+          Description
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            disabled={!editable}
+            rows={2}
+            className={fieldClass}
+          />
+        </label>
+        <label className="text-[13px] font-semibold text-ink">
+          Reference <span className="font-normal text-neutral-500">(optional)</span>
+          <input
+            value={worksOrderNumber}
+            onChange={(e) => setWorksOrderNumber(e.target.value)}
+            disabled={!editable}
+            placeholder="Not provided yet — can be added later, before sending"
+            className={fieldClass}
+          />
+          <span className="mt-1 block text-[11px] font-normal text-neutral-500">
+            Invoice reference is sent to Xero as this invoice's Reference field.
+          </span>
+        </label>
+        <label className="text-[13px] font-semibold text-ink">
+          Due date
+          <input
+            type="date"
+            value={dueDate}
+            onChange={(e) => setDueDate(e.target.value)}
+            disabled={!editable}
+            className={fieldClass}
+          />
+        </label>
+      </div>
+
+      <div className="px-5">
+        <div className="overflow-hidden rounded-md border border-divider">
+          <div className="hidden grid-cols-[minmax(0,1fr)_72px_112px_96px] gap-3 bg-neutral-100 px-3 py-2 text-[12px] text-neutral-600 sm:grid">
+            <span>Item ({lines.length})</span>
+            <span>Qty</span>
+            <span>Unit price</span>
+            <span className="text-right">Amount</span>
+          </div>
+          {lines.map((line, i) => (
+            <div
+              key={line.id}
+              className="grid grid-cols-1 gap-2 border-divider px-3 py-2.5 [&+&]:border-t sm:grid-cols-[minmax(0,1fr)_72px_112px_96px] sm:items-center sm:gap-3 sm:border-t"
+            >
+              <input
+                aria-label="Item"
+                value={line.description}
+                onChange={(e) =>
+                  setLines((prev) =>
+                    prev.map((l, idx) =>
+                      idx === i ? { ...l, description: e.target.value } : l,
+                    ),
+                  )
+                }
+                disabled={!editable}
+                className={lineInputClass}
+              />
+              <input
+                aria-label="Quantity"
+                type="number"
+                step="1"
+                min="0"
+                value={line.quantity}
+                onChange={(e) =>
+                  setLines((prev) =>
+                    prev.map((l, idx) =>
+                      idx === i
+                        ? { ...l, quantity: Number(e.target.value) }
+                        : l,
+                    ),
+                  )
+                }
+                disabled={!editable}
+                className={lineInputClass}
+              />
+              <input
+                aria-label="Unit price"
+                type="number"
+                step="0.01"
+                min="0"
+                value={line.unitAmount}
+                onChange={(e) =>
+                  setLines((prev) =>
+                    prev.map((l, idx) =>
+                      idx === i
+                        ? { ...l, unitAmount: Number(e.target.value) }
+                        : l,
+                    ),
+                  )
+                }
+                disabled={!editable}
+                className={lineInputClass}
+              />
+              <span className="text-right text-[13.5px] font-semibold tabular-nums text-ink">
+                {money(line.quantity * line.unitAmount)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex justify-end px-5 pt-3 pb-2">
+        <dl className="grid w-full grid-cols-[1fr_auto] gap-x-4 gap-y-1.5 text-[13px] tabular-nums sm:w-72">
+          <dt className="text-neutral-600">Subtotal</dt>
+          <dd className="text-right">{money(subtotal)}</dd>
+          <dt className="text-neutral-600">VAT (estimated, 20%)</dt>
+          <dd className="text-right">{money(estimatedVat)}</dd>
+          <dt className="border-t border-neutral-300 pt-2 font-semibold text-ink">Estimated total</dt>
+          <dd className="border-t border-neutral-300 pt-1.5 text-right text-[17px] font-bold text-ink">
+            {money(subtotal + estimatedVat)}
+          </dd>
+        </dl>
+      </div>
+
+      <div className="flex flex-col gap-2 px-5 pb-4">
+        <p className="text-[11.5px] text-neutral-500">
+          VAT/account code are resolved against Xero when sent — this total is
+          an estimate, not what Xero will charge.
+        </p>
+        {editable && invoiceDetails.trim() && (
+          // The building's invoice details, as entered on the building (read-only here).
+          <div
+            data-testid="invoice-details"
+            className="flex gap-2 text-[12px]"
+          >
+            <span className="flex-none text-neutral-600">
+              Invoice details
+            </span>
+            <span className="whitespace-pre-line text-ink">
+              {invoiceDetails}
+            </span>
+          </div>
+        )}
+        {editable && noticeWarn && emailNotice}
+        {error && <div className="text-[12px] text-missed-fg">{error}</div>}
         {sendResult && (
           <div
-            className={`text-[11.5px] ${sendResult.ok ? "text-teal-700" : "text-missed-fg"}`}
+            className={`text-[12px] ${sendResult.ok ? "text-teal-700" : "text-missed-fg"}`}
           >
             {sendResult.message}
           </div>
         )}
-
-        <div
-          data-testid="invoice-actions"
-          className="sticky bottom-0 z-10 -mx-3 -mb-3 flex flex-wrap gap-1.5 border-t border-divider bg-white px-3 py-2"
-        >
-          {editable && (
-            <>
-              <button
-                onClick={() => {
-                  setSendResult(null);
-                  sendMutation.mutate();
-                }}
-                disabled={
-                  anyMutationPending || lines.length === 0 || !recipientChosen
-                }
-                className="cursor-pointer bg-teal px-2.5 py-1 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {sendMutation.isPending ? mode.pendingLabel : mode.label}
-              </button>
-              <button
-                onClick={() => discardMutation.mutate()}
-                disabled={anyMutationPending || !canDiscard}
-                title={
-                  canDiscard
-                    ? undefined
-                    : "A Xero invoice already exists for this record — discard is disabled to avoid orphaning it. Use Send to retry, or fix this in Xero directly."
-                }
-                className="cursor-pointer text-[11px] text-missed-fg hover:underline disabled:cursor-not-allowed disabled:opacity-60 disabled:no-underline"
-              >
-                Discard
-              </button>
-            </>
-          )}
-        </div>
       </div>
 
-    </div>
+      {editable && (
+        <div
+          data-testid="invoice-actions"
+          className="sticky bottom-0 z-10 flex flex-wrap items-center gap-3 rounded-b-lg border-t border-divider bg-white px-5 py-3"
+        >
+          {!noticeWarn && emailNotice}
+          {/* The main action comes first in the markup (keyboard order, and what the tests read as the main button); Discard is shown to its left. */}
+          <div className="ml-auto flex flex-row-reverse items-center gap-2">
+            <button
+              onClick={() => {
+                setSendResult(null);
+                sendMutation.mutate();
+              }}
+              disabled={
+                anyMutationPending || lines.length === 0 || !recipientChosen
+              }
+              className="cursor-pointer rounded-md bg-teal px-4 py-2 text-[13.5px] font-semibold text-white hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {sendMutation.isPending ? mode.pendingLabel : mode.label}
+            </button>
+            <button
+              onClick={() => discardMutation.mutate()}
+              disabled={anyMutationPending || !canDiscard}
+              title={
+                canDiscard
+                  ? undefined
+                  : "A Xero invoice already exists for this record — discard is disabled to avoid orphaning it. Use Send to retry, or fix this in Xero directly."
+              }
+              className="cursor-pointer rounded-md px-3 py-2 text-[13px] text-missed-fg hover:bg-missed/10 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
+            >
+              Discard draft
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

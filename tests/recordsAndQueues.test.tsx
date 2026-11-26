@@ -122,7 +122,7 @@ test('PAGE HEADINGS match the badges, including the division filter', () => {
   for (const division of ['Both', 'General', 'Specialist']) {
     const c = queueCounts(mixed, division);
     const accounts = wrap(<ReadyForAccountsPage />, `/ready-for-accounts?division=${division}`, seedQueues);
-    assert.match(accounts, new RegExp(`${c.readyForAccounts} needing attention`), `accounts ${division}`);
+    assert.match(accounts, new RegExp(`${c.readyForAccounts} visits to invoice`), `accounts ${division}`);
     const client = wrap(<ReadyForClientPage />, `/ready-for-client?division=${division}`, seedQueues);
     assert.match(client, new RegExp(`${c.readyForClient} awaiting delivery`), `client ${division}`);
   }

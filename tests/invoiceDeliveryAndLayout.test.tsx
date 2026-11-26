@@ -93,7 +93,7 @@ test('LAYOUT: the action bar (Send invoice, Discard) is sticky at the bottom wit
   for (const cls of ['sticky', 'bottom-0', 'bg-white', 'border-t', 'z-10']) assert.ok(bar![1].split(' ').includes(cls), `action bar has ${cls}`);
   const after = html.slice(html.indexOf('data-testid="invoice-actions"'));
   assert.match(after, /Send invoice<\/button>/);
-  assert.match(after, /Discard<\/button>/);
+  assert.match(after, /Discard draft<\/button>/);
 });
 
 test('LAYOUT: the Ready for accounts detail column scrolls (it was the one part of the page that could not), giving the sticky bar its container', () => {
