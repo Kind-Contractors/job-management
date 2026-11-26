@@ -134,16 +134,16 @@ test('DIALOG: "this and all future visits" shows the count and the start date', 
 
 // ---- the entry points --------------------------------------------------------------------------------------------------------
 test('ENTRY POINT 1 - Job Inspector: an open visit offers "Cancel…"; a completed or cancelled one does not', () => {
-  const open = wrap(<VisitRow job={J} visit={f1} actor="luke" technicians={[]} />);
+  const open = wrap(<VisitRow job={J} visit={f1} actor="luke" technicians={[]} initiallyExpanded />);
   assert.match(open, />Cancel…</);
-  const closed = wrap(<VisitRow job={J} visit={done} actor="luke" technicians={[]} />);
+  const closed = wrap(<VisitRow job={J} visit={done} actor="luke" technicians={[]} initiallyExpanded />);
   assert.doesNotMatch(closed, />Cancel…</);
-  const cancelled = wrap(<VisitRow job={J} visit={visit('c', { status: 'cancelled' })} actor="luke" technicians={[]} />);
+  const cancelled = wrap(<VisitRow job={J} visit={visit('c', { status: 'cancelled' })} actor="luke" technicians={[]} initiallyExpanded />);
   assert.doesNotMatch(cancelled, />Cancel…</);
 });
 
 test('ENTRY POINT 1b - Job status panel: "Mark as Cancelled", "Mark as Completed" and "Mark as Lost" are all still there', () => {
-  const html = wrap(<JobInspectorDrawer job={J} siblings={[]} onClose={noop} onSelectSibling={noop} />);
+  const html = wrap(<JobInspectorDrawer job={J} onClose={noop} />);
   assert.match(html, />Mark as Cancelled</);
   assert.match(html, />Mark as Completed</);
   assert.match(html, />Mark as Lost</);

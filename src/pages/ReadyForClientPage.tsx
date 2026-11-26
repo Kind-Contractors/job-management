@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { JobRow, JobVisitSummary } from "../domain/types";
-import { clientQueueRows, isActiveJob, jobsInDivision, useQueueJobRows } from "../lib/queueJobs";
+import { byApprovalNewestFirst, clientQueueRows, formatApprovedAt, isActiveJob, jobsInDivision, useQueueJobRows } from "../lib/queueJobs";
 import ClosedJobsNotice from "../components/reports/ClosedJobsNotice";
 import ReportVideos from "../components/reports/ReportVideos";
 import {
@@ -615,10 +615,8 @@ export default function ReadyForClientPage({
         if (isReportDelivered(visit)) completed.push({ job, visit });
       }
     }
-    // Latest visit date first, same as Ready for accounts.
-    awaiting.sort((a, b) =>
-      (b.visit.scheduledDate ?? "").localeCompare(a.visit.scheduledDate ?? ""),
-    );
+    // Most recently approved first, same as Ready for accounts.
+    awaiting.sort(byApprovalNewestFirst);
     // Most recently delivered first (completed or emailed, whichever is later).
     const deliveredAt = (v: JobVisitSummary) => [v.reportCompletedAt ?? "", v.sentToClientAt ?? ""].sort().pop() ?? "";
     completed.sort((a, b) => deliveredAt(b.visit).localeCompare(deliveredAt(a.visit)));
@@ -1068,6 +1066,11 @@ export default function ReadyForClientPage({
                       ? ` · ${row.visit.technicianName}`
                       : ""}
                   </div>
+                  {row.visit.reportApprovedAt && (
+                    <div className="text-[11px] text-neutral-500 tabular-nums" data-testid="client-approved-at">
+                      Approved {formatApprovedAt(row.visit.reportApprovedAt)}
+                    </div>
+                  )}
                   {view === "completed" && row.visit.sentToClientAt && (
                     <div className="mt-1">
                       <SentBadge sentAt={row.visit.sentToClientAt} />
@@ -1141,6 +1144,8 @@ export default function ReadyForClientPage({
                       ` · Visit ${new Date(selected.visit.scheduledDate).toLocaleDateString("en-GB")}`}
                     {selected.visit.technicianName &&
                       ` · ${selected.visit.technicianName}`}
+                    {selected.visit.reportApprovedAt &&
+                      ` · Report approved ${formatApprovedAt(selected.visit.reportApprovedAt)}`}
                   </div>
                   <button
                     onClick={() =>

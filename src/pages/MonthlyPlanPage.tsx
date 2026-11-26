@@ -385,8 +385,6 @@ export default function MonthlyPlanPage() {
             // different month for the same job must remount it (same reasoning as MonthMatrixPage).
             key={`${selectedJob.id}:${presetVisitDate ?? 'none'}`}
             job={selectedJob}
-            siblings={allRows.filter((j) => j.buildingId === selectedJob.buildingId)}
-            onSelectSibling={(jobId) => openJob(jobId)}
             forceShowBooking={presetVisitDate != null}
             presetVisitDate={presetVisitDate}
             onClose={() => {

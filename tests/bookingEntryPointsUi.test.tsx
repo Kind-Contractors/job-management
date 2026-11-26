@@ -85,7 +85,7 @@ test('PLAN ROW: the anchor’s own month is pre-filled — the manager really di
 
 // ---- entry point 2: the drawer, as the Month Matrix opens it -----------------------------------------------------
 test('DRAWER: an EMPTY preset leaves the date empty, says why, and disables Book', () => {
-  const html = wrap(<JobInspectorDrawer job={job()} siblings={[]} onClose={noop} onSelectSibling={noop} forceShowBooking presetVisitDate="" />);
+  const html = wrap(<JobInspectorDrawer job={job()} onClose={noop} forceShowBooking presetVisitDate="" />);
   assert.match(html, /data-testid="no-set-date-hint"/);
   assert.match(html, /This job has no set date for this month — choose one\./);
   assert.doesNotMatch(html, /value="\d{4}-\d\d-01"/, 'never the 1st');
@@ -94,7 +94,7 @@ test('DRAWER: an EMPTY preset leaves the date empty, says why, and disables Book
 });
 
 test('DRAWER: a real preset is still used as-is', () => {
-  const html = wrap(<JobInspectorDrawer job={job()} siblings={[]} onClose={noop} onSelectSibling={noop} forceShowBooking presetVisitDate="2026-11-18" />);
+  const html = wrap(<JobInspectorDrawer job={job()} onClose={noop} forceShowBooking presetVisitDate="2026-11-18" />);
   assert.match(html, /value="2026-11-18"/);
   assert.doesNotMatch(html, /data-testid="no-set-date-hint"/);
 });
@@ -102,7 +102,7 @@ test('DRAWER: a real preset is still used as-is', () => {
 test('DRAWER: an ABSENT preset still falls back to today — only an EMPTY one means "not set"', () => {
   // The distinction is load-bearing: `'' ?? today` is `''`, `undefined ?? today` is today. Opening the drawer
   // normally (no preset) must keep its old behaviour.
-  const html = wrap(<JobInspectorDrawer job={job()} siblings={[]} onClose={noop} onSelectSibling={noop} />);
+  const html = wrap(<JobInspectorDrawer job={job()} onClose={noop} />);
   assert.doesNotMatch(html, /data-testid="no-set-date-hint"/);
   assert.match(html, /value="\d{4}-\d\d-\d\d"/);
 });

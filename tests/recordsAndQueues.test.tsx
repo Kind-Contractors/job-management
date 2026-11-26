@@ -207,7 +207,7 @@ test('RECORDS invoices: missing optional fields (no Xero id/number, no lines, no
   assert.match(html, /Not in Xero/);
 });
 
-const allStatuses: InvoiceRecord[] = (['draft', 'sending', 'failed', 'sent', 'in_xero_not_emailed'] as LocalInvoiceStatus[]).map((status, i) =>
+const allStatuses: InvoiceRecord[] = (['draft', 'sending', 'failed', 'sent', 'in_xero_not_emailed', 'invoiced_manually'] as LocalInvoiceStatus[]).map((status, i) =>
   mapInvoiceRecord(invRow({ id: `i-${status}`, status, xero_invoice_number: `INV-${i}`, created_at: `2026-10-0${i + 1}T09:00:00Z` })),
 );
 
@@ -225,22 +225,22 @@ async function withInvoiceRows<T>(rows: unknown[], run: (urls: URL[]) => Promise
     globalThis.fetch = real;
   }
 }
-const ALL_STATUS_ROWS = (['draft', 'sending', 'failed', 'sent', 'in_xero_not_emailed'] as LocalInvoiceStatus[]).map((status) => invRow({ id: `i-${status}`, status }));
+const ALL_STATUS_ROWS = (['draft', 'sending', 'failed', 'sent', 'in_xero_not_emailed', 'invoiced_manually'] as LocalInvoiceStatus[]).map((status) => invRow({ id: `i-${status}`, status }));
 
 test('RECORDS invoices: only invoices created in Xero - the query asks for sent / in_xero_not_emailed, and anything else is dropped even if it came back', async () => {
   await withInvoiceRows(ALL_STATUS_ROWS, async (urls) => {
     const rows = await listInvoiceRecords();
-    assert.deepEqual(rows.map((r) => r.status), ['sent', 'in_xero_not_emailed'], 'sent and in Xero (not emailed) appear');
+    assert.deepEqual(rows.map((r) => r.status), ['sent', 'in_xero_not_emailed', 'invoiced_manually'], 'sent, in Xero (not emailed) and invoiced outside JMS appear');
     for (const s of ['draft', 'sending', 'failed']) assert.ok(!rows.some((r) => r.status === s), `${s} never appears in Records`);
-    assert.equal(urls[0].searchParams.get('status'), 'in.(sent,in_xero_not_emailed)');
+    assert.equal(urls[0].searchParams.get('status'), 'in.(sent,in_xero_not_emailed,invoiced_manually)');
   });
-  assert.deepEqual([...IN_XERO_INVOICE_STATUSES], ['sent', 'in_xero_not_emailed']);
+  assert.deepEqual([...IN_XERO_INVOICE_STATUSES], ['sent', 'in_xero_not_emailed', 'invoiced_manually']);
 });
 
 test('BUILDING FILE: still every invoice of the building, whatever its status (no status filter)', async () => {
   await withInvoiceRows(ALL_STATUS_ROWS, async (urls) => {
     const rows = await listBuildingInvoiceRecords('b1');
-    assert.deepEqual(rows.map((r) => r.status), ['draft', 'sending', 'failed', 'sent', 'in_xero_not_emailed']);
+    assert.deepEqual(rows.map((r) => r.status), ['draft', 'sending', 'failed', 'sent', 'in_xero_not_emailed', 'invoiced_manually']);
     assert.equal(urls[0].searchParams.get('status'), null, 'the Building File query has no status filter');
   });
   const html = renderToStaticMarkup(<MemoryRouter><BuildingInvoicesList invoices={allStatuses} loading={false} error={false} onRetry={() => {}} /></MemoryRouter>);
@@ -249,7 +249,7 @@ test('BUILDING FILE: still every invoice of the building, whatever its status (n
 
 test('EXACTLY ONE PLACE: an invoice of any status is in Records or in Ready for accounts - never both, never neither', async () => {
   const records = await withInvoiceRows(ALL_STATUS_ROWS, () => listInvoiceRecords());
-  for (const status of ['draft', 'sending', 'failed', 'sent', 'in_xero_not_emailed'] as LocalInvoiceStatus[]) {
+  for (const status of ['draft', 'sending', 'failed', 'sent', 'in_xero_not_emailed', 'invoiced_manually'] as LocalInvoiceStatus[]) {
     const inRecords = records.some((r) => r.status === status);
     const inQueue = isVisitInAccountsQueue(job('j', []), visit('v', { invoiceId: `i-${status}`, invoiceStatus: status }));
     assert.equal(inRecords !== inQueue, true, `${status}: records=${inRecords}, ready for accounts=${inQueue}`);
@@ -260,7 +260,7 @@ test('EXACTLY ONE PLACE: an invoice of any status is in Records or in Ready for 
   }
 });
 
-test('RECORDS page, invoices tab: in-Xero invoices listed, the status filter offers only the two in-Xero statuses, ex VAT and the JMS caveat', () => {
+test('RECORDS page, invoices tab: in-Xero invoices listed, the status filter offers only the in-Xero statuses (incl. invoiced outside JMS), ex VAT and the JMS caveat', () => {
   const html = wrap(<RecordsPage />, '/records?tab=invoices', (qc) => {
     qc.setQueryData(['jobRows'], []);
     qc.setQueryData(['historicalJobRows'], []);
@@ -268,7 +268,7 @@ test('RECORDS page, invoices tab: in-Xero invoices listed, the status filter off
   });
   assert.equal((html.match(/data-testid="invoice-record"/g) ?? []).length, 2);
   const select = html.slice(html.indexOf('aria-label="Invoice status"'), html.indexOf('</select>', html.indexOf('aria-label="Invoice status"')));
-  assert.deepEqual([...select.matchAll(/<option value="([^"]+)"/g)].map((m) => m[1]), ['all', 'sent', 'in_xero_not_emailed']);
+  assert.deepEqual([...select.matchAll(/<option value="([^"]+)"/g)].map((m) => m[1]), ['all', 'sent', 'in_xero_not_emailed', 'invoiced_manually']);
   assert.match(select, />Sent \(emailed\)</);
   assert.match(select, />In Xero · not emailed</);
   assert.doesNotMatch(select, /Draft|Sending|Failed/);
@@ -291,9 +291,9 @@ test('RECORDS invoices: search (number, client, building, job), status and creat
   const f = (o: Partial<Parameters<typeof filterInvoiceRecords>[1]>) => filterInvoiceRecords(allStatuses, { search: '', status: 'all', from: '', to: '', ...o }).map((r) => r.status);
   assert.deepEqual(f({ status: 'in_xero_not_emailed' }), ['in_xero_not_emailed']);
   assert.deepEqual(f({ search: 'inv-2' }), ['failed']);
-  assert.equal(f({ search: 'oak court' }).length, 5);
-  assert.equal(f({ search: 'window' }).length, 5);
-  assert.deepEqual(f({ from: '2026-10-04' }), ['sent', 'in_xero_not_emailed']);
+  assert.equal(f({ search: 'oak court' }).length, 6);
+  assert.equal(f({ search: 'window' }).length, 6);
+  assert.deepEqual(f({ from: '2026-10-04' }), ['sent', 'in_xero_not_emailed', 'invoiced_manually']);
 });
 
 // ---- Building File: invoice history ---------------------------------------------------------------------------------------------

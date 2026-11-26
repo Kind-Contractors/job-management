@@ -1,11 +1,12 @@
 import type { LocalInvoiceStatus } from '../domain/types';
 
 /**
- * The statuses of an invoice that exists in Xero, authorised: 'sent' (created and emailed) or 'in_xero_not_emailed' (created
- * while invoice emailing was off). Either way the accounts handoff is done; only 'sent' means an email went out. The one list
- * both sides read: Ready for accounts keeps every other invoice, Records lists only these - so an invoice is always in exactly one.
+ * The statuses of an invoice whose accounts handoff is done - it is in Xero: 'sent' (created by JMS and emailed),
+ * 'in_xero_not_emailed' (created by JMS while invoice emailing was off) or 'invoiced_manually' (invoiced by hand in Xero, outside
+ * JMS, and marked so - JMS created and sent nothing). Only 'sent' means JMS emailed it. The one list both sides read: Ready for
+ * accounts keeps every other invoice, Records lists only these - so an invoice is always in exactly one.
  */
-export const IN_XERO_INVOICE_STATUSES = ['sent', 'in_xero_not_emailed'] as const satisfies readonly LocalInvoiceStatus[];
+export const IN_XERO_INVOICE_STATUSES = ['sent', 'in_xero_not_emailed', 'invoiced_manually'] as const satisfies readonly LocalInvoiceStatus[];
 
 /** True once an invoice exists in Xero (see IN_XERO_INVOICE_STATUSES). */
 export function isInvoiceInXero(status: LocalInvoiceStatus | null | undefined): boolean {

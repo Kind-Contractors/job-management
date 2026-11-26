@@ -31,7 +31,7 @@ export default function ReportReviewQueue({ rows, selectedReportId, onSelect }: 
     <div className="flex-1 overflow-y-auto">
       {rows.map(({ job, visit }) => {
         const isSelected = visit.reportId === selectedReportId;
-        const completedLabel = visit.completedAt ? new Date(visit.completedAt).toLocaleDateString('en-GB') : 'Completed date unknown';
+        const completedLabel = visit.completedAt ? `Completed ${new Date(visit.completedAt).toLocaleDateString('en-GB')}` : 'Completed date unknown';
         return (
           <div
             key={visit.reportId}
@@ -47,7 +47,7 @@ export default function ReportReviewQueue({ rows, selectedReportId, onSelect }: 
               )}
             </div>
             <div className="text-[11.5px] text-neutral-600">{job.clientName} · {job.jobSummary}</div>
-            <div className="mt-0.5 text-[11px] text-neutral-500 tabular-nums">Completed {completedLabel}</div>
+            <div className="mt-0.5 text-[11px] text-neutral-500 tabular-nums">{completedLabel}</div>
           </div>
         );
       })}

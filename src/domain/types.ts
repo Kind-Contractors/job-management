@@ -202,7 +202,8 @@ export type ReportReviewStatus = 'awaiting_review' | 'approved' | 'returned_for_
 
 /** Local invoice lifecycle state (`invoices.status`) — independent of any Xero-side status. */
 /** 'sent' = created in Xero AND emailed; 'in_xero_not_emailed' = created in Xero but not emailed (invoice emailing not permitted, or automatic invoice emails off). */
-export type LocalInvoiceStatus = 'draft' | 'sending' | 'sent' | 'failed' | 'in_xero_not_emailed';
+/** 'invoiced_manually' = invoiced by hand in Xero, outside JMS, and marked so in JMS ("Mark as already invoiced") - JMS created and sent nothing. */
+export type LocalInvoiceStatus = 'draft' | 'sending' | 'sent' | 'failed' | 'in_xero_not_emailed' | 'invoiced_manually';
 
 /** A technician's own contribution state on a visit's report — 'pending' until they submit or the office waives them. */
 export type ContributionState = 'pending' | 'submitted' | 'waived';
@@ -235,6 +236,11 @@ export interface JobVisitSummary {
   /** Non-null only once a report has been created for this visit (reports.visit_id is UNIQUE). */
   reportId: string | null;
   reportReviewStatus: ReportReviewStatus | null;
+  /**
+   * When the linked report was (last) approved - `reports.reviewed_at` while it is approved, else null. Cached job rows from
+   * before this existed have no such field; read it as `?? null`.
+   */
+  reportApprovedAt?: string | null;
   /** Mirrors the linked report's send timestamps — null until that report is actually sent. */
   sentToClientAt: string | null;
   sentToAccountsAt: string | null;

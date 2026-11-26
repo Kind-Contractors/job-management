@@ -176,7 +176,6 @@ export default function BuildingFilePage() {
   const invoiceDefaultProblem = defaultRecipientProblem(building.defaultRecipient, contacts);
   const invoiceDefaultContact = building.defaultRecipient ? (contacts.find((c) => c.id === building.defaultRecipient!.contactId) ?? null) : null;
   const selectedJob = jobRows.find((j) => j.id === selectedJobId);
-  const siblings = selectedJob ? buildingJobs.filter((j) => j.id !== selectedJob.id) : [];
 
   const accessFields: [string, string | null][] = building.access
     ? [
@@ -675,9 +674,7 @@ export default function BuildingFilePage() {
         <JobInspectorDrawer
           key={selectedJob.id}
           job={selectedJob}
-          siblings={siblings}
           onClose={() => setSelectedJobId(null)}
-          onSelectSibling={setSelectedJobId}
         />
       )
     )}

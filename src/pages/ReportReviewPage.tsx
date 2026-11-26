@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { isVisitInReviewQueue, useQueueJobRows } from '../lib/queueJobs';
+import { byCompletedNewestFirst, isVisitInReviewQueue, useQueueJobRows } from '../lib/queueJobs';
 import { useAuth } from '../auth/AuthProvider';
 import { isVisitReadyForAccounts } from '../lib/statusPresentation';
 import ReportReviewQueue, { type ReportQueueRow } from '../components/jobs/ReportReviewQueue';
@@ -13,7 +13,8 @@ export default function ReportReviewPage() {
   const { session } = useAuth();
   const actor = session?.user.email ?? 'unknown';
   const [searchParams] = useSearchParams();
-  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  // `?report=<id>` (the Schedule drawer's "Review") opens on that report; without it nothing is selected, as before.
+  const [selectedReportId, setSelectedReportId] = useState<string | null>(() => searchParams.get('report'));
 
   const division = searchParams.get('division') ?? 'Both';
 
@@ -30,7 +31,8 @@ export default function ReportReviewPage() {
         }
       }
     }
-    return rows.sort((a, b) => (a.visit.completedAt ?? '').localeCompare(b.visit.completedAt ?? ''));
+    // Most recently completed first.
+    return rows.sort(byCompletedNewestFirst);
   }, [jobRows, division]);
 
   const selected = queue.find((r) => r.visit.reportId === selectedReportId);

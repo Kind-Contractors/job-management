@@ -92,14 +92,7 @@ export default function MonthMatrixPage() {
     setPresetVisitDate(undefined);
   };
 
-  const handleSelectSibling = (jobId: string) => {
-    setSelectedJobId(jobId);
-    setForceShowBooking(false);
-    setPresetVisitDate(undefined);
-  };
-
   const selectedJob: JobRow | undefined = allRows.find((j) => j.id === selectedJobId);
-  const siblings = selectedJob ? allRows.filter((j) => j.buildingId === selectedJob.buildingId && j.id !== selectedJob.id) : [];
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -175,9 +168,7 @@ export default function MonthMatrixPage() {
           // stale date instead of the newly clicked month's.
           key={`${selectedJob.id}:${presetVisitDate ?? 'none'}`}
           job={selectedJob}
-          siblings={siblings}
           onClose={handleCloseDrawer}
-          onSelectSibling={handleSelectSibling}
           forceShowBooking={forceShowBooking}
           presetVisitDate={presetVisitDate}
         />

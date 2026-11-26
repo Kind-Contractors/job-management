@@ -29,6 +29,7 @@ export const HISTORY_EVENT_LABEL: Record<string, string> = {
   visit_completed: 'Visit completed',
   visit_missed: 'Visit missed',
   visit_cancelled: 'Visit cancelled',
+  invoice_marked_manually: 'Marked as already invoiced (outside JMS)',
   report_submitted: 'Report submitted',
   report_written_by_office: 'Report written by the office',
   report_created: 'Report created by the office',

@@ -113,7 +113,7 @@ const JOB_SELECT = `
     id, technician_id, scheduled_date, status, price_charged, completed_at,
     technicians ( id, name, is_active ),
     visit_technicians ( technician_id, technicians ( id, name, is_active ) ),
-    reports ( id, review_status, sent_to_client_at, sent_to_accounts_at, completed_at, completed_by, report_contributions ( technician_id, submitted_at, waived_at ) ),
+    reports ( id, review_status, reviewed_at, sent_to_client_at, sent_to_accounts_at, completed_at, completed_by, report_contributions ( technician_id, submitted_at, waived_at ) ),
     invoice_line_items ( invoice_id, invoices ( status ) ),
     report_videos ( id, deleted_at )
   )
@@ -266,7 +266,7 @@ const JOB_LIFECYCLE_SAFEGUARD_VISIT_SELECT = `
   id, technician_id, scheduled_date, status, price_charged, completed_at,
   technicians ( id, name, is_active ),
   visit_technicians ( technician_id, technicians ( id, name, is_active ) ),
-  reports ( id, review_status, sent_to_client_at, sent_to_accounts_at, completed_at, completed_by, report_contributions ( technician_id, submitted_at, waived_at ) ),
+  reports ( id, review_status, reviewed_at, sent_to_client_at, sent_to_accounts_at, completed_at, completed_by, report_contributions ( technician_id, submitted_at, waived_at ) ),
   invoice_line_items ( invoice_id, invoices ( status ) ),
   report_videos ( id, deleted_at )
 `;
