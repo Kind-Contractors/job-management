@@ -202,7 +202,8 @@ export type ReportReviewStatus = 'awaiting_review' | 'approved' | 'returned_for_
 
 /** Local invoice lifecycle state (`invoices.status`) — independent of any Xero-side status. */
 /** 'sent' = created in Xero AND emailed; 'in_xero_not_emailed' = created in Xero but not emailed (invoice emailing not permitted, or automatic invoice emails off). */
-export type LocalInvoiceStatus = 'draft' | 'sending' | 'sent' | 'failed' | 'in_xero_not_emailed';
+/** 'invoiced_manually' = invoiced by hand in Xero, outside JMS, and marked so in JMS ("Mark as already invoiced") - JMS created and sent nothing. */
+export type LocalInvoiceStatus = 'draft' | 'sending' | 'sent' | 'failed' | 'in_xero_not_emailed' | 'invoiced_manually';
 
 /** A technician's own contribution state on a visit's report — 'pending' until they submit or the office waives them. */
 export type ContributionState = 'pending' | 'submitted' | 'waived';

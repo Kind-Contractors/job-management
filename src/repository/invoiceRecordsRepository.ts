@@ -43,11 +43,14 @@ export interface InvoiceRecord {
   buildingPostcode: string;
   clientName: string;
   lines: InvoiceRecordLine[];
+  /** Set only for 'invoiced_manually': who marked it as already invoiced by hand in Xero, and when. Optional: older cached records lack it. */
+  markedInvoicedBy?: string | null;
+  markedInvoicedAt?: string | null;
 }
 
 const INVOICE_SELECT = `
   id, status, description, works_order_number, due_date, sent_at, created_at, last_error,
-  xero_invoice_id, xero_invoice_number, xero_recipient_name, xero_recipient_email, not_emailed_reason,
+  xero_invoice_id, xero_invoice_number, xero_recipient_name, xero_recipient_email, not_emailed_reason, marked_invoiced_by, marked_invoiced_at,
   invoice_line_items ( id, description, quantity, unit_amount, sort_order, visit_id, visits ( scheduled_date ) ),
   jobs!inner ( id, job_summary, lifecycle_status, building_id, buildings ( id, name, address, postcode, clients ( company_name ) ) )
 `;
@@ -78,6 +81,8 @@ export function mapInvoiceRecord(r: Row): InvoiceRecord {
     recipientName: (r.xero_recipient_name as string | null) ?? null,
     recipientEmail: (r.xero_recipient_email as string | null) ?? null,
     notEmailedReason: (r.not_emailed_reason as string | null) ?? null,
+    markedInvoicedBy: (r.marked_invoiced_by as string | null) ?? null,
+    markedInvoicedAt: (r.marked_invoiced_at as string | null) ?? null,
     lastError: (r.last_error as string | null) ?? null,
     createdAt: r.created_at as string,
     sentAt: (r.sent_at as string | null) ?? null,
@@ -97,7 +102,8 @@ export function mapInvoiceRecord(r: Row): InvoiceRecord {
 }
 
 /**
- * Records: the invoices that have been created in Xero ('sent' or 'in_xero_not_emailed'), for jobs of any lifecycle - newest
+ * Records: the invoices whose accounts handoff is done - created in Xero by JMS ('sent' / 'in_xero_not_emailed') or invoiced by hand
+ * in Xero and marked so ('invoiced_manually') - for jobs of any lifecycle - newest
  * first. Drafts, and invoices still sending or failed, are unfinished work: they stay in Ready for accounts (and in the Building
  * File's Invoices panel), never here. Checked again after loading, with the same rule the queue uses.
  */

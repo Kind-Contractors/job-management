@@ -272,3 +272,25 @@ export async function sendInvoice(invoiceId: string, recipient?: string | OneOff
   if (!data) throw new Error('No response from xero-create-invoice.');
   return data;
 }
+
+/** What manager_mark_visits_invoiced_manually reports back. */
+export interface MarkInvoicedManuallyResult {
+  visits: number;
+  invoices: number;
+  /** Invoice records created for visits that had none. */
+  created: number;
+  /** Existing draft / failed invoices marked. */
+  marked_existing: number;
+}
+
+/**
+ * "Mark as already invoiced": records visits that were already invoiced BY HAND in Xero, so they move to Records. A database
+ * function does it in one transaction (manager only, all-or-nothing, visits locked): an existing draft or failed invoice is
+ * marked, and a visit with no invoice gets an invoice record in the 'invoiced_manually' status. Never calls Xero - no Edge
+ * Function, no Xero ids or numbers invented. Refusals (already in Records, being sent, not approved, ...) come back as errors.
+ */
+export async function markVisitsInvoicedManually(visitIds: string[]): Promise<MarkInvoicedManuallyResult> {
+  const { data, error } = await supabase.rpc('manager_mark_visits_invoiced_manually', { p_visit_ids: visitIds });
+  if (error) throw new Error(error.message || 'Could not mark the selected work as already invoiced.');
+  return data as MarkInvoicedManuallyResult;
+}

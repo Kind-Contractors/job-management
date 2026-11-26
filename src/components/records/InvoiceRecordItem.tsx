@@ -13,6 +13,7 @@ export function formatDay(iso: string | null | undefined): string {
 const STATUS_CLASS: Record<string, string> = {
   sent: 'border-teal-700 text-teal-700',
   in_xero_not_emailed: 'border-teal-700 text-teal-700',
+  invoiced_manually: 'border-teal-700 text-teal-700',
   failed: 'border-missed text-missed-fg',
   sending: 'border-neutral-400 text-neutral-600',
   draft: 'border-neutral-400 text-neutral-600',
@@ -26,13 +27,15 @@ export default function InvoiceRecordItem({ invoice, showBuilding = true }: { in
   const [open, setOpen] = useState(false);
   const total = exVatTotal(invoice.lines);
   const xero = xeroInvoiceUrl(invoice.xeroInvoiceId);
+  // Invoiced by hand in Xero, outside JMS: JMS holds no Xero number for it (none is ever invented) - Xero has it.
+  const manual = invoice.status === 'invoiced_manually';
   return (
     <div data-testid="invoice-record" className="border-b border-divider px-4 py-2.5 text-[12.5px] last:border-b-0">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="cursor-pointer text-neutral-500" aria-label={open ? 'Hide invoice details' : 'Show invoice details'}>
           {open ? '▾' : '▸'}
         </button>
-        <span className="w-24 font-semibold text-ink tabular-nums">{invoice.xeroInvoiceNumber ?? 'No number yet'}</span>
+        <span className="w-24 font-semibold text-ink tabular-nums">{invoice.xeroInvoiceNumber ?? (manual ? 'See Xero' : 'No number yet')}</span>
         <div className="min-w-0 flex-1">
           {showBuilding && (
             <div className="truncate">
@@ -53,6 +56,8 @@ export default function InvoiceRecordItem({ invoice, showBuilding = true }: { in
           <a href={xero} target="_blank" rel="noreferrer" className="text-[11.5px] text-teal-700 underline">
             View in Xero
           </a>
+        ) : manual ? (
+          <span className="text-[11.5px] text-neutral-500" title="Invoiced by hand in Xero - JMS has no link to it">Invoiced in Xero by hand</span>
         ) : (
           <span className="text-[11.5px] text-neutral-400">Not in Xero</span>
         )}
@@ -69,6 +74,12 @@ export default function InvoiceRecordItem({ invoice, showBuilding = true }: { in
             <div className="text-neutral-600">
               To {invoice.recipientName ?? '—'}
               {invoice.recipientEmail && ` <${invoice.recipientEmail}>`}
+            </div>
+          )}
+          {manual && (
+            <div className="text-neutral-600" data-testid="invoice-record-manual">
+              Marked as already invoiced in Xero{invoice.markedInvoicedBy ? ` by ${invoice.markedInvoicedBy}` : ''}
+              {invoice.markedInvoicedAt ? ` on ${formatWhen(invoice.markedInvoicedAt)}` : ''}. JMS did not create or send this invoice.
             </div>
           )}
           {invoice.status === 'in_xero_not_emailed' && <div className="text-neutral-600">Created in Xero; Xero did not email it{invoice.notEmailedReason === 'app_setting_off' ? ' (automatic invoice emails were off)' : ''}.</div>}

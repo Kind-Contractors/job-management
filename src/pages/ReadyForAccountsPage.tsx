@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import type { JobRow, JobVisitSummary } from '../domain/types';
 import { accountsQueueRows, byApprovalNewestFirst, formatApprovedAt, useQueueJobRows, visitNeedsCompletion } from '../lib/queueJobs';
-import { createInvoiceDraft } from '../repository/invoicesRepository';
+import { createInvoiceDraft, markVisitsInvoicedManually } from '../repository/invoicesRepository';
+import { canMarkAsAlreadyInvoiced, visitsMarkedTogether } from '../lib/markInvoiced';
+import MarkInvoicedDialog from '../components/accounts/MarkInvoicedDialog';
 import { listBuildingRows } from '../repository/buildingsRepository';
 import { useAuth } from '../auth/AuthProvider';
 import { type StatusPresentation } from '../lib/statusPresentation';
@@ -35,6 +37,8 @@ function accountsRowPresentation(row: AccountsRow): StatusPresentation {
     return { label: 'Ready to invoice', fg: 'text-due-fg', dot: 'bg-due', border: 'border-due', bg: 'bg-due/10' };
   }
   switch (row.visit.invoiceStatus) {
+    case 'invoiced_manually':
+      return { label: 'Invoiced outside JMS', fg: 'text-teal-700', dot: 'bg-teal-700', border: 'border-teal-700', bg: 'bg-teal-700/10' };
     case 'in_xero_not_emailed':
       return { label: 'In Xero · not emailed', fg: 'text-teal-700', dot: 'bg-teal-700', border: 'border-teal-700', bg: 'bg-teal-700/10' };
     case 'sent':
@@ -77,6 +81,11 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
   const [combineError, setCombineError] = useState<string | null>(null);
   const [singleReference, setSingleReference] = useState('');
   const [combinedReference, setCombinedReference] = useState('');
+  // "Already invoiced in Xero" (work Luke invoiced by hand in Xero): a per-row action, separate from the combine checkboxes.
+  // The visits it covers - one visit, or every visit on its draft/failed invoice (an invoice is marked as a whole).
+  const [markVisitIds, setMarkVisitIds] = useState<string[] | null>(null);
+  const [markError, setMarkError] = useState<string | null>(null);
+  const [markNotice, setMarkNotice] = useState<string | null>(null);
 
   // Active jobs plus closed/cancelled jobs that still have unbilled or unsent accounting work.
   const { jobRows, isLoading, isError, error, closedJobsError, retryClosedJobs } = useQueueJobRows();
@@ -186,6 +195,26 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
     onError: (err) => setCombineError(err instanceof Error ? err.message : 'Failed to create combined invoice.'),
   });
 
+  const markRows = markVisitIds ? rows.filter((r) => markVisitIds.includes(r.visit.id)) : [];
+  const markInvoicedMutation = useMutation({
+    mutationFn: (visitIds: string[]) => markVisitsInvoicedManually(visitIds),
+    onSuccess: (result, visitIds) => {
+      queryClient.invalidateQueries({ queryKey: ['jobRows'] });
+      queryClient.invalidateQueries({ queryKey: ['invoiceRecords'] });
+      queryClient.invalidateQueries({ queryKey: ['buildingInvoiceRecords'] });
+      // An invoice open in the editor may just have been marked - it is in Records now, not editable here.
+      if (selectedVisitId && visitIds.includes(selectedVisitId)) setOpenInvoiceId(null);
+      // Marked work leaves the list, so it can't stay ticked for a combined invoice either.
+      setSelectedForInvoiceIds((ids) => new Set([...ids].filter((id) => !visitIds.includes(id))));
+      setMarkNotice(
+        `${result.visits === 1 ? 'Marked as already invoiced' : `${result.visits} visits marked as already invoiced`} and moved to Records. Nothing was sent to Xero.`,
+      );
+      setMarkVisitIds(null);
+      setMarkError(null);
+    },
+    onError: (err) => setMarkError(err instanceof Error ? err.message : 'Could not mark this as already invoiced.'),
+  });
+
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex w-[320px] flex-none flex-col border-r border-divider bg-white">
@@ -196,6 +225,19 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
         <div className="flex-none border-b border-divider">
           <AutoInvoiceEmailSetting />
         </div>
+        {markNotice && (
+          <div role="status" data-testid="mark-invoiced-notice" className="flex flex-none items-start gap-2 border-b border-divider bg-teal-100/60 px-3.5 py-2 text-[11.5px] text-teal-700">
+            <span className="flex-1">
+              {markNotice}{' '}
+              <Link to="/records?tab=invoices" className="underline">
+                Open Records
+              </Link>
+            </span>
+            <button type="button" onClick={() => setMarkNotice(null)} aria-label="Dismiss" className="cursor-pointer leading-none hover:text-ink">
+              ×
+            </button>
+          </div>
+        )}
 
         {selectedForInvoiceIds.size >= 2 && (
           <div className="flex-none border-b border-divider bg-teal-100 px-3.5 py-2.5">
@@ -275,11 +317,12 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
               // An open visit on a cancelled/closed job must be completed first, so it cannot be put on a combined invoice either.
               const canSelectForInvoice = !row.visit.invoiceId && !visitNeedsCompletion(row.job, row.visit);
               const selectForInvoiceDisabled = combineJobId !== null && row.job.id !== combineJobId;
+              const canMark = canMarkAsAlreadyInvoiced(row.job, row.visit);
               return (
                 <div
                   key={row.visit.id}
                   onClick={() => selectRow(row)}
-                  className={`cursor-pointer border-b border-divider px-3.5 py-2.5 ${isSelected ? 'bg-teal-100' : 'hover:bg-neutral-100'}`}
+                  className={`group cursor-pointer border-b border-divider px-3.5 py-2.5 ${isSelected ? 'bg-teal-100' : 'hover:bg-neutral-100'}`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-start gap-1.5">
@@ -308,9 +351,32 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
                     </span>
                     <span>{amount != null ? money(amount) : 'Variable'}</span>
                   </div>
-                  {approvedAt && (
-                    <div className="text-[11px] text-neutral-500 tabular-nums" data-testid="accounts-approved-at">
-                      Approved {formatApprovedAt(approvedAt)}
+                  {(approvedAt || canMark) && (
+                    <div className="flex min-h-[18px] items-center justify-between gap-2 text-[11px] text-neutral-500 tabular-nums">
+                      <span data-testid={approvedAt ? 'accounts-approved-at' : undefined}>{approvedAt && `Approved ${formatApprovedAt(approvedAt)}`}</span>
+                      {/*
+                        Work already invoiced by hand in Xero. Compact, and only fully shown on the selected row (and on hover / keyboard
+                        focus elsewhere) so the list stays clean. Its own button: it never selects the row for a combined invoice.
+                      */}
+                      {canMark && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setMarkError(null);
+                            setMarkNotice(null);
+                            setMarkVisitIds(visitsMarkedTogether(rows, row.visit));
+                          }}
+                          aria-label={`Already invoiced in Xero: ${row.job.buildingName}, visit ${dateLabel}`}
+                          title="You've already invoiced this yourself in Xero - move it to Records without sending anything to Xero"
+                          data-testid="mark-invoiced-action"
+                          className={`flex-none cursor-pointer text-[11px] text-teal-700 underline-offset-2 hover:underline focus:opacity-100 ${
+                            isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                          }`}
+                        >
+                          Already invoiced in Xero…
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -446,6 +512,18 @@ export default function ReadyForAccountsPage({ initialSelectedVisitId = null }: 
           </div>
         )}
       </div>
+      {markVisitIds && (
+        <MarkInvoicedDialog
+          rows={markRows}
+          pending={markInvoicedMutation.isPending}
+          error={markError}
+          onConfirm={() => markInvoicedMutation.mutate(markRows.map((r) => r.visit.id))}
+          onCancel={() => {
+            setMarkVisitIds(null);
+            setMarkError(null);
+          }}
+        />
+      )}
     </div>
   );
 }

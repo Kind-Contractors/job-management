@@ -77,6 +77,7 @@ export const INVOICE_STATUS_LABEL: Record<LocalInvoiceStatus, string> = {
   failed: 'Failed',
   sent: 'Sent (emailed)',
   in_xero_not_emailed: 'In Xero · not emailed',
+  invoiced_manually: 'Invoiced outside JMS',
 };
 
 /** A link that opens the invoice in Xero (for someone signed in to that Xero organisation), or null when there is no Xero id. */

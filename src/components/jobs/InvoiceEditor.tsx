@@ -748,6 +748,8 @@ function invoiceStatusLabel(status: string): string {
       return "Failed";
     case "in_xero_not_emailed":
       return "In Xero · not emailed";
+    case "invoiced_manually":
+      return "Invoiced outside JMS";
     default:
       return status;
   }
