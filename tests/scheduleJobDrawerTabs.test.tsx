@@ -65,12 +65,19 @@ const later = visit('up2', { scheduledDate: '2026-12-02' });
 const toReview = visit('p1', { status: 'completed', scheduledDate: '2026-11-18', completedAt: '2026-11-18T10:00:00Z', priceCharged: 10, reportId: 'r1', reportReviewStatus: 'awaiting_review' });
 const approved = visit('p2', { status: 'completed', scheduledDate: '2026-11-11', completedAt: '2026-11-11T10:00:00Z', priceCharged: 10, reportId: 'r2', reportReviewStatus: 'approved' });
 
-test('SCHEDULE ONLY: Schedule asks for the tabbed layout; every other page keeps the classic drawer', () => {
-  assert.match(noComments(src('src', 'pages', 'ThisWeekPage.tsx')), /<JobInspectorDrawer[\s\S]*?layout="tabbed"[\s\S]*?\/>/);
-  for (const page of ['AllLiveJobsPage', 'BuildingFilePage', 'MonthlyPlanPage', 'MonthMatrixPage']) {
-    assert.doesNotMatch(src('src', 'pages', `${page}.tsx`), /layout="tabbed"/, page);
+test('EVERY PAGE: the tabbed drawer is the default - no page asks for the classic one, and none turns Complete & report off', () => {
+  const tabbedByDefault = wrap(<JobInspectorDrawer job={job([upcoming, toReview])} onClose={noop} />);
+  assert.match(tabbedByDefault, /data-testid="job-drawer-tabbed"/);
+  assert.match(tabbedByDefault, /role="tablist"/);
+  for (const page of ['ThisWeekPage', 'AllLiveJobsPage', 'BuildingFilePage', 'MonthlyPlanPage', 'MonthMatrixPage']) {
+    const code = noComments(src('src', 'pages', `${page}.tsx`));
+    assert.match(code, /<JobInspectorDrawer/, page);
+    assert.doesNotMatch(code, /layout="classic"/, page);
+    // Complete & report is on by default in every drawer; no page turns it off.
+    assert.doesNotMatch(code, /allowOfficeReport=\{false\}/, page);
   }
-  const classic = wrap(<JobInspectorDrawer job={job([upcoming, toReview])} onClose={noop} />);
+  // The classic layout is still available when asked for explicitly.
+  const classic = wrap(<JobInspectorDrawer job={job([upcoming, toReview])} onClose={noop} layout="classic" />);
   assert.doesNotMatch(classic, /role="tablist"|job-drawer-tabbed/);
   assert.match(classic, /Upcoming &amp; open/);
   assert.match(classic, /data-testid="visit-row"/);
@@ -126,8 +133,8 @@ test('COMPLETE & REPORT ELIGIBILITY: the same rules as before - blocked with a r
   assert.doesNotMatch(html, /data-testid="visit-office-report"/);
   assert.match(html, /data-testid="visit-office-report-blocked"[^>]*>Complete &amp; report isn’t available: Visits with more than one technician/);
   assert.match(html, /title="Mo \+ 1">Mo \+ 1</);
-  const offSchedule = wrap(<JobInspectorDrawer job={job([upcoming])} onClose={noop} layout="tabbed" />);
-  assert.doesNotMatch(offSchedule, /visit-office-report/, 'only offered when the caller allows it');
+  const switchedOff = wrap(<JobInspectorDrawer job={job([upcoming])} onClose={noop} allowOfficeReport={false} />);
+  assert.doesNotMatch(switchedOff, /visit-office-report|drawer-office-report-job/, 'allowOfficeReport={false} still turns it off');
 });
 
 test('EXPANDED ACTIONS: date, technician, extra technicians, complete without report, mark missed, cancel - with the existing locks', () => {
@@ -248,10 +255,11 @@ test('DETAILS TAB: access details hidden until revealed; Edit job, Open building
   assert.match(drawer, /navigate\(`\/buildings\/\$\{job\.buildingId\}`\)/);
 });
 
-test('OFFICE REPORT: one dialog at drawer level for both layouts, locked to the visit; its notice shows on the Visits tab', () => {
+test('OFFICE REPORT: the one dialog component, opened at drawer level (per visit, or for the job); its notice shows on the Visits tab', () => {
   const drawer = noComments(src('src', 'components', 'jobs', 'JobInspectorDrawer.tsx'));
-  assert.equal(count(drawer, /<OfficeReportDialog/), 1);
+  assert.equal(count(drawer, /<OfficeReportDialog/), 2, 'one entry per visit (locked), one for the job');
   assert.ok(drawer.indexOf('<OfficeReportDialog') > drawer.lastIndexOf('</aside>'), 'outside both layouts');
+  assert.match(drawer, /\{reportForJob && !reportVisitId && \(\s*<OfficeReportDialog\s+job=\{job\}\s+actor=\{actor\}/, 'the job-level one has no visitId - the same as the Actions column');
   const visitsPanel = drawer.slice(drawer.indexOf('id="job-drawer-panel-visits"'), drawer.indexOf('id="job-drawer-panel-details"'));
   assert.match(visitsPanel, /data-testid="drawer-office-report-notice"/);
   assert.match(visitsPanel, /officeReport=\{officeReportFor\(v\)\}/);

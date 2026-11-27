@@ -33,13 +33,16 @@ interface JobInspectorDrawerProps {
   /** Pre-fills the booking date input — never fabricated by this component itself, only ever passed in by a caller that computed a real, honest date (or left it undefined for the normal today-default). */
   presetVisitDate?: string;
   /**
-   * Offer the office "Complete & report" / "Write report" on each eligible visit (Schedule only). The dialog opens HERE, at drawer level,
-   * locked to that visit - not inside the visit's row, which is rebuilt when a saved visit moves from "Upcoming & open" to "Past".
+   * Offer the office "Complete & report" / "Write report" (on by default, on every page): on each eligible visit, and - when the job
+   * has no eligible visit, e.g. a job just created - once for the job, to record work already done. The dialog opens HERE, at drawer
+   * level - not inside a visit's row, which is rebuilt when a saved visit moves from "Upcoming" to "Past". Same dialog, rules and
+   * saving as All live jobs' Actions column. `false` turns it off.
    */
   allowOfficeReport?: boolean;
   /**
-   * "tabbed" (Schedule only): the Visits / Details layout - upcoming visit cards with the main action on the card, a compact Past
-   * list, and the job's facts on a second tab. Same state, writes and dialogs as "classic" (every other page); only the layout differs.
+   * "tabbed" (the default, on every page): the Visits / Details layout - upcoming visit cards with the main action on the card, a
+   * compact Past list, and the job's facts on a second tab. "classic" is the earlier single-column layout, kept for now but used by
+   * no page. Same state, writes and dialogs either way; only the layout differs.
    */
   layout?: 'classic' | 'tabbed';
 }
@@ -84,8 +87,8 @@ export default function JobInspectorDrawer({
   onClose,
   forceShowBooking = false,
   presetVisitDate,
-  allowOfficeReport = false,
-  layout = 'classic',
+  allowOfficeReport = true,
+  layout = 'tabbed',
 }: JobInspectorDrawerProps) {
   const navigate = useNavigate();
   const { session } = useAuth();
@@ -104,6 +107,8 @@ export default function JobInspectorDrawer({
   const [showAllPast, setShowAllPast] = useState(false);
   // The visit whose office report dialog is open, and the message once it has finished (Schedule only).
   const [reportVisitId, setReportVisitId] = useState<string | null>(null);
+  // The same dialog opened for the job rather than one visit (work already done - no eligible visit to complete).
+  const [reportForJob, setReportForJob] = useState(false);
   const [reportNotice, setReportNotice] = useState<string | null>(null);
   // Tabbed layout only. Both tab panels stay mounted (the hidden one only hidden), so switching never loses a half-filled form.
   const [tab, setTab] = useState<'visits' | 'details'>('visits');
@@ -361,6 +366,21 @@ export default function JobInspectorDrawer({
           <div className="mb-3 rounded-md border border-neutral-300 p-3" data-testid="drawer-booking">
             <div className="font-heading text-[11px] font-semibold tracking-[0.11em] text-neutral-700 uppercase">Book a visit</div>
             {bookingBody}
+          </div>
+        )}
+
+        {/* No visit to complete (e.g. a job just created): the work can still be recorded as already done, with its report. */}
+        {officeTargets && officeTargets.available.length === 0 && officeTargets.canRecordNew && (
+          <div className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-neutral-300 bg-neutral-100 px-3 py-2.5" data-testid="drawer-office-report-job">
+            <span className="min-w-0 flex-1 text-[12.5px] text-neutral-700">Work already done? Record it and write its report.</span>
+            <button
+              type="button"
+              onClick={() => setReportForJob(true)}
+              data-testid="drawer-office-report-job-button"
+              className="flex-none cursor-pointer rounded-md bg-teal px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-teal-700"
+            >
+              Complete &amp; report
+            </button>
           </div>
         )}
 
@@ -702,6 +722,18 @@ export default function JobInspectorDrawer({
     )}
     </aside>
     {editDialogOpen && <JobEditDialog job={job} onClose={() => setEditDialogOpen(false)} />}
+    {reportForJob && !reportVisitId && (
+      <OfficeReportDialog
+        job={job}
+        actor={actor}
+        userId={session?.user.id ?? null}
+        onClose={() => setReportForJob(false)}
+        onCompleted={(message) => {
+          setReportForJob(false);
+          setReportNotice(message);
+        }}
+      />
+    )}
     {reportVisitId && (
       <OfficeReportDialog
         key={reportVisitId}

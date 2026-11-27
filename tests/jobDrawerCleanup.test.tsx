@@ -53,7 +53,7 @@ function wrap(el: ReactElement) {
 const count = (html: string, needle: string) => html.split(needle).length - 1;
 
 test('REMOVED: no "Report waiting on you" banner (even for a job with a report to review) and no "Also at this building"', () => {
-  const html = wrap(<JobInspectorDrawer job={job([visit('v1')], { status: 'review' })} onClose={noop} />);
+  const html = wrap(<JobInspectorDrawer job={job([visit('v1')], { status: 'review' })} onClose={noop} layout="classic" />);
   assert.doesNotMatch(html, /Report waiting on you|Review it in Report Review/);
   assert.doesNotMatch(html, /Also at this building/);
   assert.match(html, /Report to review/, 'the status pill in the header still says so');
@@ -65,7 +65,7 @@ test('REMOVED: no "Report waiting on you" banner (even for a job with a report t
 });
 
 test('KEPT: everything else in the drawer - Building file and Edit job, facts, schedule, internal access, job status', () => {
-  const html = wrap(<JobInspectorDrawer job={job([visit('v1')])} onClose={noop} />);
+  const html = wrap(<JobInspectorDrawer job={job([visit('v1')])} onClose={noop} layout="classic" />);
   assert.match(html, />Building file</);
   assert.match(html, />Edit job</);
   assert.match(html, /Price per visit/);
@@ -90,7 +90,7 @@ test('ORDER: "Upcoming & open" = due/booked soonest first (no date last); "Past"
 
 test('DRAWER LIST: section headings, one row per visit, ONLY the next open visit starts expanded', () => {
   const v = [visit('a', { scheduledDate: '2027-01-06' }), visit('b', { scheduledDate: '2026-12-02' }), visit('p', { status: 'completed', scheduledDate: '2026-11-04', priceCharged: 100, completedAt: 'x' })];
-  const html = wrap(<JobInspectorDrawer job={job(v)} onClose={noop} />);
+  const html = wrap(<JobInspectorDrawer job={job(v)} onClose={noop} layout="classic" />);
   assert.match(html, /Visits \(3\)/);
   assert.ok(html.indexOf('Upcoming &amp; open') < html.indexOf('>Past<'));
   assert.equal(count(html, 'data-testid="visit-row"'), 3);
@@ -102,7 +102,7 @@ test('DRAWER LIST: section headings, one row per visit, ONLY the next open visit
 
 test('PAST: only the latest 5 at first, with "Show all N past visits"', () => {
   const past = Array.from({ length: 8 }, (_, i) => visit(`p${i}`, { status: 'completed', scheduledDate: `2026-0${i + 1}-15`, priceCharged: 100, completedAt: 'x' }));
-  const html = wrap(<JobInspectorDrawer job={job(past)} onClose={noop} />);
+  const html = wrap(<JobInspectorDrawer job={job(past)} onClose={noop} layout="classic" />);
   assert.equal(PAST_VISITS_SHOWN, 5);
   assert.equal(count(html, 'data-testid="visit-row"'), 5);
   assert.match(html, />Show all 8 past visits</);
