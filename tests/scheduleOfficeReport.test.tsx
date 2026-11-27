@@ -52,16 +52,35 @@ function wrap(el: ReactElement, seed: (qc: QueryClient) => void = noop) {
 
 const multi = { additionalTechnicians: [{ technicianId: 't2', name: 'B', contribution: 'pending' }] };
 
-test('SCHEDULE ONLY: the drawer offers the action only when Schedule asks for it; no other page does', () => {
+test('EVERY DRAWER: Complete & report is on by default (Schedule, All live jobs, Building file, Monthly plan, Month matrix); it can still be switched off', () => {
   const j = job([visit('v1')]);
-  const off = wrap(<JobInspectorDrawer job={j} onClose={noop} />);
+  const byDefault = wrap(<JobInspectorDrawer job={j} onClose={noop} />);
+  assert.match(byDefault, /data-testid="visit-office-report"[^>]*>Complete &amp; report</);
+  const off = wrap(<JobInspectorDrawer job={j} onClose={noop} allowOfficeReport={false} />);
   assert.doesNotMatch(off, /data-testid="visit-office-report"/);
-  const on = wrap(<JobInspectorDrawer job={j} onClose={noop} allowOfficeReport />);
-  assert.match(on, /data-testid="visit-office-report"[^>]*>Complete &amp; report</);
-  assert.match(noComments(src('src', 'pages', 'ThisWeekPage.tsx')), /<JobInspectorDrawer[\s\S]*?allowOfficeReport[\s\S]*?\/>/);
-  for (const page of ['AllLiveJobsPage', 'BuildingFilePage', 'MonthlyPlanPage', 'MonthMatrixPage']) {
-    assert.doesNotMatch(src('src', 'pages', `${page}.tsx`), /allowOfficeReport/, page);
+  for (const page of ['ThisWeekPage', 'AllLiveJobsPage', 'BuildingFilePage', 'MonthlyPlanPage', 'MonthMatrixPage']) {
+    assert.doesNotMatch(src('src', 'pages', `${page}.tsx`), /allowOfficeReport=\{false\}/, page);
   }
+  // All live jobs keeps its Actions-column Complete & report too (the same dialog, opened from the grid).
+  assert.match(noComments(src('src', 'pages', 'AllLiveJobsPage.tsx')), /<OfficeReportDialog/);
+});
+
+test('NO VISIT YET (e.g. a job just created): one job-level Complete & report - the same dialog as the Actions column, for work already done', () => {
+  const fresh = wrap(<JobInspectorDrawer job={job([])} onClose={noop} />);
+  assert.match(fresh, /data-testid="drawer-office-report-job"[\s\S]*?Work already done\? Record it and write its report\.[\s\S]*?data-testid="drawer-office-report-job-button"[^>]*>Complete &amp; report</);
+  // Only when there is no eligible visit (each eligible visit has its own button instead) ...
+  assert.doesNotMatch(wrap(<JobInspectorDrawer job={job([visit('v1')])} onClose={noop} />), /drawer-office-report-job/);
+  // ... still offered when every visit is done and reported (more work can be recorded), but never on a closed job.
+  const done = visit('d', { status: 'completed', reportId: 'r', reportReviewStatus: 'approved', priceCharged: 30, completedAt: 'x' });
+  assert.match(wrap(<JobInspectorDrawer job={job([done])} onClose={noop} />), /drawer-office-report-job/);
+  assert.doesNotMatch(wrap(<JobInspectorDrawer job={job([], { lifecycleStatus: 'completed' })} onClose={noop} />), /drawer-office-report-job/);
+  assert.doesNotMatch(wrap(<JobInspectorDrawer job={job([])} onClose={noop} allowOfficeReport={false} />), /drawer-office-report-job/);
+});
+
+test('NO VISIT YET: the job-level dialog offers "work already done" (no visit to choose), exactly as from All live jobs', () => {
+  const html = wrap(<OfficeReportDialog job={job([])} actor="x" userId={null} onClose={noop} onCompleted={noop} />);
+  assert.match(html, /Work already done — not in JMS yet/);
+  assert.match(html, /data-testid="office-report-form"/);
 });
 
 test('LABELS + ELIGIBILITY come from the dialog\'s own rules (officeReportTargets): "Complete & report", "Write report", a reason, or nothing', () => {

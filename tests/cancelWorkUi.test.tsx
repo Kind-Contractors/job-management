@@ -142,11 +142,16 @@ test('ENTRY POINT 1 - Job Inspector: an open visit offers "Cancel…"; a complet
   assert.doesNotMatch(cancelled, />Cancel…</);
 });
 
-test('ENTRY POINT 1b - Job status panel: "Mark as Cancelled", "Mark as Completed" and "Mark as Lost" are all still there', () => {
+test('ENTRY POINT 1b - Job status: "Mark as cancelled", "Mark as completed" and "Mark as lost" are all still there (behind "End this job")', () => {
   const html = wrap(<JobInspectorDrawer job={J} onClose={noop} />);
-  assert.match(html, />Mark as Cancelled</);
-  assert.match(html, />Mark as Completed</);
-  assert.match(html, />Mark as Lost</);
+  assert.match(html, /data-testid="end-job-toggle"[^>]*>End this job/);
+  const menu = readFileSync(join(process.cwd(), 'src', 'components', 'jobs', 'EndJobMenu.tsx'), 'utf8');
+  for (const label of ['Mark as completed', 'Mark as lost', 'Mark as cancelled']) assert.ok(menu.includes(`label: '${label}'`), label);
+  // The classic layout (still available) keeps its own three buttons.
+  const classic = wrap(<JobInspectorDrawer job={J} onClose={noop} layout="classic" />);
+  assert.match(classic, />Mark as Cancelled</);
+  assert.match(classic, />Mark as Completed</);
+  assert.match(classic, />Mark as Lost</);
 });
 
 test('ENTRY POINT 2 - Schedule day list: an open visit has a cancel control only when the drawer provides one; a completed one never does', () => {
