@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listClients } from '../../repository/clientsRepository';
+import SearchableSelect from '../shared/SearchableSelect';
 import { createBuilding, createClientAndBuilding, type BuildingCreateFields } from '../../repository/buildingsRepository';
 import { listContactsForClient, createContactForClient } from '../../repository/contactsRepository';
 
@@ -46,7 +47,6 @@ interface BuildingCreatorProps {
 export default function BuildingCreator({ onCreated, onCancel }: BuildingCreatorProps) {
   const queryClient = useQueryClient();
   const [form, setForm] = useState<FormState>(blankForm);
-  const [clientQuery, setClientQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   // Optional contact, added for either an existing client (a genuinely new
@@ -71,13 +71,6 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
     enabled: form.clientMode === 'existing' && form.clientId.length > 0,
   });
 
-  const selectedClient = clients.find((c) => c.id === form.clientId);
-  const clientMatches = useMemo(() => {
-    if (form.clientId) return [];
-    const q = clientQuery.trim().toLowerCase();
-    if (!q) return [];
-    return clients.filter((c) => c.companyName.toLowerCase().includes(q)).slice(0, 20);
-  }, [clients, clientQuery, form.clientId]);
 
   const buildingFields: BuildingCreateFields = {
     address: form.address.trim(),
@@ -103,7 +96,6 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
   const setClientMode = (nextMode: ClientMode) => {
     if (nextMode === form.clientMode) return;
     setForm({ ...form, clientMode: nextMode, clientId: '', companyName: '' });
-    setClientQuery('');
   };
 
   const createMutation = useMutation({
@@ -214,49 +206,17 @@ export default function BuildingCreator({ onCreated, onCancel }: BuildingCreator
 
         {form.clientMode === 'existing' ? (
           <div className="flex flex-col gap-1 text-[11px] text-neutral-600">
+            {/* A plain div, not a <label>: a label would also name the picker's "Change" button ("Client … Change"). The input has its own aria-label. */}
             Client
-            {selectedClient ? (
-              <div className="flex items-center gap-2 border border-neutral-300 px-2 py-1.5 text-[12.5px] text-ink">
-                <span className="flex-1 truncate">{selectedClient.companyName}</span>
-                <button
-                  type="button"
-                  onClick={() => setForm({ ...form, clientId: '' })}
-                  className="cursor-pointer text-[11px] text-teal-700 hover:underline"
-                >
-                  Change
-                </button>
-              </div>
-            ) : (
-              <>
-                <input
-                  aria-label="Search for an existing client"
-                  value={clientQuery}
-                  onChange={(e) => setClientQuery(e.target.value)}
-                  placeholder="Search clients…"
-                  autoComplete="off"
-                  className="border border-neutral-300 px-2 py-1 text-[12.5px] text-ink outline-none focus:border-teal"
-                />
-                {clientMatches.length > 0 && (
-                  <div className="max-h-48 overflow-y-auto border border-t-0 border-neutral-300">
-                    {clientMatches.map((c) => (
-                      <div
-                        key={c.id}
-                        onMouseDown={(e) => {
-                          // See JobCreator.tsx's identical building-search
-                          // list for why this is onMouseDown, not onClick.
-                          e.preventDefault();
-                          setForm({ ...form, clientId: c.id });
-                          setClientQuery('');
-                        }}
-                        className="cursor-pointer border-b border-divider px-2 py-1.5 text-[12px] last:border-b-0 hover:bg-neutral-100"
-                      >
-                        {c.companyName}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
+            {/* Every existing client is listed as soon as the field is opened (alphabetical); typing narrows the list. */}
+            <SearchableSelect
+              value={form.clientId}
+              onChange={(id) => setForm({ ...form, clientId: id })}
+              options={clients.map((c) => ({ id: c.id, label: c.companyName }))}
+              placeholder="Choose or search clients…"
+              noMatchesLabel="No client matches - use “New client” to add one"
+              aria-label="Search for an existing client"
+            />
           </div>
         ) : (
           <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
