@@ -206,7 +206,7 @@ export default function NavRail() {
   const viewItems: { key: string; label: string; icon: IconType; active: boolean; count?: number; attention?: boolean; onClick: () => void }[] = [
     { key: 'jobs', label: 'All live jobs', icon: HiOutlineBriefcase, active: onJobs && !status, count: divisionFiltered.length, onClick: () => goToView('client') },
     { key: 'buildings', label: 'Buildings', icon: HiOutlineBuildingOffice2, active: onBuildings, count: buildingRows.length, onClick: () => navigate('/buildings') },
-    { key: 'schedule', label: 'Schedule', icon: HiOutlineCalendarDays, active: onThisWeek, count: technicians.length, onClick: () => navigate('/this-week') },
+    { key: 'schedule', label: 'Schedule', icon: HiOutlineCalendarDays, active: onThisWeek, count: technicians.filter((t) => t.isActive).length, onClick: () => navigate('/this-week') }, // active technicians only, as on Schedule
     { key: 'monthlyPlan', label: 'Monthly plan', icon: HiOutlineCalendarDays, active: onMonthlyPlan, count: monthlyPlanToBook, onClick: () => navigate('/monthly-plan') },
     { key: 'matrix', label: 'Month matrix', icon: HiOutlineTableCells, active: onMonthMatrix, count: divisionFiltered.length, onClick: () => navigate('/month-matrix') },
     { key: 'reviews', label: 'Report review', icon: HiOutlineClipboardDocumentCheck, active: onReportReview, count: reviewCount, attention: true, onClick: () => navigate('/report-review') },
