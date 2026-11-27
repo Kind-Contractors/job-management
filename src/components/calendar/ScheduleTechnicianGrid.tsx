@@ -77,6 +77,16 @@ export default function ScheduleTechnicianGrid({
   const liveActivities = (activities ?? []).filter((a) => (a.cancelledAt ?? null) == null);
   const dayISOs = new Set(days.map(toISODate));
   const hasUnassigned = liveActivities.some((a) => a.technicianId == null && dayISOs.has(a.scheduledDate));
+  // Rows: active technicians only. A deactivated technician (reactivated from the Users screen, not here) is shown only while they
+  // still have a visit or an activity in the period on screen - otherwise that work would have no row to appear in. Their data is
+  // never touched; this only decides which rows are drawn. (technicianById above keeps everyone, for names on shared visits.)
+  const rowTechnicians = technicians.filter(
+    (t) =>
+      t.isActive ||
+      visits.some((v) => isVisitParticipant(v, t.id)) ||
+      displayVisits.some((v) => isVisitParticipant(v, t.id)) ||
+      liveActivities.some((a) => a.technicianId === t.id && dayISOs.has(a.scheduledDate)),
+  );
 
   const renderChip = (item: DayItem, orderIndex: number, cellCount: number) => {
     if (item.kind === 'activity') {
@@ -228,7 +238,7 @@ export default function ScheduleTechnicianGrid({
           );
         })}
 
-        {technicians.map((technician) => {
+        {rowTechnicians.map((technician) => {
           // A multi-technician visit appears in EVERY participant's row (primary and additional alike).
           const technicianVisits = visits.filter((v) => isVisitParticipant(v, technician.id));
           const technicianDisplayVisits = displayVisits.filter((v) => isVisitParticipant(v, technician.id));
@@ -247,12 +257,23 @@ export default function ScheduleTechnicianGrid({
                 >
                   {technicianVisits.length}
                 </span>
-                <button
-                  onClick={() => onToggleTechnicianActive(technician.id, !technician.isActive)}
-                  className="cursor-pointer text-[10.5px] text-teal-700 hover:underline"
-                >
-                  {technician.isActive ? 'Deactivate' : 'Reactivate'}
-                </button>
+                {technician.isActive ? (
+                  <button
+                    onClick={() => onToggleTechnicianActive(technician.id, false)}
+                    className="cursor-pointer text-[10.5px] text-teal-700 hover:underline"
+                  >
+                    Deactivate
+                  </button>
+                ) : (
+                  // Only here because they still have work in this period; reactivating happens on the Users screen.
+                  <span
+                    data-testid="inactive-technician-tag"
+                    title="Deactivated - shown only because they still have work in this period. Reactivate them from the Users screen."
+                    className="border border-neutral-300 px-1.5 py-0.5 text-[10.5px] text-neutral-500"
+                  >
+                    Inactive
+                  </span>
+                )}
               </div>
               {days.map((d) => {
                 const cellDateISO = toISODate(d);
@@ -300,8 +321,8 @@ export default function ScheduleTechnicianGrid({
               No active technicians available
             </div>
             <div className="mt-1.5 text-[13px] text-neutral-700">
-              Every technician above is currently deactivated — reactivate one before assigning new visits. Existing
-              bookings are still shown above.
+              Every technician is currently deactivated — reactivate one from the Users screen before assigning new visits.
+              Existing bookings are still shown above.
             </div>
           </div>
         )

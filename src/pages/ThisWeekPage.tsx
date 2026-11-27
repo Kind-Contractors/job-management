@@ -646,8 +646,10 @@ export default function ThisWeekPage() {
             {mode === 'month' && activeTechnicians.length === 0 && (
               <div className="mb-3 border border-due bg-due/10 px-3 py-2 text-[12px] text-due-fg">
                 No active technicians available for assignment.{' '}
-                {technicians.length === 0 ? 'Add a technician' : 'Reactivate a technician'} using "Manage technicians" in
-                Day or Week view before booking new visits — existing bookings are still shown below.
+                {technicians.length === 0
+                  ? 'Add a technician using "Manage technicians" in Day or Week view'
+                  : 'Reactivate a technician from the Users screen'}{' '}
+                before booking new visits — existing bookings are still shown below.
               </div>
             )}
 
@@ -682,7 +684,8 @@ export default function ThisWeekPage() {
               <>
                 <div className="mb-2.5 flex items-center gap-3">
                   <span className="text-[12px] text-neutral-600">
-                    {technicians.length} technician{technicians.length === 1 ? '' : 's'}
+                    {/* Deactivated technicians are not counted: they are managed (and reactivated) on the Users screen. */}
+                    {activeTechnicians.length} technician{activeTechnicians.length === 1 ? '' : 's'}
                   </span>
                   <button
                     onClick={() => setManageTechniciansOpen((o) => !o)}
